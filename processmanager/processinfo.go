@@ -77,7 +77,7 @@ func (pm *ProcessManager) getTSDInfo(pid libpf.PID) *tpbase.TSDInfo {
 // already exists, it returns true. Otherwise false or an error.
 //
 // Caller must hold pm.mu write lock.
-func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping) (bool, error) {
+func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping, ei eim.ExecutableInfo) (bool, error) {
 	info, ok := pm.pidToProcessInfo[pid]
 	if !ok {
 		// We don't have information for this pid, so we first need to
@@ -91,7 +91,7 @@ func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping) (bool,
 			name:             processName,
 			executable:       exePath,
 			mappings:         make(map[libpf.Address]*Mapping),
-			mappingsByFileID: make(map[host.FileID]map[libpf.Address]*Mapping),
+			mappingsByFileID: make(map[host.FileID]*fileMappingInfo),
 			tsdInfo:          nil,
 		}
 		pm.pidToProcessInfo[pid] = info
@@ -107,7 +107,7 @@ func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping) (bool,
 	} else if mf, ok := info.mappings[m.Vaddr]; ok {
 		if *m == *mf {
 			// We try to update our information about a particular mapping we already know about.
-			return true, nil
+			return true, nil //todo does this break eim refcounting
 		}
 	}
 
@@ -235,7 +235,7 @@ func (pm *ProcessManager) handleNewMapping(pr process.Process, m *Mapping,
 	defer pm.mu.Unlock()
 
 	// Update the eBPF maps with information about this mapping.
-	_, err = pm.updatePidInformation(pid, m)
+	_, err = pm.updatePidInformation(pid, m, ei)
 	if err != nil {
 		return err
 	}
@@ -370,6 +370,7 @@ func (pm *ProcessManager) processNewExecMapping(pr process.Process, mapping *pro
 			Device:     mapping.Device,
 			Inode:      mapping.Inode,
 			FileOffset: mapping.FileOffset,
+			FilePath:   mapping.Path,
 		}, elfRef); err != nil {
 		// Same as above, ignore the errors related to process having exited.
 		// Also ignore errors of deferred file IDs.

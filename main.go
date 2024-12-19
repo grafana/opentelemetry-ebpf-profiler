@@ -133,6 +133,12 @@ func mainWithExitCode() exitCode {
 		KernelVersion:       kernelVersion,
 		HostName:            hostname,
 		IPAddress:           sourceIP,
+
+		PyroscopeUsername:              cfg.PyroscopeUsername,
+		PyroscopePasswordFile:          cfg.PyroscopePasswordFile,
+		PyroscopeSymbCachePath:         cfg.PyroscopeSymbCachePath,
+		PyroscopeSymbCacheSizeBytes:    cfg.PyroscopeSymbCacheSizeBytes,
+		PyroscopeSymbolizeNativeFrames: cfg.PyroscopeSymbolizeNativeFrames,
 	})
 	if err != nil {
 		log.Error(err)

@@ -5,6 +5,7 @@ package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pda
 
 import (
 	"crypto/rand"
+	"github.com/grafana/pyroscope/ebpf/symtab"
 	"slices"
 	"time"
 
@@ -31,9 +32,13 @@ func (p Pdata) Generate(events map[libpf.Origin]samples.KeyToEventMapping) pprof
 	sp := rp.ScopeProfiles().AppendEmpty()
 	for _, origin := range []libpf.Origin{support.TraceOriginSampling,
 		support.TraceOriginOffCPU} {
+		ebents := events[origin]
+		if len(events) == 0 {
+			continue
+		}
 		prof := sp.Profiles().AppendEmpty()
 		prof.SetProfileID(pprofile.ProfileID(mkProfileID()))
-		p.setProfile(origin, events[origin], prof)
+		p.setProfile(origin, ebents, prof)
 	}
 	return profiles
 }
@@ -55,6 +60,12 @@ func (p *Pdata) setProfile(
 	events map[samples.TraceAndMetaKey]*samples.TraceEvents,
 	profile pprofile.Profile,
 ) {
+	defer func() {
+		if p.symb != nil {
+			p.symb.Close()
+		}
+	}()
+
 	// stringMap is a temporary helper that will build the StringTable.
 	// By specification, the first element should be empty.
 	stringMap := make(map[string]int32)
@@ -91,6 +102,7 @@ func (p *Pdata) setProfile(
 	var locationIndex int32
 	var startTS, endTS pcommon.Timestamp
 	for traceKey, traceInfo := range events {
+		pyroProc := p.pyroPlug.Proc(symtab.PidKey(traceKey.Pid))
 		sample := profile.Sample().AppendEmpty()
 		sample.SetLocationsStartIndex(locationIndex)
 
@@ -152,6 +164,7 @@ func (p *Pdata) setProfile(
 						"process.executable.build_id.htlhash", traceInfo.Files[i].StringNoQuotes())
 				}
 				loc.SetMappingIndex(locationMappingIndex)
+				p.symbolizeNativeFrame(traceKey.Pid, &loc, traceInfo, i, funcMap)
 			case libpf.AbortFrame:
 				// Next step: Figure out how the OTLP protocol
 				// could handle artificial frames, like AbortFrame,
@@ -171,10 +184,10 @@ func (p *Pdata) setProfile(
 				} else {
 					fileIDInfo := fileIDInfoLock.RLock()
 					if si, exists := (*fileIDInfo)[traceInfo.Linenos[i]]; exists {
-						line.SetLine(int64(si.LineNumber))
+						//line.SetLine(int64(si.LineNumber))
 
 						line.SetFunctionIndex(createFunctionEntry(funcMap,
-							si.FunctionName, si.FilePath))
+							si.FunctionName, "" /*si.FilePath*/))
 					} else {
 						// At this point, we do not have enough information for the frame.
 						// Therefore, we report a dummy entry and use the interpreter as filename.
@@ -201,8 +214,6 @@ func (p *Pdata) setProfile(
 			semconv.ProcessExecutableNameKey, traceKey.ProcessName)
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
 			semconv.ProcessExecutablePathKey, traceKey.ExecutablePath)
-		attrMgr.AppendOptionalString(sample.AttributeIndices(),
-			semconv.ServiceNameKey, traceKey.ApmServiceName)
 		attrMgr.AppendInt(sample.AttributeIndices(),
 			semconv.ProcessPIDKey, traceKey.Pid)
 
@@ -210,6 +221,7 @@ func (p *Pdata) setProfile(
 			extra := p.ExtraSampleAttrProd.ExtraSampleAttrs(attrMgr, traceKey.ExtraMeta)
 			sample.AttributeIndices().Append(extra...)
 		}
+		pyroProc.TargetAttributes(attrMgr, &sample)
 
 		sample.SetLocationsLength(int32(len(traceInfo.FrameTypes)))
 		locationIndex += sample.LocationsLength()

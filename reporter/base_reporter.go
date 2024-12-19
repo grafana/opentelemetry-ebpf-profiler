@@ -5,6 +5,7 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 
 import (
 	"context"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
@@ -40,6 +41,8 @@ type baseReporter struct {
 
 	// hostmetadata stores metadata that is sent out with every request.
 	hostmetadata *lru.SyncedLRU[string, string]
+
+	symb *cache.FSCache
 }
 
 func (b *baseReporter) Stop() {
@@ -161,31 +164,37 @@ func (b *baseReporter) FrameMetadata(args *FrameMetadataArgs) {
 		frameMap := frameMapLock.WLock()
 		defer frameMapLock.WUnlock(&frameMap)
 
-		sourceFile := args.SourceFile
-		if sourceFile == "" {
-			// The new SourceFile may be empty, and we don't want to overwrite
-			// an existing filePath with it.
-			if s, exists := (*frameMap)[addressOrLine]; exists {
-				sourceFile = s.FilePath
-			}
-		}
+		//sourceFile := args.SourceFile
+		//if sourceFile == "" {
+		//	// The new SourceFile may be empty, and we don't want to overwrite
+		//	// an existing filePath with it.
+		//	if s, exists := (*frameMap)[addressOrLine]; exists {
+		//		sourceFile = s.FilePath
+		//	}
+		//}
 
 		(*frameMap)[addressOrLine] = samples.SourceInfo{
-			LineNumber:     args.SourceLine,
-			FilePath:       sourceFile,
-			FunctionOffset: args.FunctionOffset,
-			FunctionName:   args.FunctionName,
+			//LineNumber:     args.SourceLine,
+			//FilePath:       sourceFile,
+			//FunctionOffset: args.FunctionOffset,
+			FunctionName:  args.FunctionName,
+			FunctionNames: &args.FunctionNames,
 		}
 		return
 	}
 
 	v := make(map[libpf.AddressOrLineno]samples.SourceInfo)
 	v[addressOrLine] = samples.SourceInfo{
-		LineNumber:     args.SourceLine,
-		FilePath:       args.SourceFile,
-		FunctionOffset: args.FunctionOffset,
-		FunctionName:   args.FunctionName,
+		//LineNumber:     args.SourceLine,
+		//FilePath:       args.SourceFile,
+		//FunctionOffset: args.FunctionOffset,
+		FunctionName:  args.FunctionName,
+		FunctionNames: &args.FunctionNames,
 	}
 	mu := xsync.NewRWMutex(v)
 	b.pdata.Frames.Add(fileID, &mu)
+}
+
+func (b *baseReporter) SymbCache() *cache.FSCache {
+	return b.symb
 }

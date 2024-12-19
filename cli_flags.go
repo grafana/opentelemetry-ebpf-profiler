@@ -124,6 +124,14 @@ func parseArgs() (*controller.Config, error) {
 	fs.UintVar(&args.OffCPUThreshold, "off-cpu-threshold",
 		defaultOffCPUThreshold, offCPUThresholdHelp)
 
+	fs.BoolVar(&args.PyroscopeSymbolizeNativeFrames, "pyroscope-symbolize-native-frames", false, "")
+	fs.IntVar(&args.PyroscopeStackDeltaLimitBytes, "pyroscope-stack-delta-limit-bytes", 0, "<=0 means no limit")
+	fs.IntVar(&args.PyroscopeStackDeltaElfSizeLimitBytes, "pyroscope-stack-delta-elf-size-limit-bytes", 0, "<=0 means no limit")
+	fs.StringVar(&args.PyroscopeUsername, "pyroscope-username", "", "")
+	fs.StringVar(&args.PyroscopePasswordFile, "pyroscope-password-file", "", "")
+	fs.IntVar(&args.PyroscopeSymbCacheSizeBytes, "pyroscope-symb-cache-size-bytes", 2*1024*1024*1024, "")
+	fs.StringVar(&args.PyroscopeSymbCachePath, "pyroscope-symb-cache-path", "/data/symb-cache", "")
+
 	fs.Usage = func() {
 		fs.PrintDefaults()
 	}

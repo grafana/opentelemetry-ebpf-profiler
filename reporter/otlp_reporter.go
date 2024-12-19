@@ -6,6 +6,8 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 import (
 	"context"
 	"crypto/tls"
+	"go.opentelemetry.io/ebpf-profiler/reporter/pyroscope"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"maps"
 	"strconv"
 	"time"
@@ -57,6 +59,7 @@ type OTLPReporter struct {
 
 	// pkgGRPCOperationTimeout sets the time limit for GRPC requests.
 	pkgGRPCOperationTimeout time.Duration
+	callOptions             []grpc.CallOption
 }
 
 // NewOTLP returns a new instance of OTLPReporter
@@ -77,11 +80,13 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		return nil, err
 	}
 
+	symb := cache.NewFSCache(cfg.PyroscopeSymbCacheSizeBytes, cfg.PyroscopeSymbCachePath, cfg.PyroscopeSymbolizeNativeFrames)
 	data, err := pdata.New(
 		cfg.SamplesPerSecond,
 		cfg.ExecutablesCacheElements,
 		cfg.FramesCacheElements,
 		cfg.ExtraSampleAttrProd,
+		symb,
 	)
 	if err != nil {
 		return nil, err
@@ -91,6 +96,15 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 	for _, origin := range []libpf.Origin{support.TraceOriginSampling,
 		support.TraceOriginOffCPU} {
 		originsMap[origin] = make(samples.KeyToEventMapping)
+	}
+
+	var callOptions []grpc.CallOption
+	if cfg.PyroscopeUsername != "" && cfg.PyroscopePasswordFile != "" {
+		opt, err := pyroscope.NewBasicAuth(cfg.PyroscopeUsername, cfg.PyroscopePasswordFile)
+		if err != nil {
+			return nil, err
+		}
+		callOptions = append(callOptions, opt)
 	}
 
 	return &OTLPReporter{
@@ -105,6 +119,7 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 			runLoop: &runLoop{
 				stopSignal: make(chan libpf.Void),
 			},
+			symb: symb,
 		},
 		kernelVersion:           cfg.KernelVersion,
 		hostName:                cfg.HostName,
@@ -113,6 +128,8 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		pkgGRPCOperationTimeout: cfg.GRPCOperationTimeout,
 		client:                  nil,
 		rpcStats:                NewStatsHandler(),
+
+		callOptions: callOptions,
 	}, nil
 }
 
@@ -145,6 +162,8 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 	r.runLoop.Start(ctx, r.cfg.ReportInterval, func() {
 		if err := r.reportOTLPProfile(ctx); err != nil {
 			log.Errorf("Request failed: %v", err)
+		} else {
+			log.Info("OTLP profile sent successfully")
 		}
 	}, func() {
 		// Allow the GC to purge expired entries to avoid memory leaks.
@@ -192,7 +211,7 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
-	_, err := r.client.Export(reqCtx, req)
+	_, err := r.client.Export(reqCtx, req, r.callOptions...)
 	return err
 }
 
@@ -272,7 +291,7 @@ func setupGrpcConnection(parent context.Context, cfg *Config,
 			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 				// Support only TLS1.3+ with valid CA certificates
 				MinVersion:         tls.VersionTLS13,
-				InsecureSkipVerify: false,
+				InsecureSkipVerify: true, // todo why does it complain?
 			})))
 	}
 

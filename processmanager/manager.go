@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/process"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
@@ -83,6 +86,12 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 	}
 	elfInfoCache.SetLifetime(elfInfoCacheTTL)
 
+	var symb *cache.FSCache = nil
+	scp, ok := symbolReporter.(reporter.SymbCacheProvider)
+	if ok {
+		symb = scp.SymbCache()
+	}
+
 	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ExecutableInfoManager: %v", err)
@@ -102,6 +111,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		reporter:                 symbolReporter,
 		metricsAddSlice:          metrics.AddSlice,
 		filterErrorFrames:        filterErrorFrames,
+		symb:                     symb,
 	}
 
 	collectInterpreterMetrics(ctx, pm, monitorInterval)
@@ -258,13 +268,6 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 			// Locate mapping info for the frame.
 			var mappingStart, mappingEnd libpf.Address
 			var fileOffset uint64
-			if frame.Type.Interpreter() == libpf.Native {
-				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno); ok {
-					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
-					mappingEnd = mappingStart + libpf.Address(mapping.Length)
-					fileOffset = mapping.FileOffset
-				}
-			}
 
 			fileID, ok := pm.FileIDMapper.Get(frame.File)
 			if !ok {
@@ -275,6 +278,15 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 				newTrace.AppendFrameFull(frame.Type, libpf.UnsymbolizedFileID,
 					libpf.AddressOrLineno(0), mappingStart, mappingEnd, fileOffset)
 				continue
+			}
+
+			if frame.Type.Interpreter() == libpf.Native {
+				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno); ok {
+					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
+					mappingEnd = mappingStart + libpf.Address(mapping.Length)
+					fileOffset = mapping.FileOffset
+					pm.symbConvert(trace, mapping, fileID)
+				}
 			}
 
 			newTrace.AppendFrameFull(frame.Type, fileID,
@@ -294,9 +306,19 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 	return newTrace
 }
 
+// todo lazy conversion
+func (pm *ProcessManager) symbConvert(trace *host.Trace, mapping Mapping, fileID libpf.FileID) {
+	if pm.symb == nil {
+		return
+	}
+	pr := process.New(trace.PID)
+	elfRef := pfelf.NewReference(mapping.FilePath, pr)
+	defer elfRef.Close()
+	pm.symb.Convert(fileID, elfRef)
+}
+
 // findMappingForTrace locates the mapping for a given host trace.
-func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
-	addr libpf.AddressOrLineno) (m Mapping, found bool) {
+func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID, addr libpf.AddressOrLineno) (m Mapping, found bool) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
@@ -310,7 +332,7 @@ func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
 		return Mapping{}, false
 	}
 
-	for _, candidate := range fidMappings {
+	for _, candidate := range fidMappings.mappingsByAddress {
 		procSpaceVA := libpf.Address(uint64(addr) + candidate.Bias)
 		mappingEnd := candidate.Vaddr + libpf.Address(candidate.Length)
 		if procSpaceVA >= candidate.Vaddr && procSpaceVA <= mappingEnd {
