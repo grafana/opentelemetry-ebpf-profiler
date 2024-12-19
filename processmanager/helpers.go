@@ -40,7 +40,6 @@ func (fm *lruFileIDMapper) Get(key host.FileID) (libpf.FileID, bool) {
 
 func (fm *lruFileIDMapper) Set(key host.FileID, val libpf.FileID) {
 	fm.cache.Add(key, val)
-	log.Debugf("Stored file ID mapping %#x -> %#x", key, val)
 }
 
 var _ FileIDMapper = (*lruFileIDMapper)(nil)

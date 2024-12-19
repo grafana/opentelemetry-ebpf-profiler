@@ -156,6 +156,9 @@ type Config struct {
 	ProbabilisticThreshold uint
 	// OffCPUThreshold is the user defined threshold for off-cpu profiling.
 	OffCPUThreshold uint32
+
+	PyroscopeDeltasSizeLimit             int
+	PyroscopeStackDeltaElfSizeLimitBytes int
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -294,8 +297,13 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	hasBatchOperations := ebpfHandler.SupportsGenericBatchOperations()
 
+	sdp := elfunwindinfo.NewStackDeltaProvider(
+		elfunwindinfo.WithDeltaSizeLimit(cfg.PyroscopeDeltasSizeLimit),
+		elfunwindinfo.WithElfSizeLimit(cfg.PyroscopeStackDeltaElfSizeLimitBytes),
+	)
+	log.Infof("Stack delta provider initialized with size limit %d bytes", cfg.PyroscopeDeltasSizeLimit)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
-		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
+		ebpfHandler, nil, cfg.Reporter, sdp,
 		cfg.FilterErrorFrames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)

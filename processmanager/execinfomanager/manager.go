@@ -134,7 +134,7 @@ func NewExecutableInfoManager(
 	}
 	deferredFileIDs.SetLifetime(deferredFileIDTimeout)
 
-	return &ExecutableInfoManager{
+	eim := &ExecutableInfoManager{
 		sdp: sdp,
 		state: xsync.NewRWMutex(executableInfoManagerState{
 			interpreterLoaders: interpreterLoaders,
@@ -143,7 +143,8 @@ func NewExecutableInfoManager(
 			ebpf:               ebpf,
 		}),
 		deferredFileIDs: deferredFileIDs,
-	}, nil
+	}
+	return eim, nil
 }
 
 // AddOrIncRef either adds information about an executable to the internal cache (when first
@@ -269,6 +270,7 @@ func (mgr *ExecutableInfoManager) RemoveOrDecRef(fileID host.FileID) error {
 		if err := state.unloadDeltas(fileID, &info.mapRef); err != nil {
 			return fmt.Errorf("failed remove fileID 0x%x from BPF maps: %w", fileID, err)
 		}
+		info.release()
 		delete(state.executables, fileID)
 	case 0:
 		// This should be unreachable.
@@ -518,6 +520,9 @@ type entry struct {
 	mapRef mapRef
 	// rc determines in how many processes this executable is currently loaded.
 	rc uint64
+}
+
+func (e *entry) release() {
 }
 
 // mapRef stores all info required to identify and remove
