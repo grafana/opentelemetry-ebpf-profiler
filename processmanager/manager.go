@@ -262,7 +262,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno); ok {
 					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
 					mappingEnd = mappingStart + libpf.Address(mapping.Length)
-					fileOffset = mapping.FileOffset
+					fileOffset = mapping.Bias // pyroscope hack to calculate va pc for symbolization in reporter
 				}
 			}
 
