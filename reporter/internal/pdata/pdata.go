@@ -29,6 +29,7 @@ type Pdata struct {
 	// ExtraSampleAttrProd is an optional hook point for adding custom
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
+	pyroPlug            *PyroPlug
 }
 
 func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uint32,
@@ -48,11 +49,18 @@ func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uin
 	}
 	frames.SetLifetime(FramesCacheLifetime) // Allow GC to clean stale items.
 
+	pyroPlug, err := NewPyroPlug()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Pdata{
 		samplesPerSecond:    samplesPerSecond,
 		Executables:         executables,
 		Frames:              frames,
 		ExtraSampleAttrProd: extra,
+
+		pyroPlug: pyroPlug,
 	}, nil
 }
 

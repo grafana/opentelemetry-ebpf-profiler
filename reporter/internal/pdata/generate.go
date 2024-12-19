@@ -5,6 +5,7 @@ package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pda
 
 import (
 	"crypto/rand"
+	"github.com/grafana/pyroscope/ebpf/symtab"
 	"slices"
 	"time"
 
@@ -51,6 +52,9 @@ func (p *Pdata) setProfile(
 	events map[samples.TraceAndMetaKey]*samples.TraceEvents,
 	profile pprofile.Profile,
 ) {
+	reset := p.pyroPlug.Reset()
+	defer reset()
+
 	// stringMap is a temporary helper that will build the StringTable.
 	// By specification, the first element should be empty.
 	stringMap := make(map[string]int32)
@@ -77,6 +81,7 @@ func (p *Pdata) setProfile(
 	var locationIndex int32
 	var startTS, endTS pcommon.Timestamp
 	for traceKey, traceInfo := range events {
+		pyroProc := p.pyroPlug.Proc(symtab.PidKey(traceKey.Pid))
 		sample := profile.Sample().AppendEmpty()
 		sample.SetLocationsStartIndex(locationIndex)
 
@@ -132,6 +137,7 @@ func (p *Pdata) setProfile(
 						"process.executable.build_id.htlhash", traceInfo.Files[i].StringNoQuotes())
 				}
 				loc.SetMappingIndex(locationMappingIndex)
+				pyroProc.Symbolize(&loc, traceInfo, i, funcMap)
 			case libpf.AbortFrame:
 				// Next step: Figure out how the OTLP protocol
 				// could handle artificial frames, like AbortFrame,
@@ -179,8 +185,6 @@ func (p *Pdata) setProfile(
 			semconv.ThreadNameKey, traceKey.Comm)
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
 			semconv.ProcessExecutablePathKey, traceKey.Executable)
-		attrMgr.AppendOptionalString(sample.AttributeIndices(),
-			semconv.ServiceNameKey, traceKey.ApmServiceName)
 		attrMgr.AppendInt(sample.AttributeIndices(),
 			semconv.ProcessPIDKey, traceKey.Pid)
 
@@ -188,6 +192,7 @@ func (p *Pdata) setProfile(
 			extra := p.ExtraSampleAttrProd.ExtraSampleAttrs(attrMgr, traceKey.ExtraMeta)
 			sample.AttributeIndices().Append(extra...)
 		}
+		pyroProc.TargetAttributes(attrMgr, &sample)
 
 		sample.SetLocationsLength(int32(len(traceInfo.FrameTypes)))
 		locationIndex += sample.LocationsLength()
