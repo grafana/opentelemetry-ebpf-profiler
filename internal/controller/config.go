@@ -38,6 +38,15 @@ type Config struct {
 	IPAddress       string
 	OffCPUThreshold uint
 
+	PyroscopeUsername                    string
+	PyroscopePasswordFile                string
+	PyroscopeSymbolizeNativeFrames       bool
+	PyroscopeStackDeltaLimitBytes        int
+	PyroscopeStackDeltaElfSizeLimitBytes int
+	PyroscopeSymbCachePath               string
+	PyroscopeSymbCacheSizeBytes          int
+	PyroscopeSD                          string
+
 	Reporter reporter.Reporter
 
 	Fs *flag.FlagSet

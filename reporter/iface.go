@@ -5,6 +5,7 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 
 import (
 	"context"
+	"go.opentelemetry.io/ebpf-profiler/reporter/pyroscope/symb/cache"
 	"time"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -87,6 +88,12 @@ type FrameMetadataArgs struct {
 	SourceLine libpf.SourceLineno
 	// FunctionOffset is the line offset from function start line for the frame.
 	FunctionOffset uint32
+
+	FunctionNames []string
+}
+
+type SymbCacheProvider interface { // todo remove this glue
+	SymbCache() *cache.FSCache
 }
 
 type SymbolReporter interface {

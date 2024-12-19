@@ -57,4 +57,10 @@ type Config struct {
 	// ExtraSampleAttrProd is an optional hook point for adding custom
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
+
+	PyroscopeUsername              string
+	PyroscopePasswordFile          string
+	PyroscopeSymbolizeNativeFrames bool
+	PyroscopeSymbCachePath         string
+	PyroscopeSymbCacheSizeBytes    int
 }
