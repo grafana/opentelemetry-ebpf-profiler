@@ -3,11 +3,12 @@
 
 use super::{FfiResult, StatusCode, SymblibSlice, SymblibString};
 use std::ffi::{c_char, c_void, CStr, OsString};
+use std::fs;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use symblib::objfile::{self, SymbolSource};
 use symblib::symbconv::RangeExtractor as _;
-use symblib::{dwarf, symbconv as sc, symbfile, VirtAddr};
+use symblib::{dwarf, symbconv as sc, symbconv, symbfile, VirtAddr};
 
 /// Extract ranges from an executable.
 ///
@@ -25,39 +26,45 @@ use symblib::{dwarf, symbconv as sc, symbfile, VirtAddr};
 #[no_mangle]
 pub unsafe extern "C" fn symblib_rangeextr(
     executable: *const c_char,
-    follow_alt_link: bool,
+    _follow_alt_link: bool, //todo
     visitor: SymblibRangeVisitor,
     user_data: *mut c_void,
 ) -> StatusCode {
-    match rangeextr_impl(executable, follow_alt_link, visitor, user_data) {
+    assert!(!executable.is_null());
+
+    let executable = unsafe { CStr::from_ptr(executable).to_str() };
+    let executable = match executable {
+        Ok(executable) => executable,
+        Err(_) => return StatusCode::BadUtf8,
+    };
+    let visitor: symbconv::RangeVisitor = &mut |rng|  {
+        let ffi_rng = SymblibRange::from(rng);
+        match visitor(user_data, &ffi_rng) {
+            StatusCode::Ok => Ok(()),
+            code => Err(Box::new(code)),
+        }
+    };
+    let executable = match fs::File::open(executable) {
+        Ok(file) => file,
+        Err(_) => return StatusCode::IoFileNotFound,
+    };
+
+    let sup = &None; //todo
+    match rangeextr_impl(&executable, sup, visitor) {
         Ok(()) => StatusCode::Ok,
         Err(e) => e,
     }
 }
 
-unsafe fn rangeextr_impl(
-    executable: *const c_char,
-    follow_alt_link: bool,
-    visitor: SymblibRangeVisitor,
-    user_data: *mut c_void,
-) -> FfiResult {
-    assert!(!executable.is_null());
-
-    let executable = Path::new(unsafe { CStr::from_ptr(executable).to_str()? });
+pub fn rangeextr_impl(
+    executable: &fs::File,
+    dwarf_sup: &Option<fs::File>,
+    visitor: symbconv::RangeVisitor,
+) -> FfiResult<()> {
 
     // Open and mmap main object file.
-    let obj = objfile::File::load(executable)?;
+    let obj = objfile::File::load_file(executable)?;
     let obj_reader = obj.parse()?;
-
-    // Resolve and use alt link, if requested by caller.
-    let mut sup_obj_path: Option<PathBuf> = None;
-    if follow_alt_link {
-        sup_obj_path = match resolve_alt_link(executable, &obj_reader) {
-            Ok(x) => x,
-            Err(StatusCode::IoFileNotFound) => None,
-            Err(other) => return Err(other),
-        }
-    }
 
     // Load DWARF sections.
     let mut dw = dwarf::Sections::load(&obj_reader)?;
@@ -65,13 +72,15 @@ unsafe fn rangeextr_impl(
     // If a supplementary path was found, load its data.
     let sup_obj;
     let sup_reader;
-    if let Some(sup_obj_path) = sup_obj_path {
-        sup_obj = objfile::File::load(&sup_obj_path)?;
+
+    if let Some(dwarf_sup) = dwarf_sup {
+        sup_obj = objfile::File::load_file(dwarf_sup)?;
         sup_reader = sup_obj.parse()?;
         dw.load_sup(&sup_reader)?;
     }
 
     let mut extr = sc::multi::Extractor::new(&obj_reader)?;
+
     extr.add("dwarf", sc::dwarf::Extractor::new(&dw));
     extr.add("go", sc::go::Extractor::new(&obj_reader));
     extr.add(
@@ -84,14 +93,8 @@ unsafe fn rangeextr_impl(
     );
 
     // Run the extractor with the user's callback.
-    let result = extr.extract(&mut |rng| {
-        let ffi_rng = SymblibRange::from(rng);
-        match visitor(user_data, &ffi_rng) {
-            StatusCode::Ok => Ok(()),
-            code => Err(Box::new(code)),
-        }
-    });
 
+    let result = extr.extract(visitor);
     // Extract the error code from the visitor error branches.
     match result {
         Ok(_) => Ok(()),
@@ -107,7 +110,7 @@ unsafe fn rangeextr_impl(
     }
 }
 
-fn resolve_alt_link(exec_path: &Path, obj: &objfile::Reader) -> FfiResult<Option<PathBuf>> {
+fn _resolve_alt_link(exec_path: &Path, obj: &objfile::Reader) -> FfiResult<Option<PathBuf>> {
     let alt_link = obj.gnu_debug_alt_link()?;
 
     let Some(alt_link) = alt_link else {

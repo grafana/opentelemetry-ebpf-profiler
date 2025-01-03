@@ -6,6 +6,7 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 import (
 	"context"
 	"crypto/tls"
+	"go.opentelemetry.io/ebpf-profiler/reporter/pyroscope"
 	"maps"
 	"strconv"
 	"time"
@@ -181,7 +182,7 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
-	_, err := r.client.Export(reqCtx, req)
+	_, err := r.client.Export(reqCtx, req, pyroscope.GetCloudAuth())
 	return err
 }
 

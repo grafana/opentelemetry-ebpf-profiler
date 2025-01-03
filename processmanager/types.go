@@ -4,6 +4,7 @@
 package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanager"
 
 import (
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb"
 	"sync"
 	"sync/atomic"
 
@@ -96,6 +97,8 @@ type ProcessManager struct {
 
 	// filterErrorFrames determines whether error frames are dropped by `ConvertTrace`.
 	filterErrorFrames bool
+
+	tmpSymbols []string
 }
 
 // Mapping represents an executable memory mapping of a process.
@@ -143,22 +146,30 @@ type processInfo struct {
 	// executable mappings keyed by start address.
 	mappings map[libpf.Address]*Mapping
 	// executable mappings keyed by host file ID.
-	mappingsByFileID map[host.FileID]map[libpf.Address]*Mapping
+	mappingsByFileID map[host.FileID]*fileMappingInfo
 	// C-library Thread Specific Data information
 	tsdInfo *tpbase.TSDInfo
 }
 
+type fileMappingInfo struct {
+	mappingsByAddress map[libpf.Address]*Mapping
+	symb              *symb.Table
+}
+
 // addMapping adds a mapping to the internal indices.
-func (pi *processInfo) addMapping(m Mapping) {
+func (pi *processInfo) addMapping(m Mapping, symb *symb.Table) {
 	p := &m
 	pi.mappings[m.Vaddr] = p
 
 	inner := pi.mappingsByFileID[m.FileID]
 	if inner == nil {
-		inner = make(map[libpf.Address]*Mapping, 1)
+		inner = &fileMappingInfo{
+			mappingsByAddress: make(map[libpf.Address]*Mapping, 1),
+			symb:              symb,
+		}
 		pi.mappingsByFileID[m.FileID] = inner
 	}
-	inner[m.Vaddr] = p
+	inner.mappingsByAddress[m.Vaddr] = p
 }
 
 // removeMapping removes a mapping from the internal indices.
@@ -166,8 +177,8 @@ func (pi *processInfo) removeMapping(m *Mapping) {
 	delete(pi.mappings, m.Vaddr)
 
 	if inner, ok := pi.mappingsByFileID[m.FileID]; ok {
-		delete(inner, m.Vaddr)
-		if len(inner) != 0 {
+		delete(inner.mappingsByAddress, m.Vaddr)
+		if len(inner.mappingsByAddress) != 0 {
 			delete(pi.mappingsByFileID, m.FileID)
 		}
 	}

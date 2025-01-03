@@ -6,7 +6,9 @@ package execinfomanager // import "go.opentelemetry.io/ebpf-profiler/processmana
 import (
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"os"
+	"slices"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -31,6 +33,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -64,6 +67,9 @@ type ExecutableInfo struct {
 	Data interpreter.Data
 	// TSDInfo stores TSD information if the executable is libc, otherwise nil.
 	TSDInfo *tpbase.TSDInfo
+
+	Symb     *symb.Table
+	SymbFile string
 }
 
 // ExecutableInfoManager manages all per-executable (FileID) information that we require to
@@ -93,6 +99,7 @@ type ExecutableInfoManager struct {
 	// deferredFileIDs caches file IDs for which stack delta extraction failed and
 	// retrying extraction of stack deltas should be deferred for some time.
 	deferredFileIDs *lru.SyncedLRU[host.FileID, libpf.Void]
+	symbCache       *cache.FSCache
 }
 
 // NewExecutableInfoManager creates a new instance of the executable info manager.
@@ -134,7 +141,9 @@ func NewExecutableInfoManager(
 	}
 	deferredFileIDs.SetLifetime(deferredFileIDTimeout)
 
-	return &ExecutableInfoManager{
+	symbCache := cache.NewFSCache()
+
+	eim := &ExecutableInfoManager{
 		sdp: sdp,
 		state: xsync.NewRWMutex(executableInfoManagerState{
 			interpreterLoaders: interpreterLoaders,
@@ -143,7 +152,15 @@ func NewExecutableInfoManager(
 			ebpf:               ebpf,
 		}),
 		deferredFileIDs: deferredFileIDs,
-	}, nil
+		symbCache:       symbCache,
+	}
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			eim.debugDumpSymbUsage()
+		}
+	}()
+	return eim, nil
 }
 
 // AddOrIncRef either adds information about an executable to the internal cache (when first
@@ -213,8 +230,10 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	// Insert a corresponding record into our map.
 	info = &entry{
 		ExecutableInfo: ExecutableInfo{
-			Data:    state.detectAndLoadInterpData(loaderInfo),
-			TSDInfo: tsdInfo,
+			Data:     state.detectAndLoadInterpData(loaderInfo),
+			TSDInfo:  tsdInfo,
+			Symb:     mgr.symbCache.Open(fileID, elfRef), //todo make it lazy
+			SymbFile: elfRef.FileName(),
 		},
 		mapRef: ref,
 		rc:     1,
@@ -269,6 +288,7 @@ func (mgr *ExecutableInfoManager) RemoveOrDecRef(fileID host.FileID) error {
 		if err := state.unloadDeltas(fileID, &info.mapRef); err != nil {
 			return fmt.Errorf("failed remove fileID 0x%x from BPF maps: %w", fileID, err)
 		}
+		info.release()
 		delete(state.executables, fileID)
 	case 0:
 		// This should be unreachable.
@@ -303,6 +323,35 @@ func (mgr *ExecutableInfoManager) UpdateMetricSummary(summary metrics.Summary) {
 		metrics.MetricValue(deltaProviderStatistics.Success)
 	summary[metrics.IDStackDeltaProviderExtractionError] =
 		metrics.MetricValue(deltaProviderStatistics.ExtractionErrors)
+}
+
+func (mgr *ExecutableInfoManager) debugDumpSymbUsage() {
+	type usage struct {
+		fileID   host.FileID
+		filename string
+		size     int
+	}
+	usages := make([]usage, 0)
+	state := mgr.state.RLock()
+	defer mgr.state.RUnlock(&state)
+	for fileID, entry := range state.executables {
+		if entry.Symb != nil {
+			usages = append(usages, usage{
+				fileID:   fileID,
+				filename: entry.SymbFile,
+				size:     entry.Symb.Size(),
+			})
+		}
+	}
+	slices.SortFunc(usages, func(i, j usage) int {
+		return i.size - j.size
+	})
+	totalSize := 0
+	//for i, u := range usages {
+	//	totalSize += u.size
+	//	fmt.Printf("eim symb entry %10d size %10d: %s | %s\n", i, u.size, u.fileID.StringNoQuotes(), u.filename)
+	//}
+	fmt.Printf("eim symb total size: %d\n", totalSize)
 }
 
 type executableInfoManagerState struct {
@@ -518,6 +567,13 @@ type entry struct {
 	mapRef mapRef
 	// rc determines in how many processes this executable is currently loaded.
 	rc uint64
+}
+
+func (e *entry) release() {
+	if e.Symb != nil {
+		e.Symb.Close()
+		e.Symb = nil
+	}
 }
 
 // mapRef stores all info required to identify and remove

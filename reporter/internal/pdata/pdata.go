@@ -5,6 +5,7 @@ package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pda
 
 import (
 	lru "github.com/elastic/go-freelru"
+	"go.opentelemetry.io/collector/pdata/pprofile"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -40,6 +41,9 @@ func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uin
 		return nil, err
 	}
 	executables.SetLifetime(ExecutableCacheLifetime) // Allow GC to clean stale items.
+	executables.SetOnEvict(func(id libpf.FileID, info samples.ExecInfo) {
+
+	})
 
 	frames, err := lru.NewSynced[libpf.FileID,
 		*xsync.RWMutex[map[libpf.AddressOrLineno]samples.SourceInfo]](
@@ -68,4 +72,27 @@ func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uin
 func (p Pdata) Purge() {
 	p.Executables.PurgeExpired()
 	p.Frames.PurgeExpired()
+}
+
+func (p Pdata) symbolizeNativeFrame(loc *pprofile.Location, traceInfo *samples.TraceEvents, i int, funcMap map[samples.FuncInfo]int32) {
+	fileID := traceInfo.Files[i]
+	fileIDInfoLock, exists := p.Frames.GetAndRefresh(fileID,
+		FramesCacheLifetime)
+	if !exists {
+		return
+	}
+	fileIDInfo := fileIDInfoLock.RLock()
+	defer fileIDInfoLock.RUnlock(&fileIDInfo)
+	if si, exists := (*fileIDInfo)[traceInfo.Linenos[i]]; exists {
+		line := loc.Line().AppendEmpty()
+		line.SetFunctionIndex(createFunctionEntry(funcMap,
+			si.FunctionName, ""))
+		if si.FunctionNames != nil {
+			for _, fn := range *si.FunctionNames {
+				line := loc.Line().AppendEmpty()
+				line.SetFunctionIndex(createFunctionEntry(funcMap,
+					fn, ""))
+			}
+		}
+	}
 }

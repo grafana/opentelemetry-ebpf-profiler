@@ -3,8 +3,6 @@ package pdata
 import (
 	"context"
 	log2 "github.com/go-kit/log"
-	"github.com/grafana/pyroscope/ebpf/cpp/demangle"
-	"github.com/grafana/pyroscope/ebpf/metrics"
 	sd2 "github.com/grafana/pyroscope/ebpf/sd"
 	"github.com/grafana/pyroscope/ebpf/symtab"
 	"go.opentelemetry.io/collector/pdata/pprofile"
@@ -18,31 +16,12 @@ import (
 
 type PyroPlug struct {
 	symcachelock sync.Mutex
-	symcache     *symtab.SymbolCache
 	sd           *pyroscope.DiscovererWithMetrics
 	pyroscopeSD  sd2.TargetFinder
-	pidsDead     map[uint32]struct{}
 }
 
 func NewPyroPlug() (*PyroPlug, error) {
 	logger := log2.NewLogfmtLogger(log2.NewSyncWriter(os.Stderr))
-	symCache, err := symtab.NewSymbolCache(logger, symtab.CacheOptions{
-		PidCacheOptions: symtab.GCacheOptions{
-			Size:       239,
-			KeepRounds: 8,
-		},
-		BuildIDCacheOptions: symtab.GCacheOptions{
-			Size:       239,
-			KeepRounds: 8,
-		},
-		SameFileCacheOptions: symtab.GCacheOptions{
-			Size:       239,
-			KeepRounds: 8,
-		},
-	}, metrics.NewSymtabMetrics(nil))
-	if err != nil {
-		return nil, err
-	}
 
 	pyrosdOpt := sd2.TargetsOptions{
 		Targets:            nil,
@@ -77,7 +56,6 @@ func NewPyroPlug() (*PyroPlug, error) {
 		sd.RunDiscovery(context.Background()) // todo stop
 	}()
 	return &PyroPlug{
-		symcache:    symCache,
 		sd:          sd,
 		pyroscopeSD: pyrosd,
 	}, nil
@@ -85,15 +63,10 @@ func NewPyroPlug() (*PyroPlug, error) {
 
 func (r *PyroPlug) Reset() func() {
 	r.symcachelock.Lock()
-	r.symcache.NextRound()
 	r.symcachelock.Unlock()
-	r.pidsDead = make(map[uint32]struct{})
 	return func() {
 		r.symcachelock.Lock()
 		defer r.symcachelock.Unlock()
-		for pid := range r.pidsDead {
-			r.symcache.RemoveDeadPID(symtab.PidKey(pid))
-		}
 	}
 }
 
@@ -103,17 +76,9 @@ func (r *PyroPlugProc) Symbolize(loc *pprofile.Location, traceInfo *samples.Trac
 	r.r.symcachelock.Lock()
 	defer r.r.symcachelock.Unlock()
 
-	if r.proc.Error() != nil {
-		r.r.pidsDead[uint32(r.proc.Pid())] = struct{}{}
-	} else {
-		instructionPointer := uint64(traceInfo.Linenos[i]) + uint64(traceInfo.MappingFileOffsets[i])
-		sym := r.proc.Resolve(instructionPointer)
-		if sym.Name != "" {
-			l := loc.Line().AppendEmpty()
-			funcIndex := createFunctionEntry(funcMap, sym.Name, sym.Module)
-			l.SetFunctionIndex(funcIndex)
-		}
-	}
+	//l := loc.Line().AppendEmpty()
+	//funcIndex := createFunctionEntry(funcMap, sym.Name, sym.Module)
+	//l.SetFunctionIndex(funcIndex)
 }
 
 func (r *PyroPlugProc) TargetAttributes(attrMgr *samples.AttrTableManager, sample *pprofile.Sample) {
@@ -130,17 +95,9 @@ func (r *PyroPlugProc) TargetAttributes(attrMgr *samples.AttrTableManager, sampl
 
 func (r *PyroPlug) Proc(pk symtab.PidKey) PyroPlugProc {
 	pyroscopeTarget := r.pyroscopeSD.FindTarget(uint32(pk)) // todo use the new Config.ExtraSampleAttrProd
-	proc := r.symcache.GetProcTableCached(pk)
-	if proc == nil {
-		proc = r.symcache.NewProcTable(pk, &symtab.SymbolOptions{
-			GoTableFallback: false,
-			DemangleOptions: demangle.DemangleFull,
-		})
-	}
 	return PyroPlugProc{
 		r:      r,
 		pk:     pk,
-		proc:   proc,
 		target: pyroscopeTarget,
 	}
 }
@@ -148,6 +105,5 @@ func (r *PyroPlug) Proc(pk symtab.PidKey) PyroPlugProc {
 type PyroPlugProc struct {
 	r      *PyroPlug
 	pk     symtab.PidKey
-	proc   *symtab.ProcTable
 	target *sd2.Target
 }

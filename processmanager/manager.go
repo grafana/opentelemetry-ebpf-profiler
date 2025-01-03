@@ -258,13 +258,6 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 			// Locate mapping info for the frame.
 			var mappingStart, mappingEnd libpf.Address
 			var fileOffset uint64
-			if frame.Type.Interpreter() == libpf.Native {
-				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno); ok {
-					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
-					mappingEnd = mappingStart + libpf.Address(mapping.Length)
-					fileOffset = mapping.Bias // pyroscope hack to calculate va pc for symbolization in reporter
-				}
-			}
 
 			fileID, ok := pm.FileIDMapper.Get(frame.File)
 			if !ok {
@@ -275,6 +268,15 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 				newTrace.AppendFrameFull(frame.Type, libpf.UnsymbolizedFileID,
 					libpf.AddressOrLineno(0), mappingStart, mappingEnd, fileOffset)
 				continue
+			}
+
+			if frame.Type.Interpreter() == libpf.Native {
+				frameID := libpf.NewFrameID(fileID, relativeRIP)
+				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno, frameID); ok {
+					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
+					mappingEnd = mappingStart + libpf.Address(mapping.Length)
+					fileOffset = mapping.FileOffset
+				}
 			}
 
 			newTrace.AppendFrameFull(frame.Type, fileID,
@@ -295,8 +297,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 }
 
 // findMappingForTrace locates the mapping for a given host trace.
-func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
-	addr libpf.AddressOrLineno) (m Mapping, found bool) {
+func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID, addr libpf.AddressOrLineno, frameID libpf.FrameID) (m Mapping, found bool) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
@@ -310,15 +311,35 @@ func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
 		return Mapping{}, false
 	}
 
-	for _, candidate := range fidMappings {
+	for _, candidate := range fidMappings.mappingsByAddress {
 		procSpaceVA := libpf.Address(uint64(addr) + candidate.Bias)
 		mappingEnd := candidate.Vaddr + libpf.Address(candidate.Length)
 		if procSpaceVA >= candidate.Vaddr && procSpaceVA <= mappingEnd {
+			pm.symbolizeNativeFrame(fidMappings, frameID, addr)
 			return *candidate, true
 		}
 	}
 
 	return Mapping{}, false
+}
+
+func (pm *ProcessManager) symbolizeNativeFrame(fidMappings *fileMappingInfo, frameID libpf.FrameID, addr libpf.AddressOrLineno) {
+	if fidMappings.symb != nil {
+		if !pm.reporter.FrameKnown(frameID) {
+			pm.tmpSymbols = fidMappings.symb.Lookup(uint64(addr), pm.tmpSymbols[:0])
+			if len(pm.tmpSymbols) > 0 {
+				md := &reporter.FrameMetadataArgs{
+					FrameID:      frameID,
+					FunctionName: pm.tmpSymbols[0],
+				}
+				if len(pm.tmpSymbols) > 1 {
+					md.FunctionNames = make([]string, len(pm.tmpSymbols)-1)
+					copy(md.FunctionNames, pm.tmpSymbols[1:])
+				}
+				pm.reporter.FrameMetadata(md)
+			}
+		}
+	}
 }
 
 func (pm *ProcessManager) MaybeNotifyAPMAgent(

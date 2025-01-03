@@ -36,7 +36,7 @@ pub unsafe extern "C" fn symblib_retpadextr_new(
 unsafe fn retpadextr_new_impl(
     executable: *const c_char,
     extr: *mut *mut SymblibRetPadExtractor, // out arg
-) -> FfiResult {
+) -> FfiResult<()> {
     assert!(!executable.is_null());
     let executable = CStr::from_ptr(executable)
         .to_str()
@@ -65,7 +65,7 @@ fn extractor_thread(
     obj: objfile::File,
     range_rx: mpsc::Receiver<symbfile::Range>,
     ret_pad_tx: mpsc::SyncSender<SymblibReturnPad>,
-) -> FfiResult {
+) -> FfiResult<()> {
     let obj_reader = obj.parse()?;
 
     let range_iter = range_rx
@@ -120,12 +120,12 @@ unsafe fn retpadextr_submit_impl(
     range: *const SymblibRange,
     visitor: RetPadVisitor,
     user_data: *mut c_void,
-) -> FfiResult {
+) -> FfiResult<()> {
     assert!(!extr.is_null());
     let extr: &mut SymblibRetPadExtractor = &mut *extr;
 
     // Wrap visitor to make it rustier.
-    let visitor = |rng: SymblibReturnPad| -> FfiResult {
+    let visitor = |rng: SymblibReturnPad| -> FfiResult<()> {
         FfiResult::from(unsafe { visitor(user_data, &rng) })
     };
 
@@ -187,7 +187,7 @@ pub unsafe extern "C" fn symblib_retpadextr_free(extr: *mut SymblibRetPadExtract
 /// Opaque to C.
 #[repr(C)]
 pub struct SymblibRetPadExtractor {
-    thread_handle: Option<JoinHandle<FfiResult>>,
+    thread_handle: Option<JoinHandle<FfiResult<()>>>,
     range_tx: Option<mpsc::SyncSender<symbfile::Range>>,
     ret_pad_rx: mpsc::Receiver<SymblibReturnPad>,
 }
