@@ -14,8 +14,12 @@ RUN /usr/local/go/bin/go build -ldflags="-s -w"  .
 FROM ubuntu:22.04
 
 RUN apt-get update && \
-    apt-get install -y linux-headers-generic && \
+    apt-get install -y linux-headers-generic git gdb && \
     rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/pwndbg/pwndbg && \
+  cd pwndbg && \
+  ./setup.sh
 
 COPY --from=builder /profiler/ebpf-profiler /usr/local/bin/
 

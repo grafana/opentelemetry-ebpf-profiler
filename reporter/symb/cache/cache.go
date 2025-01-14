@@ -6,6 +6,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/symb"
+	"runtime"
 	"time"
 
 	"os"
@@ -21,6 +22,15 @@ type FSCache struct {
 
 	// fid -> size
 	lru *LRUCache[FileID, int]
+
+	jobs chan convertJob
+}
+
+type convertJob struct {
+	src *os.File
+	dst *os.File
+
+	result chan error
 }
 
 // todo metric of inmemory range table size
@@ -34,6 +44,7 @@ func NewFSCache() *FSCache {
 	res := &FSCache{
 		cacheDir: "/data/symb-cache",
 		lru:      lru,
+		jobs:     make(chan convertJob, 1),
 	}
 	os.MkdirAll(res.cacheDir, 0700)
 	lru.SetOnEvict(func(id FileID, v int) {
@@ -64,8 +75,19 @@ func NewFSCache() *FSCache {
 			fmt.Printf("fscache lru size %d\n", lru.Size())
 		}
 	}()
+	go func() {
+		convertLoop(res)
+	}()
 
 	return res
+}
+
+func convertLoop(res *FSCache) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	for job := range res.jobs {
+		job.result <- res.convertSync(job.src, job.dst)
+	}
 }
 
 // todo consider mvoe this to reporter ExecutableInfo cache?
@@ -127,7 +149,7 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 	defer dst.Close()
 
 	t1 := time.Now()
-	err = symb.FDToTable(src, nil, dst)
+	err = c.convertAsync(src, dst)
 
 	if err != nil {
 		fmt.Printf("%s convert took %s err : %v \n", logtag, time.Since(t1), err)
@@ -145,6 +167,16 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 	c.lru.Put(FileID(fid), sz)
 	return &LazyTable{cache: c, fid: FileID(fid)}
 
+}
+
+func (c *FSCache) convertAsync(src *os.File, dst *os.File) error {
+	job := convertJob{src: src, dst: dst, result: make(chan error)}
+	c.jobs <- job
+	return <-job.result
+}
+
+func (c *FSCache) convertSync(src *os.File, dst *os.File) error {
+	return symb.FDToTable(src, nil, dst)
 }
 
 func (c *FSCache) tableFilePath(fid host.FileID) string {
