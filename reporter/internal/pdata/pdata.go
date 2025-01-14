@@ -75,6 +75,7 @@ func (p Pdata) Purge() {
 }
 
 func (p Pdata) symbolizeNativeFrame(loc *pprofile.Location, traceInfo *samples.TraceEvents, i int, funcMap map[samples.FuncInfo]int32) {
+	return
 	fileID := traceInfo.Files[i]
 	fileIDInfoLock, exists := p.Frames.GetAndRefresh(fileID,
 		FramesCacheLifetime)

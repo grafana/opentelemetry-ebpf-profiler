@@ -70,6 +70,7 @@ func NewFSCache() *FSCache {
 
 // todo consider mvoe this to reporter ExecutableInfo cache?
 func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *symb.Table {
+	return nil
 	logtag := fmt.Sprintf("fid=%s elf=%s", fid.StringNoQuotes(), elfRef.FileName())
 	//fmt.Printf("fscache open  %s %s\n", fid.StringNoQuotes(), elfRef.FileName())
 	var err error
