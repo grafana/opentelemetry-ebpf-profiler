@@ -33,7 +33,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter/symb"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -68,7 +67,7 @@ type ExecutableInfo struct {
 	// TSDInfo stores TSD information if the executable is libc, otherwise nil.
 	TSDInfo *tpbase.TSDInfo
 
-	Symb     *symb.Table
+	Symb     *cache.LazyTable
 	SymbFile string
 }
 
@@ -351,7 +350,7 @@ func (mgr *ExecutableInfoManager) debugDumpSymbUsage() {
 	//	totalSize += u.size
 	//	fmt.Printf("eim symb entry %10d size %10d: %s | %s\n", i, u.size, u.fileID.StringNoQuotes(), u.filename)
 	//}
-	fmt.Printf("eim symb total size: %d\n", totalSize)
+	fmt.Printf("eim symb total size: %d COUNT: %d\n", totalSize, len(usages))
 }
 
 type executableInfoManagerState struct {

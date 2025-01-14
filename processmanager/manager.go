@@ -324,6 +324,7 @@ func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID, ad
 }
 
 func (pm *ProcessManager) symbolizeNativeFrame(fidMappings *fileMappingInfo, frameID libpf.FrameID, addr libpf.AddressOrLineno) {
+	return
 	if fidMappings.symb != nil {
 		if !pm.reporter.FrameKnown(frameID) {
 			pm.tmpSymbols = fidMappings.symb.Lookup(uint64(addr), pm.tmpSymbols[:0])

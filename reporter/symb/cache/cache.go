@@ -69,30 +69,22 @@ func NewFSCache() *FSCache {
 }
 
 // todo consider mvoe this to reporter ExecutableInfo cache?
-func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *symb.Table {
-	return nil
+//todo ignore linux-vdso.1.so
+
+func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 	logtag := fmt.Sprintf("fid=%s elf=%s", fid.StringNoQuotes(), elfRef.FileName())
 	//fmt.Printf("fscache open  %s %s\n", fid.StringNoQuotes(), elfRef.FileName())
 	var err error
 	var dst *os.File
 	var src *os.File
 
-	var t *symb.Table
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	//todo ignore linux-vdso.1.so
 	_, _ = c.lru.Get(FileID(fid))
-	dst, err = os.Open(c.tableFilePath(fid))
-	if err == nil {
-		t, err = symb.OpenFile(dst)
-		if err == nil {
-			//fmt.Printf("%s open  sz %d\n", logtag, t.Size())
-			return t
-		} else {
-			dst.Close()
-			fmt.Printf("open failed %s %s\n", logtag, err.Error())
-			return nil
-		}
+	tableFilePath := c.tableFilePath(fid)
+	info, err := os.Stat(tableFilePath)
+	if err == nil && info != nil {
+		return &LazyTable{cache: c, fid: FileID(fid)}
 	}
 
 	o, ok := elfRef.ELFOpener.(pfelf.RootFSOpener)
@@ -127,34 +119,51 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *symb.Table {
 
 	defer src.Close()
 
-	dst, err = os.Create(c.tableFilePath(fid))
+	dst, err = os.Create(tableFilePath)
 	if err != nil {
-		fmt.Printf("err create %s %s %s %s\n", fid.StringNoQuotes(), c.tableFilePath(fid), elfRef.FileName(), err.Error())
+		fmt.Printf("err create %s %s %s %s\n", fid.StringNoQuotes(), tableFilePath, elfRef.FileName(), err.Error())
 		return nil
 	}
+	defer dst.Close()
 
-	//t1 := time.Now()
+	t1 := time.Now()
 	err = symb.FDToTable(src, nil, dst)
-	stat, _ := dst.Stat()
-	//fmt.Printf("%s convert took %s err : %v | %+v\n", logtag, time.Since(t1), err, stat)
-	if err != nil || stat == nil {
-		dst.Close()
-		_ = os.Remove(c.tableFilePath(fid))
-		fmt.Printf("err open %s\n", err.Error()) //todo use retry mechanism in eim ?
+
+	if err != nil {
+		fmt.Printf("%s convert took %s err : %v \n", logtag, time.Since(t1), err)
+		_ = os.Remove(tableFilePath)
 		return nil
 	}
 
-	c.lru.Put(FileID(fid), int(stat.Size()))
-	t, err = symb.OpenFile(dst)
-	if err != nil {
-		fmt.Printf("err open %s\n", err.Error())
-		return nil
+	sz := 0
+	stat, _ := dst.Stat()
+	if stat != nil {
+		sz = int(stat.Size())
 	}
-	//fmt.Printf("%s open  sz %d\n", logtag, t.Size())
-	return t
+	fmt.Printf("%s convert took %s size: %v , err : %v \n", logtag, time.Since(t1), sz, err)
+
+	c.lru.Put(FileID(fid), sz)
+	return &LazyTable{cache: c, fid: FileID(fid)}
 
 }
 
 func (c *FSCache) tableFilePath(fid host.FileID) string {
 	return filepath.Join(c.cacheDir, fid.StringNoQuotes())
+}
+
+type LazyTable struct {
+	cache *FSCache
+	fid   FileID
+}
+
+func (t LazyTable) Size() int {
+	return 0
+}
+
+func (t LazyTable) Close() {
+
+}
+
+func (t LazyTable) Lookup(addr uint64, symbols []string) []string {
+	return symbols[:0]
 }

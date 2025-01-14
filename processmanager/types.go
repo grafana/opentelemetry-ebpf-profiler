@@ -4,7 +4,7 @@
 package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanager"
 
 import (
-	"go.opentelemetry.io/ebpf-profiler/reporter/symb"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"sync"
 	"sync/atomic"
 
@@ -153,11 +153,11 @@ type processInfo struct {
 
 type fileMappingInfo struct {
 	mappingsByAddress map[libpf.Address]*Mapping
-	symb              *symb.Table
+	symb              *cache.LazyTable
 }
 
 // addMapping adds a mapping to the internal indices.
-func (pi *processInfo) addMapping(m Mapping, symb *symb.Table) {
+func (pi *processInfo) addMapping(m Mapping, symb *cache.LazyTable) {
 	p := &m
 	pi.mappings[m.Vaddr] = p
 
