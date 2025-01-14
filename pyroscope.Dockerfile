@@ -9,7 +9,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 COPY . /profiler
 WORKDIR /profiler
 RUN cargo build --release
-RUN /usr/local/go/bin/go build .
+RUN /usr/local/go/bin/go build -ldflags="-s -w"  .
 
 FROM ubuntu:22.04
 
