@@ -3,10 +3,11 @@ package cache
 import (
 	"errors"
 	"fmt"
-	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/symb"
 	"runtime"
+	"strings"
 	"time"
 
 	"os"
@@ -15,7 +16,7 @@ import (
 	"syscall"
 )
 
-type FileID host.FileID
+type FileID libpf.FileID
 type FSCache struct {
 	mu       sync.Mutex
 	cacheDir string
@@ -24,6 +25,9 @@ type FSCache struct {
 	lru *LRUCache[FileID, int]
 
 	jobs chan convertJob
+
+	tables map[FileID]*symb.Table
+	known  map[FileID]struct{}
 }
 
 type convertJob struct {
@@ -34,7 +38,7 @@ type convertJob struct {
 }
 
 // todo metric of inmemory range table size
-// todo keep a link to a process, retrun lazy table, convert only if we need it.
+// todo  convert only if we need it.
 func NewFSCache() *FSCache {
 	sz := 2 * 1024 * 1024 * 1024
 	lru := New[FileID, int](sz, func(key FileID, value int) int {
@@ -45,10 +49,15 @@ func NewFSCache() *FSCache {
 		cacheDir: "/data/symb-cache",
 		lru:      lru,
 		jobs:     make(chan convertJob, 1),
+		tables:   make(map[FileID]*symb.Table),
+		known:    make(map[FileID]struct{}),
 	}
 	os.MkdirAll(res.cacheDir, 0700)
 	lru.SetOnEvict(func(id FileID, v int) {
-		_ = os.Remove(res.tableFilePath(host.FileID(id)))
+		_ = os.Remove(res.tableFilePath(id))
+		res.mu.Lock()
+		delete(res.known, id)
+		res.mu.Unlock()
 	})
 
 	// list dir and add to cache
@@ -56,16 +65,17 @@ func NewFSCache() *FSCache {
 		if info.IsDir() {
 			return nil
 		}
-		id, err := host.FileIDFromStringNoQuites(filepath.Base(path))
+		id, err := libpf.FileIDFromString(filepath.Base(path))
+		if err != nil {
+			return nil
+		}
 		id2 := id.StringNoQuotes()
 		if filepath.Base(path) != id2 {
 			return nil
 		}
-		if err != nil {
-			return nil
-		}
 
 		res.lru.Put(FileID(id), int(info.Size()))
+		res.known[FileID(id)] = struct{}{}
 		return nil
 	})
 
@@ -91,9 +101,10 @@ func convertLoop(res *FSCache) {
 }
 
 // todo consider mvoe this to reporter ExecutableInfo cache?
-//todo ignore linux-vdso.1.so
-
-func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
+func (c *FSCache) Convert(fid libpf.FileID, elfRef *pfelf.Reference) {
+	if strings.Contains(elfRef.FileName(), "linux-vdso.1") {
+		return
+	}
 	logtag := fmt.Sprintf("fid=%s elf=%s", fid.StringNoQuotes(), elfRef.FileName())
 	//fmt.Printf("fscache open  %s %s\n", fid.StringNoQuotes(), elfRef.FileName())
 	var err error
@@ -102,22 +113,27 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if _, ok := c.known[FileID(fid)]; ok {
+		return
+	}
+
 	_, _ = c.lru.Get(FileID(fid))
-	tableFilePath := c.tableFilePath(fid)
+	tableFilePath := c.tableFilePath(FileID(fid))
 	info, err := os.Stat(tableFilePath)
 	if err == nil && info != nil {
-		return &LazyTable{cache: c, fid: FileID(fid)}
+		return
 	}
 
 	o, ok := elfRef.ELFOpener.(pfelf.RootFSOpener)
 	if !ok {
-		return nil
+		return
 	}
 
 	elf, err := elfRef.GetELF()
 	if err != nil {
 		fmt.Printf("failed to open elf %s: %s\n", logtag, err.Error())
-		return nil
+		return
 	}
 	debugLinkFileName := elf.DebuglinkFileName(elfRef.FileName(), elfRef)
 	if debugLinkFileName != "" {
@@ -132,10 +148,10 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 				//todo if /proc/{pid} exists, try to open mapping? or try to open file from file namespace?
-				return nil
+				return
 			}
 			fmt.Printf("err open %s\n", err.Error())
-			return nil
+			return
 		}
 	}
 
@@ -144,7 +160,7 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 	dst, err = os.Create(tableFilePath)
 	if err != nil {
 		fmt.Printf("err create %s %s %s %s\n", fid.StringNoQuotes(), tableFilePath, elfRef.FileName(), err.Error())
-		return nil
+		return
 	}
 	defer dst.Close()
 
@@ -154,7 +170,7 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 	if err != nil {
 		fmt.Printf("%s convert took %s err : %v \n", logtag, time.Since(t1), err)
 		_ = os.Remove(tableFilePath)
-		return nil
+		return
 	}
 
 	sz := 0
@@ -165,8 +181,7 @@ func (c *FSCache) Open(fid host.FileID, elfRef *pfelf.Reference) *LazyTable {
 	fmt.Printf("%s convert took %s size: %v , err : %v \n", logtag, time.Since(t1), sz, err)
 
 	c.lru.Put(FileID(fid), sz)
-	return &LazyTable{cache: c, fid: FileID(fid)}
-
+	c.known[FileID(fid)] = struct{}{}
 }
 
 func (c *FSCache) convertAsync(src *os.File, dst *os.File) error {
@@ -179,23 +194,41 @@ func (c *FSCache) convertSync(src *os.File, dst *os.File) error {
 	return symb.FDToTable(src, nil, dst)
 }
 
-func (c *FSCache) tableFilePath(fid host.FileID) string {
+func (c *FSCache) tableFilePath(fid FileID) string {
 	return filepath.Join(c.cacheDir, fid.StringNoQuotes())
 }
 
-type LazyTable struct {
-	cache *FSCache
-	fid   FileID
+//func (pm *ProcessManager) symbConvert(trace *host.Trace, mapping Mapping, fileID libpf.FileID) {
+//	if pm.symb == nil {
+//		return
+//	}
+//	pr := process.New(trace.PID)
+//	elfRef := pfelf.NewReference(mapping.FilePath, pr)
+//	defer elfRef.Close()
+//	pm.symb.Convert(fileID, elfRef)
+//}
+
+func (c *FSCache) Lookup(pid int64, fid FileID, addr uint64, symbols []string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	table, ok := c.tables[fid]
+	if ok {
+		return table.Lookup(addr, symbols)
+	}
+	table, err := symb.OpenPath(c.tableFilePath(fid))
+	if err != nil {
+		return symbols[:0]
+	}
+	c.tables[fid] = table
+	return table.Lookup(addr, symbols)
 }
 
-func (t LazyTable) Size() int {
-	return 0
-}
-
-func (t LazyTable) Close() {
-
-}
-
-func (t LazyTable) Lookup(addr uint64, symbols []string) []string {
-	return symbols[:0]
+func (c *FSCache) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, table := range c.tables {
+		table.Close()
+	}
+	clear(c.tables)
+	return nil
 }

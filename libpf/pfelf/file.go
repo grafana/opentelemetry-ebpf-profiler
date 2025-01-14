@@ -637,7 +637,7 @@ func (f *File) OpenDebugLink(elfFilePath string, elfOpener ELFOpener) (
 
 	linkName, linkCRC32, err := f.GetDebugLink()
 	if err != nil {
-		return
+		return nil, ""
 	}
 
 	executableDir := filepath.Dir(elfFilePath)

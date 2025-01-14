@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/samples"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 )
 
 // Reporter is the top-level interface implemented by a full reporter.
@@ -91,6 +92,10 @@ type FrameMetadataArgs struct {
 	FunctionOffset uint32
 
 	FunctionNames []string
+}
+
+type SymbCacheProvider interface { // todo remove this glue
+	SymbCache() *cache.FSCache
 }
 
 type SymbolReporter interface {

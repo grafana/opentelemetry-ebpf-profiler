@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"go.opentelemetry.io/ebpf-profiler/reporter/pyroscope"
+	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"maps"
 	"strconv"
 	"time"
@@ -77,11 +78,13 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		return nil, err
 	}
 
+	symb := cache.NewFSCache()
 	data, err := pdata.New(
 		cfg.SamplesPerSecond,
 		cfg.ExecutablesCacheElements,
 		cfg.FramesCacheElements,
 		cfg.ExtraSampleAttrProd,
+		symb,
 	)
 	if err != nil {
 		return nil, err
@@ -101,6 +104,7 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 			runLoop: &runLoop{
 				stopSignal: make(chan libpf.Void),
 			},
+			symb: symb,
 		},
 		kernelVersion:           cfg.KernelVersion,
 		hostName:                cfg.HostName,

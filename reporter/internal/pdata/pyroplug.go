@@ -61,15 +61,6 @@ func NewPyroPlug() (*PyroPlug, error) {
 	}, nil
 }
 
-func (r *PyroPlug) Reset() func() {
-	r.symcachelock.Lock()
-	r.symcachelock.Unlock()
-	return func() {
-		r.symcachelock.Lock()
-		defer r.symcachelock.Unlock()
-	}
-}
-
 func (r *PyroPlugProc) Symbolize(loc *pprofile.Location, traceInfo *samples.TraceEvents, i int, funcMap map[samples.FuncInfo]int32,
 ) {
 	// this is a temporary hack to symbolize the frames on the client instead of the server

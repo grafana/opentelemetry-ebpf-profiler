@@ -52,8 +52,11 @@ func (p *Pdata) setProfile(
 	events map[samples.TraceAndMetaKey]*samples.TraceEvents,
 	profile pprofile.Profile,
 ) {
-	reset := p.pyroPlug.Reset()
-	defer reset()
+	defer func() {
+		if p.symb != nil {
+			p.symb.Close()
+		}
+	}()
 
 	// stringMap is a temporary helper that will build the StringTable.
 	// By specification, the first element should be empty.
@@ -137,7 +140,7 @@ func (p *Pdata) setProfile(
 						"process.executable.build_id.htlhash", traceInfo.Files[i].StringNoQuotes())
 				}
 				loc.SetMappingIndex(locationMappingIndex)
-				p.symbolizeNativeFrame(&loc, traceInfo, i, funcMap)
+				p.symbolizeNativeFrame(traceKey.Pid, &loc, traceInfo, i, funcMap)
 			case libpf.AbortFrame:
 				// Next step: Figure out how the OTLP protocol
 				// could handle artificial frames, like AbortFrame,

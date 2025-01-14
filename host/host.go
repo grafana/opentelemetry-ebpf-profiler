@@ -30,19 +30,6 @@ func FileIDFromBytes(b []byte) (FileID, error) {
 	return FileID(binary.BigEndian.Uint64(b[0:8])), nil
 }
 
-func FileIDFromStringNoQuites(b string) (FileID, error) {
-	if len(b) != 32 {
-		return FileID(0), fmt.Errorf("invalid length for bytes '%v': %d", b, len(b))
-	}
-	half := b[:16]
-	fid := FileID(0)
-	n, err := fmt.Sscanf(half, "%016x", &fid)
-	if n != 1 || err != nil {
-		return FileID(0), fmt.Errorf("invalid string '%v'", b)
-	}
-	return fid, nil
-}
-
 func (fid FileID) StringNoQuotes() string {
 	return fmt.Sprintf("%016x%016x", uint64(fid), uint64(fid))
 }

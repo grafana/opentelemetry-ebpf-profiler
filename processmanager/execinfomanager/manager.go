@@ -6,9 +6,7 @@ package execinfomanager // import "go.opentelemetry.io/ebpf-profiler/processmana
 import (
 	"errors"
 	"fmt"
-	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
 	"os"
-	"slices"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -66,9 +64,6 @@ type ExecutableInfo struct {
 	Data interpreter.Data
 	// TSDInfo stores TSD information if the executable is libc, otherwise nil.
 	TSDInfo *tpbase.TSDInfo
-
-	Symb     *cache.LazyTable
-	SymbFile string
 }
 
 // ExecutableInfoManager manages all per-executable (FileID) information that we require to
@@ -98,7 +93,6 @@ type ExecutableInfoManager struct {
 	// deferredFileIDs caches file IDs for which stack delta extraction failed and
 	// retrying extraction of stack deltas should be deferred for some time.
 	deferredFileIDs *lru.SyncedLRU[host.FileID, libpf.Void]
-	symbCache       *cache.FSCache
 }
 
 // NewExecutableInfoManager creates a new instance of the executable info manager.
@@ -140,8 +134,6 @@ func NewExecutableInfoManager(
 	}
 	deferredFileIDs.SetLifetime(deferredFileIDTimeout)
 
-	symbCache := cache.NewFSCache()
-
 	eim := &ExecutableInfoManager{
 		sdp: sdp,
 		state: xsync.NewRWMutex(executableInfoManagerState{
@@ -151,14 +143,7 @@ func NewExecutableInfoManager(
 			ebpf:               ebpf,
 		}),
 		deferredFileIDs: deferredFileIDs,
-		symbCache:       symbCache,
 	}
-	go func() {
-		for {
-			time.Sleep(time.Minute)
-			eim.debugDumpSymbUsage()
-		}
-	}()
 	return eim, nil
 }
 
@@ -229,10 +214,8 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	// Insert a corresponding record into our map.
 	info = &entry{
 		ExecutableInfo: ExecutableInfo{
-			Data:     state.detectAndLoadInterpData(loaderInfo),
-			TSDInfo:  tsdInfo,
-			Symb:     mgr.symbCache.Open(fileID, elfRef), //todo make it lazy
-			SymbFile: elfRef.FileName(),
+			Data:    state.detectAndLoadInterpData(loaderInfo),
+			TSDInfo: tsdInfo,
 		},
 		mapRef: ref,
 		rc:     1,
@@ -322,35 +305,6 @@ func (mgr *ExecutableInfoManager) UpdateMetricSummary(summary metrics.Summary) {
 		metrics.MetricValue(deltaProviderStatistics.Success)
 	summary[metrics.IDStackDeltaProviderExtractionError] =
 		metrics.MetricValue(deltaProviderStatistics.ExtractionErrors)
-}
-
-func (mgr *ExecutableInfoManager) debugDumpSymbUsage() {
-	type usage struct {
-		fileID   host.FileID
-		filename string
-		size     int
-	}
-	usages := make([]usage, 0)
-	state := mgr.state.RLock()
-	defer mgr.state.RUnlock(&state)
-	for fileID, entry := range state.executables {
-		if entry.Symb != nil {
-			usages = append(usages, usage{
-				fileID:   fileID,
-				filename: entry.SymbFile,
-				size:     entry.Symb.Size(),
-			})
-		}
-	}
-	slices.SortFunc(usages, func(i, j usage) int {
-		return i.size - j.size
-	})
-	totalSize := 0
-	//for i, u := range usages {
-	//	totalSize += u.size
-	//	fmt.Printf("eim symb entry %10d size %10d: %s | %s\n", i, u.size, u.fileID.StringNoQuotes(), u.filename)
-	//}
-	fmt.Printf("eim symb total size: %d COUNT: %d\n", totalSize, len(usages))
 }
 
 type executableInfoManagerState struct {
@@ -569,10 +523,6 @@ type entry struct {
 }
 
 func (e *entry) release() {
-	if e.Symb != nil {
-		e.Symb.Close()
-		e.Symb = nil
-	}
 }
 
 // mapRef stores all info required to identify and remove

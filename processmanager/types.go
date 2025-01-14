@@ -98,7 +98,7 @@ type ProcessManager struct {
 	// filterErrorFrames determines whether error frames are dropped by `ConvertTrace`.
 	filterErrorFrames bool
 
-	tmpSymbols []string
+	symb *cache.FSCache
 }
 
 // Mapping represents an executable memory mapping of a process.
@@ -128,6 +128,8 @@ type Mapping struct {
 
 	// File offset of the backing file
 	FileOffset uint64
+
+	FilePath string
 }
 
 // GetOnDiskFileIdentifier returns the OnDiskFileIdentifier for the mapping
@@ -153,11 +155,10 @@ type processInfo struct {
 
 type fileMappingInfo struct {
 	mappingsByAddress map[libpf.Address]*Mapping
-	symb              *cache.LazyTable
 }
 
 // addMapping adds a mapping to the internal indices.
-func (pi *processInfo) addMapping(m Mapping, symb *cache.LazyTable) {
+func (pi *processInfo) addMapping(m Mapping) {
 	p := &m
 	pi.mappings[m.Vaddr] = p
 
@@ -165,7 +166,6 @@ func (pi *processInfo) addMapping(m Mapping, symb *cache.LazyTable) {
 	if inner == nil {
 		inner = &fileMappingInfo{
 			mappingsByAddress: make(map[libpf.Address]*Mapping, 1),
-			symb:              symb,
 		}
 		pi.mappingsByFileID[m.FileID] = inner
 	}

@@ -106,7 +106,7 @@ func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping, ei eim
 		}
 	}
 
-	info.addMapping(*m, ei.Symb)
+	info.addMapping(*m)
 
 	prefixes, err := lpm.CalculatePrefixList(uint64(m.Vaddr), uint64(m.Vaddr)+m.Length)
 	if err != nil {
@@ -365,6 +365,7 @@ func (pm *ProcessManager) processNewExecMapping(pr process.Process, mapping *pro
 			Device:     mapping.Device,
 			Inode:      mapping.Inode,
 			FileOffset: mapping.FileOffset,
+			FilePath:   mapping.Path,
 		}, elfRef); err != nil {
 		// Same as above, ignore the errors related to process having exited.
 		// Also ignore errors of deferred file IDs.
