@@ -26,7 +26,7 @@ const MiB = 1 << 20
 type Controller struct {
 	config   *Config
 	reporter reporter.Reporter
-	tracer   *tracer.Tracer
+	Tracer   *tracer.Tracer
 }
 
 // New creates a new controller
@@ -108,7 +108,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)
 	}
-	c.tracer = trc
+	c.Tracer = trc
 	log.Printf("eBPF tracer loaded")
 
 	now := time.Now()
@@ -156,8 +156,8 @@ func (c *Controller) Shutdown() {
 		c.reporter.Stop()
 	}
 
-	if c.tracer != nil {
-		c.tracer.Close()
+	if c.Tracer != nil {
+		c.Tracer.Close()
 	}
 }
 

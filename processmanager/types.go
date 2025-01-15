@@ -4,7 +4,11 @@
 package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanager"
 
 import (
+	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/process"
+	"go.opentelemetry.io/ebpf-profiler/reporter/glue"
 	"go.opentelemetry.io/ebpf-profiler/reporter/symb/cache"
+	"io"
 	"sync"
 	"sync/atomic"
 
@@ -99,6 +103,109 @@ type ProcessManager struct {
 	filterErrorFrames bool
 
 	symb *cache.FSCache
+}
+
+func (pm *ProcessManager) AllKnownFiles() map[libpf.FileID]struct{} {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	// Create a map to store unique FileIDs
+	knownFiles := make(map[libpf.FileID]struct{})
+
+	// Iterate through all processes
+	for _, pi := range pm.pidToProcessInfo {
+		// Add FileIDs from mappingsByFileID
+		for fileID := range pi.mappingsByFileID {
+			// Convert host.FileID to libpf.FileID
+			fileID, ok := pm.FileIDMapper.Get(fileID)
+			if ok {
+				knownFiles[libpf.FileID(fileID)] = struct{}{}
+			}
+		}
+	}
+	return knownFiles
+}
+
+type FileInfo struct {
+	KnownPids    map[libpf.PID]struct{}
+	FileNames    map[string]struct{}
+	ServiceNames map[string]struct{}
+	File         []byte // original file
+	DebugFile    []byte // if DebuglinkFileName returns something
+	BuildID      string
+}
+
+func (pm *ProcessManager) CollectFileInfo(fid string) FileInfo {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	res := FileInfo{
+		KnownPids:    make(map[libpf.PID]struct{}),
+		FileNames:    make(map[string]struct{}),
+		ServiceNames: make(map[string]struct{}),
+	}
+
+	for PID, pi := range pm.pidToProcessInfo {
+		for fileID, info := range pi.mappingsByFileID {
+			fileID, ok := pm.FileIDMapper.Get(fileID)
+			if ok && fileID.StringNoQuotes() == fid {
+				res.KnownPids[PID] = struct{}{}
+				filePath := ""
+				for _, mapping := range info.mappingsByAddress {
+					res.FileNames[mapping.FilePath] = struct{}{}
+					filePath = mapping.FilePath
+				}
+				if res.File == nil && filePath != "" {
+					pr := process.New(PID)
+					elfRef := pfelf.NewReference(filePath, pr)
+
+					o := pr.(pfelf.RootFSOpener)
+					func() {
+						f, err := o.OpenRootFSFile(filePath)
+						if err != nil {
+							fmt.Printf("failed to open rootfs file %s: %v\n", filePath, err)
+							return
+						}
+						defer f.Close()
+						res.File, err = io.ReadAll(f)
+						if err != nil {
+							fmt.Printf("failed to read rootfs file %s: %v\n", filePath, err)
+							return
+						}
+						elf, err := elfRef.GetELF()
+						if err != nil {
+							fmt.Printf("failed to get ELF from rootfs file %s: %v\n", filePath, err)
+							return
+						}
+						res.BuildID, _ = elf.GetBuildID()
+						debugLinkFileName := elf.DebuglinkFileName(filePath, elfRef)
+						if debugLinkFileName != "" {
+							f, err := o.OpenRootFSFile(debugLinkFileName)
+							if err != nil {
+								fmt.Printf("failed to open debug file %s: %v\n", debugLinkFileName, err)
+								return
+							}
+							defer f.Close()
+							res.DebugFile, err = io.ReadAll(f)
+							if err != nil {
+								fmt.Printf("failed to read debug file %s: %v\n", debugLinkFileName, err)
+								return
+							}
+						}
+						defer f.Close()
+					}()
+
+				}
+			}
+		}
+	}
+	for pid, _ := range res.KnownPids {
+		target := glue.GlobalSD.FindTarget(uint32(pid))
+		if target != nil {
+			res.ServiceNames[target.ServiceName()] = struct{}{}
+		}
+	}
+
+	return res
 }
 
 // Mapping represents an executable memory mapping of a process.

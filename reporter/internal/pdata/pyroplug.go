@@ -6,6 +6,7 @@ import (
 	sd2 "github.com/grafana/pyroscope/ebpf/sd"
 	"github.com/grafana/pyroscope/ebpf/symtab"
 	"go.opentelemetry.io/collector/pdata/pprofile"
+	"go.opentelemetry.io/ebpf-profiler/reporter/glue"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/samples"
 	"go.opentelemetry.io/ebpf-profiler/reporter/pyroscope"
 	"go.opentelemetry.io/otel/attribute"
@@ -14,10 +15,12 @@ import (
 	"sync"
 )
 
+var Global *PyroPlug
+
 type PyroPlug struct {
 	symcachelock sync.Mutex
 	sd           *pyroscope.DiscovererWithMetrics
-	pyroscopeSD  sd2.TargetFinder
+	SD           sd2.TargetFinder
 }
 
 func NewPyroPlug() (*PyroPlug, error) {
@@ -55,10 +58,13 @@ func NewPyroPlug() (*PyroPlug, error) {
 	go func() {
 		sd.RunDiscovery(context.Background()) // todo stop
 	}()
-	return &PyroPlug{
-		sd:          sd,
-		pyroscopeSD: pyrosd,
-	}, nil
+	p := &PyroPlug{
+		sd: sd,
+		SD: pyrosd,
+	}
+	glue.GlobalSD = p.SD
+	Global = p
+	return p, nil
 }
 
 func (r *PyroPlugProc) Symbolize(loc *pprofile.Location, traceInfo *samples.TraceEvents, i int, funcMap map[samples.FuncInfo]int32,
@@ -85,7 +91,7 @@ func (r *PyroPlugProc) TargetAttributes(attrMgr *samples.AttrTableManager, sampl
 }
 
 func (r *PyroPlug) Proc(pk symtab.PidKey) PyroPlugProc {
-	pyroscopeTarget := r.pyroscopeSD.FindTarget(uint32(pk)) // todo use the new Config.ExtraSampleAttrProd
+	pyroscopeTarget := r.SD.FindTarget(uint32(pk)) // todo use the new Config.ExtraSampleAttrProd
 	return PyroPlugProc{
 		r:      r,
 		pk:     pk,

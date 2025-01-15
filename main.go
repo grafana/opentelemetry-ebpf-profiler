@@ -57,6 +57,8 @@ func main() {
 	os.Exit(int(mainWithExitCode()))
 }
 
+var ctlr *controller.Controller
+
 func mainWithExitCode() exitCode {
 	cfg, err := parseArgs()
 	if err != nil {
@@ -93,6 +95,7 @@ func mainWithExitCode() exitCode {
 	if cfg.PprofAddr != "" {
 		go func() {
 			//nolint:gosec
+			http.HandleFunc("/binaries/", binariesHandler)
 			if err = http.ListenAndServe(cfg.PprofAddr, nil); err != nil {
 				log.Errorf("Serving pprof on %s failed: %s", cfg.PprofAddr, err)
 			}
@@ -143,7 +146,7 @@ func mainWithExitCode() exitCode {
 	log.Infof("Starting OTEL profiling agent %s (revision %s, build timestamp %s)",
 		vc.Version(), vc.Revision(), vc.BuildTimestamp())
 
-	ctlr := controller.New(cfg)
+	ctlr = controller.New(cfg)
 	err = ctlr.Start(ctx)
 	if err != nil {
 		return failure("Failed to start agent controller: %v", err)

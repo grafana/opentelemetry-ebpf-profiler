@@ -97,7 +97,7 @@ type Tracer struct {
 	// processManager keeps track of loading, unloading and organization of information
 	// that is required to unwind processes in the kernel. This includes maintaining the
 	// associated eBPF maps.
-	processManager *pm.ProcessManager
+	ProcessManager *pm.ProcessManager
 
 	// triggerPIDProcessing is used as manual trigger channel to request immediate
 	// processing of pending PIDs. This is requested on notifications from eBPF code
@@ -303,7 +303,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	perfEventList := []*perf.Event{}
 
 	return &Tracer{
-		processManager:         processManager,
+		ProcessManager:         processManager,
 		kernelSymbols:          kernelSymbols,
 		kernelModules:          kernelModules,
 		triggerPIDProcessing:   make(chan bool, 1),
@@ -345,7 +345,7 @@ func (t *Tracer) Close() {
 		delete(t.hooks, hookPoint)
 	}
 
-	t.processManager.Close()
+	t.ProcessManager.Close()
 }
 
 func buildStackDeltaTemplates(coll *cebpf.CollectionSpec) error {
@@ -668,7 +668,7 @@ func (t *Tracer) insertKernelFrames(trace *host.Trace, ustackLen uint32,
 		}
 
 		hostFileID := host.FileIDFromLibpf(fileID)
-		t.processManager.FileIDMapper.Set(hostFileID, fileID)
+		t.ProcessManager.FileIDMapper.Set(hostFileID, fileID)
 
 		trace.Frames[i] = host.Frame{
 			File:   hostFileID,
@@ -859,7 +859,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	pid := libpf.PID(ptr.pid)
 	trace := &host.Trace{
 		Comm:             C.GoString((*C.char)(unsafe.Pointer(&ptr.comm))),
-		Executable:       t.processManager.ExePathForPID(pid),
+		Executable:       t.ProcessManager.ExePathForPID(pid),
 		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.apm_trace_id)),
 		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.apm_transaction_id)),
 		PID:              pid,
@@ -1163,5 +1163,5 @@ func (t *Tracer) StartProbabilisticProfiling(ctx context.Context) {
 
 // TraceProcessor gets the trace processor.
 func (t *Tracer) TraceProcessor() tracehandler.TraceProcessor {
-	return t.processManager
+	return t.ProcessManager
 }
