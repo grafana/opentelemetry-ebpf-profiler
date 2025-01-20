@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const maxWorkers = 5
+
 func main() {
 	// Create output directory
 	err := os.MkdirAll("out", 0755)
@@ -30,11 +32,30 @@ func main() {
 	}
 	defer file.Close()
 
+	// Create worker pool semaphore and wait group
+	sem := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		podName := strings.Fields(scanner.Text())[0]
-		processPod(podName)
+
+		wg.Add(1)
+		go func(pod string) {
+			defer wg.Done()
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() {
+				// Release semaphore
+				<-sem
+			}()
+
+			processPod(pod)
+		}(podName)
 	}
+
+	// Wait for all pods to be processed
+	wg.Wait()
 }
 
 var lock sync.Mutex
