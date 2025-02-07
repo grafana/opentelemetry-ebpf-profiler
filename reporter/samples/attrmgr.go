@@ -30,6 +30,12 @@ type SampleAttrProducer interface {
 	ExtraSampleAttrs(attrMgr *AttrTableManager, meta any) []int32
 }
 
+type NativeFrameSymbolizer interface {
+	// Lookup returns only function names because pyroscope does not display file names and line numbers
+	Lookup(pid int64, file libpf.FileID, addr uint64) []string
+	Cleanup()
+}
+
 // AttrTableManager maintains index allocation and deduplication for attribute tables.
 type AttrTableManager struct {
 	// indices maps compound keys to the indices in the attribute table.
