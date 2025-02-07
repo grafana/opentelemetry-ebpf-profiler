@@ -247,7 +247,7 @@ func TestFunctionTableOrder(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			d, err := New(100, 100, 100, nil)
+			d, err := New(100, 100, 100, nil, nil)
 			require.NoError(t, err)
 			for k, v := range tt.frames {
 				frames := xsync.NewRWMutex[map[libpf.AddressOrLineno]samples.SourceInfo](v)

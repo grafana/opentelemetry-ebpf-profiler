@@ -5,8 +5,12 @@ package elfunwindinfo
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"testing"
+	"unsafe"
+
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 
@@ -156,4 +160,40 @@ func TestExtractStackDeltasFromFilename(t *testing.T) {
 		t.Logf("%#v", delta)
 	}
 	require.Equal(t, data.Deltas[:len(firstDeltas)], firstDeltas)
+}
+
+func BenchmarkClickHouse(b *testing.B) {
+	path := "/home/korniltsev/p/clickhouse"
+	bench(b, path, WithDeltaSizeLimit(-1))
+}
+
+func bench(b *testing.B, path string, limit ExtractOption) {
+	ref := pfelf.NewReference(path, pfelf.SystemOpener)
+	var ii *sdtypes.IntervalData
+	for i := 0; i < b.N; i++ {
+		interval := &sdtypes.IntervalData{}
+		err := ExtractELF(ref, interval, limit)
+		require.NoError(b, err)
+		ii = interval
+	}
+	fmt.Printf("Extracted %d intervals size %d \n", len(ii.Deltas), len(ii.Deltas)*int(unsafe.Sizeof(sdtypes.StackDelta{})))
+}
+func BenchmarkSelf(b *testing.B) {
+	bench(b, "/proc/self/exe", WithDeltaSizeLimit(-1))
+}
+
+func TestClickhouse(b *testing.T) {
+	path := "/home/korniltsev/p/clickhouse"
+	ref := pfelf.NewReference(path, pfelf.SystemOpener)
+	interval := &sdtypes.IntervalData{}
+	err := ExtractELF(ref, interval, WithDeltaSizeLimit(-1))
+	require.NoError(b, err)
+}
+
+func TestSelf(b *testing.T) {
+	path := "/proc/self/exe"
+	ref := pfelf.NewReference(path, pfelf.SystemOpener)
+	interval := &sdtypes.IntervalData{}
+	err := ExtractELF(ref, interval, WithDeltaSizeLimit(1000))
+	require.Error(b, err)
 }

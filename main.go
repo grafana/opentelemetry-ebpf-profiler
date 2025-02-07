@@ -7,11 +7,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-
 	//nolint:gosec
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+
+	pyrolog "github.com/go-kit/log"
+	pyrosd "github.com/grafana/pyroscope/ebpf/sd"
+	pyrosamples "go.opentelemetry.io/ebpf-profiler/pyroscope/samples"
 
 	"golang.org/x/sys/unix"
 
@@ -116,6 +119,12 @@ func mainWithExitCode() exitCode {
 	}
 	cfg.HostName, cfg.IPAddress = hostname, sourceIP
 
+	attrProd, err := createPyroscopeSamplesAttrProd(cfg)
+	if err != nil {
+		log.Error(err)
+		return exitFailure
+	}
+
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		CollAgentAddr:            cfg.CollAgentAddr,
 		DisableTLS:               cfg.DisableTLS,
@@ -133,6 +142,13 @@ func mainWithExitCode() exitCode {
 		KernelVersion:       kernelVersion,
 		HostName:            hostname,
 		IPAddress:           sourceIP,
+
+		ExtraSampleAttrProd:            attrProd,
+		PyroscopeUsername:              cfg.PyroscopeUsername,
+		PyroscopePasswordFile:          cfg.PyroscopePasswordFile,
+		PyroscopeSymbCachePath:         cfg.PyroscopeSymbCachePath,
+		PyroscopeSymbCacheSizeBytes:    cfg.PyroscopeSymbCacheSizeBytes,
+		PyroscopeSymbolizeNativeFrames: cfg.PyroscopeSymbolizeNativeFrames,
 	})
 	if err != nil {
 		log.Error(err)
@@ -155,6 +171,25 @@ func mainWithExitCode() exitCode {
 
 	log.Info("Exiting ...")
 	return exitSuccess
+}
+
+func createPyroscopeSamplesAttrProd(cfg *controller.Config) (*pyrosamples.PyroPlug, error) {
+	pyrologger := pyrolog.NewLogfmtLogger(pyrolog.NewSyncWriter(os.Stderr))
+
+	pyroOptions := pyrosamples.Options{
+		SD: pyrosd.TargetsOptions{
+			Targets:            nil,
+			TargetsOnly:        true,
+			DefaultTarget:      nil,
+			ContainerCacheSize: 0x1000,
+		},
+	}
+	if cfg.PyroscopeSD == "kubernetes" {
+		pyroOptions.Kubernetes = true
+	} else if cfg.PyroscopeSD == "docker" {
+		pyroOptions.Docker = true
+	}
+	return pyrosamples.NewSDAttrProd(pyrologger, pyroOptions)
 }
 
 func failure(msg string, args ...interface{}) exitCode {

@@ -60,6 +60,12 @@ func (p *Pdata) setProfile(
 	events map[samples.TraceAndMetaKey]*samples.TraceEvents,
 	profile pprofile.Profile,
 ) {
+	defer func() {
+		if p.ExtraNativeFrameSymbolizer != nil {
+			p.ExtraNativeFrameSymbolizer.Cleanup()
+		}
+	}()
+
 	// stringMap is a temporary helper that will build the StringTable.
 	// By specification, the first element should be empty.
 	stringMap := make(map[string]int32)
@@ -157,6 +163,7 @@ func (p *Pdata) setProfile(
 						"process.executable.build_id.htlhash", traceInfo.Files[i].StringNoQuotes())
 				}
 				loc.SetMappingIndex(locationMappingIndex)
+				p.symbolizeNativeFrame(traceKey.Pid, &loc, traceInfo, i, funcMap)
 			case libpf.AbortFrame:
 				// Next step: Figure out how the OTLP protocol
 				// could handle artificial frames, like AbortFrame,
@@ -176,10 +183,10 @@ func (p *Pdata) setProfile(
 				} else {
 					fileIDInfo := fileIDInfoLock.RLock()
 					if si, exists := (*fileIDInfo)[traceInfo.Linenos[i]]; exists {
-						line.SetLine(int64(si.LineNumber))
+						//line.SetLine(int64(si.LineNumber))
 
 						line.SetFunctionIndex(createFunctionEntry(funcMap,
-							si.FunctionName, si.FilePath))
+							si.FunctionName, "" /*si.FilePath*/))
 					} else {
 						// At this point, we do not have enough information for the frame.
 						// Therefore, we report a dummy entry and use the interpreter as filename.
@@ -206,8 +213,6 @@ func (p *Pdata) setProfile(
 			semconv.ProcessExecutableNameKey, traceKey.ProcessName)
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
 			semconv.ProcessExecutablePathKey, traceKey.ExecutablePath)
-		attrMgr.AppendOptionalString(sample.AttributeIndices(),
-			semconv.ServiceNameKey, traceKey.ApmServiceName)
 		attrMgr.AppendInt(sample.AttributeIndices(),
 			semconv.ProcessPIDKey, traceKey.Pid)
 
