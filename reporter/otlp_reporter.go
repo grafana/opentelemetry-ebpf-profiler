@@ -80,7 +80,10 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		return nil, err
 	}
 
-	symb := cache.NewFSCache(cfg.PyroscopeSymbCacheSizeBytes, cfg.PyroscopeSymbCachePath, cfg.PyroscopeSymbolizeNativeFrames)
+	symb, err := cache.NewFSCache(cfg.PyroscopeSymbCacheSizeBytes, cfg.PyroscopeSymbCachePath, cfg.PyroscopeSymbolizeNativeFrames)
+	if err != nil {
+		return nil, err
+	}
 	data, err := pdata.New(
 		cfg.SamplesPerSecond,
 		cfg.ExecutablesCacheElements,

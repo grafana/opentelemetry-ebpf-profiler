@@ -41,7 +41,7 @@ type convertJob struct {
 
 // todo metric of inmemory range table size
 // todo  convert only if we need it.
-func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
+func NewFSCache(fsSize int, path string, enabled bool) (*FSCache, error) {
 	log.Infof("fscache enabled %v %s %d\n", enabled, path, fsSize)
 	//sz := 2 * 1024 * 1024 * 1024
 	lru := New[FileID, int](fsSize, func(key FileID, value int) int {
@@ -49,14 +49,17 @@ func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
 	})
 
 	res := &FSCache{
-		cacheDir: path, //"/data/symb-cache",
+		cacheDir: path,
 		lru:      lru,
 		jobs:     make(chan convertJob, 1),
 		tables:   make(map[FileID]*symb.Table),
 		known:    make(map[FileID]struct{}),
 		enabled:  enabled,
 	}
-	os.MkdirAll(res.cacheDir, 0700)
+	err := os.MkdirAll(res.cacheDir, 0700)
+	if err != nil {
+		return nil, err
+	}
 	lru.SetOnEvict(func(id FileID, v int) {
 		_ = os.Remove(res.tableFilePath(id))
 		res.mu.Lock()
@@ -65,7 +68,10 @@ func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
 	})
 
 	// list dir and add to cache
-	_ = filepath.Walk(res.cacheDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(res.cacheDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		if info.IsDir() {
 			return nil
 		}
@@ -82,18 +88,21 @@ func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
 		res.known[FileID(id)] = struct{}{}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	go func() {
+	go func() { // todo shutdown
 		for {
 			time.Sleep(time.Minute)
 			fmt.Printf("fscache lru size %d\n", lru.Size())
 		}
 	}()
-	go func() {
+	go func() { // todo shutdown
 		convertLoop(res)
 	}()
 
-	return res
+	return res, nil
 }
 
 func convertLoop(res *FSCache) {

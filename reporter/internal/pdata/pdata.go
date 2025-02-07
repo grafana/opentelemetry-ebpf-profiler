@@ -32,8 +32,7 @@ type Pdata struct {
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
 
-	pyroPlug *PyroPlug
-	symb     *cache.FSCache
+	symb *cache.FSCache
 }
 
 func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uint32, extra samples.SampleAttrProducer, symb *cache.FSCache) (*Pdata, error) {
@@ -55,10 +54,10 @@ func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uin
 	}
 	frames.SetLifetime(FramesCacheLifetime) // Allow GC to clean stale items.
 
-	pyroPlug, err := NewPyroPlug()
-	if err != nil {
-		return nil, err
-	}
+	//pyroPlug, err := NewPyroPlug()
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	return &Pdata{
 		samplesPerSecond:    samplesPerSecond,
@@ -66,8 +65,7 @@ func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uin
 		Frames:              frames,
 		ExtraSampleAttrProd: extra,
 
-		pyroPlug: pyroPlug,
-		symb:     symb,
+		symb: symb,
 	}, nil
 }
 

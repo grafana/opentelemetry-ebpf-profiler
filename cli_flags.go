@@ -74,7 +74,7 @@ var (
 // to the same flagset.
 
 func parseArgs() (*controller.Config, error) {
-	var args controller.Config
+	args := new(controller.Config)
 
 	fs := flag.NewFlagSet("ebpf-profiler", flag.ExitOnError)
 
@@ -124,13 +124,7 @@ func parseArgs() (*controller.Config, error) {
 	fs.UintVar(&args.OffCPUThreshold, "off-cpu-threshold",
 		defaultOffCPUThreshold, offCPUThresholdHelp)
 
-	fs.BoolVar(&args.PyroscopeSymbolizeNativeFrames, "pyroscope-symbolize-native-frames", false, "")
-	fs.IntVar(&args.PyroscopeStackDeltaLimitBytes, "pyroscope-stack-delta-limit-bytes", 0, "<=0 means no limit")
-	fs.IntVar(&args.PyroscopeStackDeltaElfSizeLimitBytes, "pyroscope-stack-delta-elf-size-limit-bytes", 0, "<=0 means no limit")
-	fs.StringVar(&args.PyroscopeUsername, "pyroscope-username", "", "")
-	fs.StringVar(&args.PyroscopePasswordFile, "pyroscope-password-file", "", "")
-	fs.IntVar(&args.PyroscopeSymbCacheSizeBytes, "pyroscope-symb-cache-size-bytes", 2*1024*1024*1024, "")
-	fs.StringVar(&args.PyroscopeSymbCachePath, "pyroscope-symb-cache-path", "/data/symb-cache", "")
+	RegisterPyroscopeFlags(fs, args)
 
 	fs.Usage = func() {
 		fs.PrintDefaults()
@@ -138,7 +132,7 @@ func parseArgs() (*controller.Config, error) {
 
 	args.Fs = fs
 
-	return &args, ff.Parse(fs, os.Args[1:],
+	return args, ff.Parse(fs, os.Args[1:],
 		ff.WithEnvVarPrefix("OTEL_PROFILING_AGENT"),
 		ff.WithConfigFileFlag("config"),
 		ff.WithConfigFileParser(ff.PlainParser),
