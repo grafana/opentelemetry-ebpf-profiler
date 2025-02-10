@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"runtime"
 	"time"
 
@@ -46,6 +47,7 @@ type Config struct {
 	PyroscopeSymbCachePath               string
 	PyroscopeSymbCacheSizeBytes          int
 	PyroscopeSD                          string
+	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
 
 	Reporter reporter.Reporter
 

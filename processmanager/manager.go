@@ -8,14 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"time"
-
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
 
 	lru "github.com/elastic/go-freelru"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/process"
 
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 
@@ -70,7 +69,7 @@ var (
 // implementation.
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
 	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
-	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool) (*ProcessManager, error) {
+	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool, nfs samples.NativeFrameSymbolizer) (*ProcessManager, error) {
 	if fileIDMapper == nil {
 		var err error
 		fileIDMapper, err = newFileIDMapper(lruFileIDCacheSize)
@@ -85,12 +84,6 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		return nil, fmt.Errorf("unable to create elfInfoCache: %v", err)
 	}
 	elfInfoCache.SetLifetime(elfInfoCacheTTL)
-
-	var symb *cache.FSCache = nil
-	scp, ok := symbolReporter.(reporter.SymbCacheProvider)
-	if ok {
-		symb = scp.SymbCache()
-	}
 
 	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers)
 	if err != nil {
@@ -111,7 +104,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		reporter:                 symbolReporter,
 		metricsAddSlice:          metrics.AddSlice,
 		filterErrorFrames:        filterErrorFrames,
-		symb:                     symb,
+		nativeFrameSymbolizer:    nfs,
 	}
 
 	collectInterpreterMetrics(ctx, pm, monitorInterval)
@@ -333,15 +326,14 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 	return serviceName
 }
 
-// todo lazy conversion
 func (pm *ProcessManager) symbConvert(trace *host.Trace, mapping Mapping, fileID libpf.FileID) {
-	if pm.symb == nil {
+	if pm.nativeFrameSymbolizer == nil {
 		return
 	}
 	pr := process.New(trace.PID)
 	elfRef := pfelf.NewReference(mapping.FilePath, pr)
 	defer elfRef.Close()
-	pm.symb.Convert(fileID, elfRef)
+	pm.nativeFrameSymbolizer.Convert(fileID, elfRef)
 }
 
 // AddSynthIntervalData adds synthetic stack deltas to the manager. This is useful for cases where

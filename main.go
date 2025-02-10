@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
 	"net/http"
 	//nolint:gosec
 	_ "net/http/pprof"
@@ -125,6 +126,12 @@ func mainWithExitCode() exitCode {
 		return exitFailure
 	}
 
+	nfs, err := cache.NewFSCache(cfg.PyroscopeSymbCacheSizeBytes, cfg.PyroscopeSymbCachePath, cfg.PyroscopeSymbolizeNativeFrames)
+	if err != nil {
+		log.Error(err)
+		return exitFailure
+	}
+
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		CollAgentAddr:            cfg.CollAgentAddr,
 		DisableTLS:               cfg.DisableTLS,
@@ -143,12 +150,10 @@ func mainWithExitCode() exitCode {
 		HostName:            hostname,
 		IPAddress:           sourceIP,
 
-		ExtraSampleAttrProd:            attrProd,
-		PyroscopeUsername:              cfg.PyroscopeUsername,
-		PyroscopePasswordFile:          cfg.PyroscopePasswordFile,
-		PyroscopeSymbCachePath:         cfg.PyroscopeSymbCachePath,
-		PyroscopeSymbCacheSizeBytes:    cfg.PyroscopeSymbCacheSizeBytes,
-		PyroscopeSymbolizeNativeFrames: cfg.PyroscopeSymbolizeNativeFrames,
+		ExtraSampleAttrProd:        attrProd,
+		PyroscopeUsername:          cfg.PyroscopeUsername,
+		PyroscopePasswordFile:      cfg.PyroscopePasswordFile,
+		ExtranativeFrameSymbolizer: nfs,
 	})
 	if err != nil {
 		log.Error(err)

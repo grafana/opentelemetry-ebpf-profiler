@@ -58,9 +58,7 @@ type Config struct {
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
 
-	PyroscopeUsername              string
-	PyroscopePasswordFile          string
-	PyroscopeSymbolizeNativeFrames bool
-	PyroscopeSymbCachePath         string
-	PyroscopeSymbCacheSizeBytes    int
+	PyroscopeUsername          string
+	PyroscopePasswordFile      string
+	ExtranativeFrameSymbolizer samples.NativeFrameSymbolizer
 }

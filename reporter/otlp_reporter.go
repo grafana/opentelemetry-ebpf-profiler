@@ -10,13 +10,11 @@ import (
 	"strconv"
 	"time"
 
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/auth"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
-
 	lru "github.com/elastic/go-freelru"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/pdata/pprofile/pprofileotlp"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/auth"
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -81,13 +79,12 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		return nil, err
 	}
 
-	symb := cache.NewFSCache(cfg.PyroscopeSymbCacheSizeBytes, cfg.PyroscopeSymbCachePath, cfg.PyroscopeSymbolizeNativeFrames)
 	data, err := pdata.New(
 		cfg.SamplesPerSecond,
 		cfg.ExecutablesCacheElements,
 		cfg.FramesCacheElements,
 		cfg.ExtraSampleAttrProd,
-		symb,
+		cfg.ExtranativeFrameSymbolizer,
 	)
 	if err != nil {
 		return nil, err
@@ -120,7 +117,6 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 			runLoop: &runLoop{
 				stopSignal: make(chan libpf.Void),
 			},
-			symb: symb,
 		},
 		kernelVersion:           cfg.KernelVersion,
 		hostName:                cfg.HostName,

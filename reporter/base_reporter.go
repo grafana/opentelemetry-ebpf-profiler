@@ -5,7 +5,6 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 
 import (
 	"context"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
@@ -41,8 +40,6 @@ type baseReporter struct {
 
 	// hostmetadata stores metadata that is sent out with every request.
 	hostmetadata *lru.SyncedLRU[string, string]
-
-	symb *cache.FSCache
 }
 
 func (b *baseReporter) Stop() {
@@ -193,8 +190,4 @@ func (b *baseReporter) FrameMetadata(args *FrameMetadataArgs) {
 	}
 	mu := xsync.NewRWMutex(v)
 	b.pdata.Frames.Add(fileID, &mu)
-}
-
-func (b *baseReporter) SymbCache() *cache.FSCache {
-	return b.symb
 }

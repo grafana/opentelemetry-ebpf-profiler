@@ -46,17 +46,14 @@ type convertJob struct {
 	result chan error
 }
 
-// todo metric of inmemory range table size
-// todo  convert only if we need it.
-func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
+func NewFSCache(fsSize int, path string, enabled bool) (*FSCache, error) {
 	log.Infof("fscache enabled %v %s %d\n", enabled, path, fsSize)
-	//sz := 2 * 1024 * 1024 * 1024
 	lru := New[libpf.FileID, int](fsSize, func(key libpf.FileID, value int) int {
 		return value
 	})
 
 	res := &FSCache{
-		cacheDir:   path, //"/data/symb-cache",
+		cacheDir:   path,
 		lru:        lru,
 		jobs:       make(chan convertJob, 1),
 		tables:     make(map[libpf.FileID]*symbtable.Table),
@@ -71,7 +68,10 @@ func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
 	} else {
 		res.cacheDir = filepath.Join(res.cacheDir, "table")
 	}
-	os.MkdirAll(res.cacheDir, 0700)
+	err := os.MkdirAll(res.cacheDir, 0700)
+	if err != nil {
+		return nil, err
+	}
 	lru.SetOnEvict(func(id libpf.FileID, v int) {
 		filePath := res.tableFilePath(id)
 		log.Infof("symbcache evicting  %s %s\n", id, filePath)
@@ -82,7 +82,10 @@ func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
 	})
 
 	// list dir and add to cache
-	_ = filepath.Walk(res.cacheDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(res.cacheDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		if info.IsDir() {
 			return nil
 		}
@@ -113,11 +116,11 @@ func NewFSCache(fsSize int, path string, enabled bool) *FSCache {
 			}
 		}
 	}()
-	go func() {
+	go func() { //todo shutdown
 		convertLoop(res)
 	}()
 
-	return res
+	return res, nil
 }
 
 func convertLoop(res *FSCache) {
@@ -128,7 +131,6 @@ func convertLoop(res *FSCache) {
 	}
 }
 
-// todo consider mvoe this to reporter ExecutableInfo cache?
 func (c *FSCache) Convert(fid libpf.FileID, elfRef *pfelf.Reference) {
 	if !c.enabled {
 		return
@@ -336,6 +338,6 @@ func (c *FSCache) Close() error {
 	return nil
 }
 
-func (c *FSCache) Enabled() bool {
-	return c.enabled
-}
+//func (c *FSCache) Enabled() bool {
+//	return c.enabled
+//}

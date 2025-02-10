@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"hash/fnv"
 	"math"
 	"math/rand/v2"
@@ -159,6 +160,7 @@ type Config struct {
 
 	PyroscopeDeltasSizeLimit             int
 	PyroscopeStackDeltaElfSizeLimitBytes int
+	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -305,7 +307,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		cfg.PyroscopeDeltasSizeLimit, cfg.PyroscopeStackDeltaElfSizeLimitBytes)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, sdp,
-		cfg.FilterErrorFrames)
+		cfg.FilterErrorFrames, cfg.NativeFrameSymbolizer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}

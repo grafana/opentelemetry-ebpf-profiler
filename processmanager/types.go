@@ -4,10 +4,9 @@
 package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanager"
 
 import (
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"sync"
 	"sync/atomic"
-
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
 
 	lru "github.com/elastic/go-freelru"
 
@@ -99,7 +98,7 @@ type ProcessManager struct {
 	// filterErrorFrames determines whether error frames are dropped by `ConvertTrace`.
 	filterErrorFrames bool
 
-	symb *cache.FSCache
+	nativeFrameSymbolizer samples.NativeFrameSymbolizer
 }
 
 // Mapping represents an executable memory mapping of a process.
