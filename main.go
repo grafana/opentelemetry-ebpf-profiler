@@ -14,18 +14,16 @@ import (
 	"os/signal"
 
 	pyrolog "github.com/go-kit/log"
-	pyrosd "github.com/grafana/pyroscope/ebpf/sd"
 	pyrosamples "go.opentelemetry.io/ebpf-profiler/pyroscope/samples"
+	pyrosd "go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
 
-	"golang.org/x/sys/unix"
-
+	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
 	"go.opentelemetry.io/ebpf-profiler/internal/helpers"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/vc"
-
-	log "github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 )
 
 // Short copyright / license text for eBPF code

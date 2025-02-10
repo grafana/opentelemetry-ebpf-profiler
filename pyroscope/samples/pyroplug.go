@@ -2,14 +2,14 @@ package samples
 
 import (
 	"context"
-	"go.opentelemetry.io/collector/pdata/pcommon"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/promsd"
 	"os"
 	"sync"
 
 	log2 "github.com/go-kit/log"
-	sd2 "github.com/grafana/pyroscope/ebpf/sd"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/promsd"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
@@ -17,7 +17,7 @@ import (
 
 type PyroPlug struct {
 	symcachelock sync.Mutex
-	sd           sd2.TargetFinder
+	sd           sd.TargetFinder
 }
 
 func (p *PyroPlug) CollectExtraSampleMeta(trace *libpf.Trace, meta *samples.TraceEventMeta) any {
@@ -25,7 +25,7 @@ func (p *PyroPlug) CollectExtraSampleMeta(trace *libpf.Trace, meta *samples.Trac
 }
 
 func (p *PyroPlug) ExtraSampleAttrs(attrMgr *samples.AttrTableManager, meta any) []int32 {
-	target, ok := meta.(*sd2.Target)
+	target, ok := meta.(*sd.Target)
 	if target == nil || !ok {
 		return nil
 	}
@@ -41,21 +41,21 @@ func (p *PyroPlug) ExtraSampleAttrs(attrMgr *samples.AttrTableManager, meta any)
 }
 
 type Options struct {
-	SD                 sd2.TargetsOptions
+	SD                 sd.TargetsOptions
 	Kubernetes, Docker bool
 }
 
 func NewSDAttrProd(logger log2.Logger, opt Options) (*PyroPlug, error) {
 
 	pyrosdOpt := opt.SD
-	pyrosd, err := sd2.NewTargetFinder(os.DirFS("/"), logger, pyrosdOpt)
+	pyrosd, err := sd.NewTargetFinder(os.DirFS("/"), logger, pyrosdOpt)
 	if err != nil {
 		return nil, err
 	}
 
 	cb := func(exports promsd.Exports) {
 		opt := pyrosdOpt
-		opt.Targets = make([]sd2.DiscoveryTarget, 0, len(exports.Targets))
+		opt.Targets = make([]sd.DiscoveryTarget, 0, len(exports.Targets))
 		for _, target := range exports.Targets {
 			opt.Targets = append(opt.Targets, promsd.ConvertToPyroscopeTarget(target))
 		}
@@ -80,7 +80,7 @@ func NewSDAttrProd(logger log2.Logger, opt Options) (*PyroPlug, error) {
 	return NewPyroPlugFromSD(pyrosd), nil
 }
 
-func NewPyroPlugFromSD(sd sd2.TargetFinder) *PyroPlug {
+func NewPyroPlugFromSD(sd sd.TargetFinder) *PyroPlug {
 	return &PyroPlug{
 		sd: sd,
 	}
