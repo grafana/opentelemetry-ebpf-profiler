@@ -160,7 +160,7 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 		if err := r.reportOTLPProfile(ctx); err != nil {
 			log.Errorf("Request failed: %v", err)
 		} else {
-			log.Info("OTLP profile sent successfully")
+			log.Debug("OTLP profile sent successfully")
 		}
 	}, func() {
 		// Allow the GC to purge expired entries to avoid memory leaks.
