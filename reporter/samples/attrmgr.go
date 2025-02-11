@@ -33,7 +33,7 @@ type SampleAttrProducer interface {
 
 type NativeFrameSymbolizer interface {
 	// Lookup returns only function names because pyroscope does not display file names and line numbers
-	Lookup(pid int64, file libpf.FileID, addr uint64) []string
+	Lookup(file libpf.FileID, addr uint64) []string
 	Cleanup()
 	// todo better name
 	Convert(id libpf.FileID, ref *pfelf.Reference)

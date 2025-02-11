@@ -176,7 +176,7 @@ func mainWithExitCode() exitCode {
 	return exitSuccess
 }
 
-func createPyroscopeSamplesAttrProd(cfg *controller.Config) (*pyrosamples.PyroPlug, error) {
+func createPyroscopeSamplesAttrProd(cfg *controller.Config) (*pyrosamples.AttributesProvider, error) {
 	pyrologger := pyrolog.NewLogfmtLogger(pyrolog.NewSyncWriter(os.Stderr))
 
 	pyroOptions := pyrosamples.Options{
@@ -192,7 +192,7 @@ func createPyroscopeSamplesAttrProd(cfg *controller.Config) (*pyrosamples.PyroPl
 	} else if cfg.PyroscopeSD == "docker" {
 		pyroOptions.Docker = true
 	}
-	return pyrosamples.NewSDAttrProd(pyrologger, pyroOptions)
+	return pyrosamples.NewAttributesProvider(pyrologger, pyroOptions)
 }
 
 func failure(msg string, args ...interface{}) exitCode {

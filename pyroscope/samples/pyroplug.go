@@ -15,16 +15,16 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 )
 
-type PyroPlug struct {
+type AttributesProvider struct {
 	symcachelock sync.Mutex
 	sd           sd.TargetFinder
 }
 
-func (p *PyroPlug) CollectExtraSampleMeta(trace *libpf.Trace, meta *samples.TraceEventMeta) any {
+func (p *AttributesProvider) CollectExtraSampleMeta(trace *libpf.Trace, meta *samples.TraceEventMeta) any {
 	return p.sd.FindTarget(uint32(meta.PID)) // todo this may be bad if sd creates a new target with same labels
 }
 
-func (p *PyroPlug) ExtraSampleAttrs(attrMgr *samples.AttrTableManager, meta any) []int32 {
+func (p *AttributesProvider) ExtraSampleAttrs(attrMgr *samples.AttrTableManager, meta any) []int32 {
 	target, ok := meta.(*sd.Target)
 	if target == nil || !ok {
 		return nil
@@ -45,7 +45,7 @@ type Options struct {
 	Kubernetes, Docker bool
 }
 
-func NewSDAttrProd(logger log2.Logger, opt Options) (*PyroPlug, error) {
+func NewAttributesProvider(logger log2.Logger, opt Options) (*AttributesProvider, error) {
 
 	pyrosdOpt := opt.SD
 	pyrosd, err := sd.NewTargetFinder(os.DirFS("/"), logger, pyrosdOpt)
@@ -77,11 +77,11 @@ func NewSDAttrProd(logger log2.Logger, opt Options) (*PyroPlug, error) {
 		}()
 	}
 
-	return NewPyroPlugFromSD(pyrosd), nil
+	return NewAttributesProviderFromSD(pyrosd), nil
 }
 
-func NewPyroPlugFromSD(sd sd.TargetFinder) *PyroPlug {
-	return &PyroPlug{
+func NewAttributesProviderFromSD(sd sd.TargetFinder) *AttributesProvider {
+	return &AttributesProvider{
 		sd: sd,
 	}
 }

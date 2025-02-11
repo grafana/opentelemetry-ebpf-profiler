@@ -18,6 +18,7 @@ import (
 	"syscall"
 )
 
+// todo rename
 type FSCache struct {
 	mu       sync.Mutex
 	cacheDir string
@@ -262,17 +263,17 @@ func (c *FSCache) tableFilePath(fid libpf.FileID) string {
 	return filepath.Join(c.cacheDir, fid.StringNoQuotes())
 }
 
-func (c *FSCache) Lookup(pid int64, fid libpf.FileID, addr uint64) []string {
+func (c *FSCache) Lookup(fid libpf.FileID, addr uint64) []string { //todo use an interface
 	if !c.enabled {
 		return nil
 	}
 	if c.useGsym {
-		return c.LookupGsym(pid, fid, addr, nil)
+		return c.LookupGsym(fid, addr, nil)
 	}
-	return c.LookupTable(pid, fid, addr, nil)
+	return c.LookupTable(fid, addr, nil)
 }
 
-func (c *FSCache) LookupTable(pid int64, fid libpf.FileID, addr uint64, symbols []string) []string {
+func (c *FSCache) LookupTable(fid libpf.FileID, addr uint64, symbols []string) []string {
 	if !c.enabled {
 		return symbols[:0]
 	}
@@ -290,7 +291,7 @@ func (c *FSCache) LookupTable(pid int64, fid libpf.FileID, addr uint64, symbols 
 	return table.Lookup(addr, symbols)
 }
 
-func (c *FSCache) LookupGsym(pid int64, fid libpf.FileID, addr uint64, symbols []string) []string {
+func (c *FSCache) LookupGsym(fid libpf.FileID, addr uint64, symbols []string) []string {
 	if !c.enabled {
 		return symbols[:0]
 	}

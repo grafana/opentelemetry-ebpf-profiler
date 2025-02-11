@@ -41,7 +41,7 @@ func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *ca
 			FramesCacheElements:        65536,
 		}, sd)
 	}
-	sap := samples.NewSamplesAttributesProviderFromSD(sd)
+	sap := samples.NewAttributesProviderFromSD(sd)
 
 	reporterConfig := &reporter.Config{
 		CollAgentAddr:            cfg.CollAgentAddr,
