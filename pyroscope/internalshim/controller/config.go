@@ -151,4 +151,5 @@ func RegisterPyroscopeFlags(fs *flag.FlagSet, args *controller.Config) {
 	fs.IntVar(&args.PyroscopeSymbCacheSizeBytes, "pyroscope-symb-cache-size-bytes", 2*1024*1024*1024, "")
 	fs.StringVar(&args.PyroscopeSymbCachePath, "pyroscope-symb-cache-path", "/tmp/symb-cache", "")
 	fs.StringVar(&args.PyroscopeSD, "pyroscope-sd", "", "possible values: kubernetes, docker")
+	fs.StringVar(&args.PyroscopeReporterType, "pyroscope-reporter-type", "pprof", "possible values: otel, pprof")
 }

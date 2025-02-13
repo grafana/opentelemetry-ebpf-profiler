@@ -4,9 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"runtime"
 	"time"
+
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 	log "github.com/sirupsen/logrus"
 
@@ -47,6 +48,7 @@ type Config struct {
 	PyroscopeSymbCachePath               string
 	PyroscopeSymbCacheSizeBytes          int
 	PyroscopeSD                          string
+	PyroscopeReporterType                string
 	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
 
 	Reporter reporter.Reporter

@@ -2,6 +2,7 @@ package reporter
 
 import (
 	"fmt"
+
 	"github.com/go-kit/log"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/internalshim/controller"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/internalshim/helpers"
@@ -30,8 +31,11 @@ func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *ca
 	}
 	cfg.HostName, cfg.IPAddress = hostname, sourceIP
 
-	const pprof = true
-	if pprof {
+	otelReporter := false
+	if cfg.PyroscopeReporterType == "otel" || cfg.PyroscopeReporterType == "otlp" {
+		otelReporter = true
+	}
+	if !otelReporter {
 		return NewPPROF(log, &Config{
 			ExtraNativeFrameSymbolizer: nfs,
 			CGroupCacheElements:        1024,
