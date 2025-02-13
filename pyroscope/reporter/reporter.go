@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/times"
 )
 
-func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *cache.FSCache) (reporter.Reporter, error) {
+func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *cache.FSCache, consumer PPROFConsumer) (reporter.Reporter, error) {
 	intervals := times.New(cfg.MonitorInterval,
 		cfg.ReporterInterval, cfg.ProbabilisticInterval)
 	kernelVersion, err := helpers.GetKernelVersion()
@@ -39,6 +39,7 @@ func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *ca
 			SamplesPerSecond:           int64(cfg.SamplesPerSecond),
 			ExecutablesCacheElements:   16384,
 			FramesCacheElements:        65536,
+			Consumer:                   consumer,
 		}, sd)
 	}
 	sap := samples.NewAttributesProviderFromSD(sd)

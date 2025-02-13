@@ -133,7 +133,7 @@ func (p Pdata) symbolizeNativeFrame(pid int64, loc *pprofile.Location, traceInfo
 	}
 
 	if !frameKnown(frameID) {
-		symbols := p.ExtraNativeFrameSymbolizer.Lookup(pid, fileID, uint64(addr))
+		symbols := p.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
 		if len(symbols) > 0 {
 			si := frameMetadata(symbols)
 			symbolizeSI(si)

@@ -2,14 +2,15 @@ package reporter
 
 import (
 	"fmt"
+	"io"
+	"sync"
+	"time"
+
 	"github.com/google/pprof/profile"
 	"github.com/klauspost/compress/gzip"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"io"
-	"sync"
-	"time"
 )
 
 var (
@@ -77,6 +78,7 @@ func (b *ProfileBuilders) BuilderForSample(target *sd.Target, pid uint32, st lib
 		ID: 1,
 	}
 	builder := &ProfileBuilder{
+		p:         b,
 		locations: make(map[libpf.FrameID]*profile.Location),
 		functions: make(map[string]*profile.Function),
 		Target:    target,
@@ -160,7 +162,7 @@ func (p *ProfileBuilder) Write(dst io.Writer) (int64, error) {
 func (p *ProfileBuilder) NewSample(locSize int) *profile.Sample {
 	sample := p.p.samples.pop()
 	sample.Value = []int64{0}
-	sample.Location = make([]*profile.Location, locSize)
+	sample.Location = make([]*profile.Location, 0, locSize)
 	p.Profile.Sample = append(p.Profile.Sample, sample)
 	return sample
 }
@@ -178,6 +180,7 @@ func (p *ProfileBuilder) Location(frameId libpf.FrameID) (*profile.Location, boo
 	loc.ID = uint64(len(p.Profile.Location) + 1)
 	loc.Mapping = p.dummyMapping
 	p.locations[frameId] = loc
+	p.Profile.Location = append(p.Profile.Location, loc)
 	return loc, true
 }
 
@@ -187,7 +190,7 @@ type batch[T any] struct {
 
 func (b *batch[T]) pop() *T {
 	if len(b.items) == 0 {
-		b.items = make([]T, 0, 128)
+		b.items = make([]T, 128)
 	}
 	res := &b.items[0]
 	b.items = b.items[1:]

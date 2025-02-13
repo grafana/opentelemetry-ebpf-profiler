@@ -3,9 +3,15 @@ package reporter
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"maps"
+	"sync"
+	"time"
+
 	"github.com/elastic/go-freelru"
 	lru "github.com/elastic/go-freelru"
 	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/google/pprof/profile"
 	"github.com/zeebo/xxh3"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -14,9 +20,6 @@ import (
 	reporter2 "go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"maps"
-	"sync"
-	"time"
 )
 
 type PPROF struct {
@@ -39,13 +42,12 @@ type Config struct {
 	Consumer                   PPROFConsumer
 }
 type PPROFReporter struct {
-	cfg          *Config
-	log          log.Logger
-	cgroupv2ID   *freelru.SyncedLRU[libpf.PID, string]
-	traceEvents  xsync.RWMutex[map[libpf.Origin]samples.KeyToEventMapping]
-	hostmetadata *lru.SyncedLRU[string, string]
-	Executables  *lru.SyncedLRU[libpf.FileID, samples.ExecInfo]
-	Frames       *lru.SyncedLRU[
+	cfg         *Config
+	log         log.Logger
+	cgroupv2ID  *freelru.SyncedLRU[libpf.PID, string]
+	traceEvents xsync.RWMutex[map[libpf.Origin]samples.KeyToEventMapping]
+	Executables *lru.SyncedLRU[libpf.FileID, samples.ExecInfo]
+	Frames      *lru.SyncedLRU[
 		libpf.FileID,
 		*xsync.RWMutex[map[libpf.AddressOrLineno]samples.SourceInfo],
 	]
@@ -69,11 +71,6 @@ func NewPPROF(log log.Logger, cfg *Config, sd sd.TargetFinder) (*PPROFReporter, 
 		support.TraceOriginOffCPU} {
 		originsMap[origin] = make(samples.KeyToEventMapping)
 	}
-	hostmetadata, err := lru.NewSynced[string, string](115, hashString)
-	if err != nil {
-		return nil, err
-	}
-
 	executables, err :=
 		lru.NewSynced[libpf.FileID, samples.ExecInfo](cfg.ExecutablesCacheElements, libpf.FileID.Hash32)
 	if err != nil {
@@ -93,14 +90,13 @@ func NewPPROF(log log.Logger, cfg *Config, sd sd.TargetFinder) (*PPROFReporter, 
 	frames.SetLifetime(FramesCacheLifetime)
 
 	return &PPROFReporter{
-		cfg:          cfg,
-		log:          log,
-		cgroupv2ID:   cgroupv2ID,
-		traceEvents:  xsync.NewRWMutex(originsMap),
-		hostmetadata: hostmetadata,
-		Executables:  executables,
-		Frames:       frames,
-		sd:           sd,
+		cfg:         cfg,
+		log:         log,
+		cgroupv2ID:  cgroupv2ID,
+		traceEvents: xsync.NewRWMutex(originsMap),
+		Executables: executables,
+		Frames:      frames,
+		sd:          sd,
 	}, nil
 }
 
@@ -174,17 +170,27 @@ func (p *PPROFReporter) ExecutableMetadata(args *reporter2.ExecutableMetadataArg
 }
 
 func (p *PPROFReporter) FrameKnown(frameID libpf.FrameID) bool {
+	_, known := p.lookupFrame(frameID)
+	return known
+}
+
+func (p *PPROFReporter) lookupFrame(frameID libpf.FrameID) (samples.SourceInfo, bool) {
 	known := false
+	si := samples.SourceInfo{}
 	if frameMapLock, exists := p.Frames.GetAndRefresh(frameID.FileID(),
 		FramesCacheLifetime); exists {
 		frameMap := frameMapLock.RLock()
 		defer frameMapLock.RUnlock(&frameMap)
-		_, known = (*frameMap)[frameID.AddressOrLine()]
+		si, known = (*frameMap)[frameID.AddressOrLine()]
 	}
-	return known
+	return si, known
 }
 
 func (p *PPROFReporter) FrameMetadata(args *reporter2.FrameMetadataArgs) {
+	p.frameMetadata(args)
+}
+
+func (p *PPROFReporter) frameMetadata(args *reporter2.FrameMetadataArgs) samples.SourceInfo {
 	fileID := args.FrameID.FileID()
 	addressOrLine := args.FrameID.AddressOrLine()
 
@@ -193,36 +199,31 @@ func (p *PPROFReporter) FrameMetadata(args *reporter2.FrameMetadataArgs) {
 		frameMap := frameMapLock.WLock()
 		defer frameMapLock.WUnlock(&frameMap)
 
-		(*frameMap)[addressOrLine] = samples.SourceInfo{
+		si := samples.SourceInfo{
 			FunctionName:  args.FunctionName,
 			FunctionNames: &args.FunctionNames,
 		}
-		return
+		(*frameMap)[addressOrLine] = si
+		return si
 	}
 
 	v := make(map[libpf.AddressOrLineno]samples.SourceInfo)
-	v[addressOrLine] = samples.SourceInfo{
+	si := samples.SourceInfo{
 		FunctionName:  args.FunctionName,
 		FunctionNames: &args.FunctionNames,
 	}
+	v[addressOrLine] = si
 	mu := xsync.NewRWMutex(v)
 	p.Frames.Add(fileID, &mu)
+	return si
 }
 
 func (p *PPROFReporter) ReportHostMetadata(metadataMap map[string]string) {
-	p.addHostmetadata(metadataMap)
 }
 
 func (p *PPROFReporter) ReportHostMetadataBlocking(_ context.Context,
 	metadataMap map[string]string, _ int, _ time.Duration) error {
-	p.addHostmetadata(metadataMap)
 	return nil
-}
-
-func (p *PPROFReporter) addHostmetadata(metadataMap map[string]string) {
-	for k, v := range metadataMap {
-		p.hostmetadata.Add(k, v)
-	}
 }
 
 func (p *PPROFReporter) ReportMetrics(timestamp uint32, ids []uint32, values []int64) {
@@ -231,19 +232,6 @@ func (p *PPROFReporter) ReportMetrics(timestamp uint32, ids []uint32, values []i
 
 func (p *PPROFReporter) Start(ctx context.Context) error {
 	ctx, cancelReporting := context.WithCancel(ctx)
-	purge := func() {
-		p.Executables.Purge()
-		p.Frames.Purge()
-		//p.hostmetadata.Purge()
-		p.cgroupv2ID.PurgeExpired()
-	}
-	run := func() {
-		if err := p.reportProfile(ctx); err != nil {
-			p.log.Log("msg", " pprof report failed", "err", err)
-		} else {
-			p.log.Log("msg", " pprof report successful")
-		}
-	}
 	p.cancelReporting = cancelReporting
 	p.wg.Add(1)
 
@@ -259,9 +247,12 @@ func (p *PPROFReporter) Start(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				run()
+				p.reportProfile(ctx)
 			case <-purgeTick.C:
-				purge()
+				p.Executables.Purge()
+				p.Frames.Purge()
+				//p.hostmetadata.Purge()
+				p.cgroupv2ID.PurgeExpired()
 			}
 		}
 	}()
@@ -270,7 +261,9 @@ func (p *PPROFReporter) Start(ctx context.Context) error {
 }
 
 func (p *PPROFReporter) Stop() {
-	p.cancelReporting()
+	if p.cancelReporting != nil {
+		p.cancelReporting()
+	}
 	p.wg.Wait()
 }
 
@@ -278,7 +271,7 @@ func (p *PPROFReporter) GetMetrics() reporter2.Metrics {
 	return reporter2.Metrics{}
 }
 
-func (p *PPROFReporter) reportProfile(ctx context.Context) error {
+func (p *PPROFReporter) reportProfile(ctx context.Context) {
 	traceEvents := p.traceEvents.WLock()
 	events := make(map[libpf.Origin]samples.KeyToEventMapping, 2)
 	for _, origin := range []libpf.Origin{support.TraceOriginSampling,
@@ -288,33 +281,26 @@ func (p *PPROFReporter) reportProfile(ctx context.Context) error {
 	}
 	p.traceEvents.WUnlock(&traceEvents)
 
-	profiles := p.generateProfiles(events)
-
-	// todo hostmetadata
-	/*for i := 0; i < profiles.ResourceProfiles().Len(); i++ {
-		r.setResource(profiles.ResourceProfiles().At(i))
-	}*/
-
-	p.cfg.Consumer.Next(profiles)
-	return nil
-}
-
-func (p *PPROFReporter) generateProfiles(events map[libpf.Origin]samples.KeyToEventMapping) []PPROF {
-	var res []PPROF
+	var profiles []PPROF
 	for _, origin := range []libpf.Origin{support.TraceOriginSampling,
 		support.TraceOriginOffCPU} {
-		events := events[origin]
-		if len(events) == 0 {
+		originEvents := events[origin]
+		if len(originEvents) == 0 {
 			continue
 		}
-		pp := p.setProfile(origin, events)
-		res = append(res, pp...)
-
+		pp := p.createProfile(origin, originEvents)
+		profiles = append(profiles, pp...)
 	}
-	return res
+
+	p.cfg.Consumer.Next(profiles)
+	sz := 0
+	for _, it := range profiles {
+		sz += len(it.Raw)
+	}
+	_ = level.Debug(p.log).Log("msg", "pprof report successful", "count", len(profiles), "total-size", sz)
 }
 
-func (p *PPROFReporter) setProfile(
+func (p *PPROFReporter) createProfile(
 	origin libpf.Origin,
 	events map[samples.TraceAndMetaKey]*samples.TraceEvents,
 ) []PPROF {
@@ -355,11 +341,11 @@ func (p *PPROFReporter) setProfile(
 			addrOrLineNo := traceInfo.Linenos[i]
 			frameId := libpf.NewFrameID(fileId, addrOrLineNo)
 			location, locationFresh := b.Location(frameId)
+			s.Location = append(s.Location, location)
 			if !locationFresh {
-				s.Location = append(s.Location, location)
 				continue
 			}
-
+			location.Address = uint64(addrOrLineNo)
 			switch frameKind := traceInfo.FrameTypes[i]; frameKind {
 			case libpf.NativeFrame:
 				mapping, mappingFresh := b.Mapping(traceInfo.Files[i])
@@ -431,19 +417,14 @@ func (p *PPROFReporter) symbolizeNativeFrame(b *ProfileBuilder, loc *profile.Loc
 	fileID := traceInfo.Files[i]
 	addr := traceInfo.Linenos[i]
 	frameID := libpf.NewFrameID(fileID, addr)
-	frameKnown := func(frameID libpf.FrameID) bool {
-		known := false
-		if frameMapLock, exists := p.Frames.GetAndRefresh(frameID.FileID(),
-			FramesCacheLifetime); exists {
-			frameMap := frameMapLock.RLock()
-			defer frameMapLock.RUnlock(&frameMap)
-			_, known = (*frameMap)[frameID.AddressOrLine()]
-		}
-		return known
-	}
-	symbolizeSI := func(si samples.SourceInfo) {
+
+	symbolize := func(b *ProfileBuilder, loc *profile.Location, si samples.SourceInfo) {
 		if si.FunctionName != "" {
 			line := profile.Line{Function: b.Function(si.FunctionName)}
+			loc.Line = append(loc.Line, line)
+		} else {
+			functionName := fmt.Sprintf("%s %x", loc.Mapping.File, loc.Address)
+			line := profile.Line{Function: b.Function(functionName)}
 			loc.Line = append(loc.Line, line)
 		}
 		if si.FunctionNames != nil {
@@ -453,59 +434,27 @@ func (p *PPROFReporter) symbolizeNativeFrame(b *ProfileBuilder, loc *profile.Loc
 			}
 		}
 	}
-	frameMetadata := func(symbols []string) samples.SourceInfo {
-		if len(symbols) == 0 {
-			return samples.SourceInfo{}
-		}
-		sym0 := symbols[0]
-		var sym1 *[]string
-		if len(symbols) > 1 {
-			tail := symbols[1:]
-			sym1 = &tail
-		} else {
-			sym1 = nil
-		}
-
-		si := samples.SourceInfo{
-			FunctionName:  sym0,
-			FunctionNames: sym1,
-		}
-		if frameMapLock, exists := p.Frames.GetAndRefresh(fileID,
-			FramesCacheLifetime); exists {
-			frameMap := frameMapLock.WLock()
-			defer frameMapLock.WUnlock(&frameMap)
-
-			(*frameMap)[addr] = si
-			return si
-		}
-
-		v := make(map[libpf.AddressOrLineno]samples.SourceInfo)
-		v[addr] = si
-		mu := xsync.NewRWMutex(v)
-		p.Frames.Add(fileID, &mu)
-		return si
-	}
-
-	if !frameKnown(frameID) {
-		symbols := p.cfg.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
-		if len(symbols) > 0 {
-			si := frameMetadata(symbols)
-			symbolizeSI(si)
-		}
+	si, known := p.lookupFrame(frameID)
+	if known {
+		symbolize(b, loc, si)
 		return
 	}
 
-	fileIDInfoLock, exists := p.Frames.GetAndRefresh(fileID,
-		FramesCacheLifetime)
-	if !exists {
-		return
+	symbols := p.cfg.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
+	var args *reporter2.FrameMetadataArgs
+	if len(symbols) > 0 {
+		args = &reporter2.FrameMetadataArgs{
+			FrameID:       frameID,
+			FunctionName:  symbols[0],
+			FunctionNames: symbols[1:],
+		}
+	} else {
+		args = &reporter2.FrameMetadataArgs{
+			FrameID: frameID,
+		}
 	}
-	fileIDInfo := fileIDInfoLock.RLock()
-	defer fileIDInfoLock.RUnlock(&fileIDInfo)
-
-	if si, exists := (*fileIDInfo)[addr]; exists {
-		symbolizeSI(si)
-	}
+	si = p.frameMetadata(args)
+	symbolize(b, loc, si)
 }
 
 const (
