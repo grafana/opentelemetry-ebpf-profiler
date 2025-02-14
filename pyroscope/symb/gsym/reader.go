@@ -7,11 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	bufra "github.com/avvmoto/buf-readerat"
-	"github.com/chimehq/binarycursor"
 	"os"
 	"sort"
 	"strings"
+
+	bufra "github.com/avvmoto/buf-readerat"
+	"github.com/chimehq/binarycursor"
 )
 
 const GSYM_MAGIC uint32 = 0x4753594d
@@ -124,6 +125,18 @@ type Gsym struct {
 	addresses []byte
 
 	buf [512]byte
+}
+
+func (g *Gsym) Lookup(addr uint64) ([]string, error) {
+	res, err := g.LookupAddress(addr)
+	if err != nil {
+		return nil, err
+	}
+	symbols := make([]string, 0, len(res.Locations))
+	for _, location := range res.Locations {
+		symbols = append(symbols, location.Name)
+	}
+	return symbols, nil
 }
 
 const readAddresses = true

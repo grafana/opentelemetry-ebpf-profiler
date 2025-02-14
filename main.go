@@ -6,12 +6,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
 	"net/http"
 	//nolint:gosec
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+
+	"github.com/go-kit/log/level"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 
 	pyrolog "github.com/go-kit/log"
 	pyrosamples "go.opentelemetry.io/ebpf-profiler/pyroscope/samples"
@@ -118,17 +120,26 @@ func mainWithExitCode() exitCode {
 	}
 	cfg.HostName, cfg.IPAddress = hostname, sourceIP
 
-	attrProd, err := createPyroscopeSamplesAttrProd(cfg)
+	pyrologger := pyrolog.NewLogfmtLogger(pyrolog.NewSyncWriter(os.Stderr))
+	pyrologger = level.NewFilter(pyrologger, level.AllowDebug())
+	attrProd, err := createPyroscopeSamplesAttrProd(cfg, pyrologger)
 	if err != nil {
 		log.Error(err)
 		return exitFailure
 	}
 
-	nfs, err := cache.NewFSCache(cfg.PyroscopeSymbCacheSizeBytes, cfg.PyroscopeSymbCachePath, cfg.PyroscopeSymbolizeNativeFrames)
+	tf := irsymcache.NewTableFactory(cfg.PyroscopeSymbolizerTableGSYM)
+
+	nfs, err := irsymcache.NewFSCache(pyrologger, tf, irsymcache.Options{
+		Enabled: cfg.PyroscopeSymbolizeNativeFrames,
+		Path:    cfg.PyroscopeSymbCachePath,
+		Size:    cfg.PyroscopeSymbCacheSizeBytes,
+	})
 	if err != nil {
 		log.Error(err)
 		return exitFailure
 	}
+	cfg.NativeFrameSymbolizer = nfs
 
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		CollAgentAddr:            cfg.CollAgentAddr,
@@ -176,8 +187,7 @@ func mainWithExitCode() exitCode {
 	return exitSuccess
 }
 
-func createPyroscopeSamplesAttrProd(cfg *controller.Config) (*pyrosamples.AttributesProvider, error) {
-	pyrologger := pyrolog.NewLogfmtLogger(pyrolog.NewSyncWriter(os.Stderr))
+func createPyroscopeSamplesAttrProd(cfg *controller.Config, pyrologger pyrolog.Logger) (*pyrosamples.AttributesProvider, error) {
 
 	pyroOptions := pyrosamples.Options{
 		SD: pyrosd.TargetsOptions{

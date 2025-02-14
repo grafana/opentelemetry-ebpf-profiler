@@ -5,6 +5,7 @@ package samples // import "go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 import (
 	"fmt"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -33,7 +34,7 @@ type SampleAttrProducer interface {
 
 type NativeFrameSymbolizer interface {
 	// Lookup returns only function names because pyroscope does not display file names and line numbers
-	Lookup(file libpf.FileID, addr uint64) []string
+	Lookup(file libpf.FileID, addr uint64) ([]string, error)
 	Cleanup()
 	// todo better name
 	Convert(id libpf.FileID, ref *pfelf.Reference)

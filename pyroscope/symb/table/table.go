@@ -3,21 +3,30 @@ package table
 import (
 	"encoding/binary"
 	"fmt"
-	log "github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/ffi"
-	"golang.org/x/sys/unix"
 	"io"
 	"math"
 	"os"
 	"runtime"
 	"sort"
 	"unsafe"
+
+	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/ffi"
+	"golang.org/x/sys/unix"
 )
 
 const (
 	magic   uint32 = 0x6c627467 // "gtbl"
 	version uint32 = 1
 )
+
+var (
+	versionName = fmt.Sprintf("table-%d", version)
+)
+
+func VersionName() string {
+	return versionName
+}
 
 type header struct {
 	magic         uint32
@@ -43,8 +52,6 @@ type Table struct {
 	rangesOffset uint64
 	rangesCount  uint64
 	strOff       uint64
-
-	rangesHot []entry
 }
 
 func OpenPath(path string) (*Table, error) {
@@ -142,18 +149,10 @@ func (st *Table) func_(offset uint32) string {
 	return string(strData)
 }
 
-func (st *Table) Lookup(addr64 uint64, result []string) []string {
-	//result = st.lookupHot(addr64, result)
-	//if len(result) > 0 {
-	//	return result
-	//}
-	return st.lookupCold(addr64, result)
-}
-
-func (st *Table) lookupCold(addr64 uint64, result []string) []string {
-	result = result[:0]
+func (st *Table) Lookup(addr64 uint64) ([]string, error) {
+	var result []string
 	if addr64 >= math.MaxUint32 {
-		return result
+		return result, fmt.Errorf("table address out of bounds")
 	}
 	addr := uint32(addr64)
 	var err error
@@ -166,13 +165,13 @@ func (st *Table) lookupCold(addr64 uint64, result []string) []string {
 		return e.va > addr
 	})
 	if err != nil {
-		return result
+		return result, err
 	}
 	idx--
 	for idx >= 0 {
 		it, err := st.getEntry(idx)
 		if err != nil {
-			return result[:0]
+			return result[:0], err
 		}
 
 		covered := it.va <= addr && addr < it.va+it.length
@@ -185,35 +184,7 @@ func (st *Table) lookupCold(addr64 uint64, result []string) []string {
 		}
 		idx--
 	}
-	return result
-}
-
-func (st *Table) lookupHot(addr64 uint64, result []string) []string {
-	result = result[:0]
-	if len(st.rangesHot) == 0 {
-		return result
-	}
-	if addr64 >= math.MaxUint32 {
-		return result
-	}
-	addr := uint32(addr64)
-	idx := sort.Search(len(st.rangesHot), func(i int) bool {
-		return st.rangesHot[i].va > addr
-	})
-	idx--
-	for idx >= 0 {
-		it := st.rangesHot[idx]
-		covered := it.va <= addr && addr < it.va+it.length
-		if covered {
-			name := st.func_(it.fun)
-			result = append(result, name)
-		}
-		if it.depth == 0 {
-			break
-		}
-		idx--
-	}
-	return result
+	return result, nil
 }
 
 func (st *Table) Size() int {

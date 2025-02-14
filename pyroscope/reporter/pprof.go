@@ -16,6 +16,7 @@ import (
 	"github.com/zeebo/xxh3"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
 	reporter2 "go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -170,11 +171,11 @@ func (p *PPROFReporter) ExecutableMetadata(args *reporter2.ExecutableMetadataArg
 }
 
 func (p *PPROFReporter) FrameKnown(frameID libpf.FrameID) bool {
-	_, known := p.lookupFrame(frameID)
+	_, known := p.LookupFrame(frameID)
 	return known
 }
 
-func (p *PPROFReporter) lookupFrame(frameID libpf.FrameID) (samples.SourceInfo, bool) {
+func (p *PPROFReporter) LookupFrame(frameID libpf.FrameID) (samples.SourceInfo, bool) {
 	known := false
 	si := samples.SourceInfo{}
 	if frameMapLock, exists := p.Frames.GetAndRefresh(frameID.FileID(),
@@ -364,7 +365,7 @@ func (p *PPROFReporter) createProfile(
 					mapping.BuildID = ei.GnuBuildID
 				}
 				location.Mapping = mapping
-				p.symbolizeNativeFrame(b, location, traceInfo, i)
+				p.symbolizeNativeFrame(b, location, traceInfo, i, int(traceKey.Pid))
 			case libpf.AbortFrame:
 				// Next step: Figure out how the OTLP protocol
 				// could handle artificial frames, like AbortFrame,
@@ -410,10 +411,8 @@ func (p *PPROFReporter) createProfile(
 	return res
 }
 
-func (p *PPROFReporter) symbolizeNativeFrame(b *ProfileBuilder, loc *profile.Location, traceInfo *samples.TraceEvents, i int) {
-	if p.cfg.ExtraNativeFrameSymbolizer == nil {
-		return
-	}
+func (p *PPROFReporter) symbolizeNativeFrame(b *ProfileBuilder, loc *profile.Location, traceInfo *samples.TraceEvents, i int, pid int) {
+
 	fileID := traceInfo.Files[i]
 	addr := traceInfo.Linenos[i]
 	frameID := libpf.NewFrameID(fileID, addr)
@@ -434,13 +433,28 @@ func (p *PPROFReporter) symbolizeNativeFrame(b *ProfileBuilder, loc *profile.Loc
 			}
 		}
 	}
-	si, known := p.lookupFrame(frameID)
+	si, known := p.LookupFrame(frameID)
 	if known {
 		symbolize(b, loc, si)
 		return
 	}
+	var symbols []string
+	var err error
+	if loc.Mapping.File == process.VdsoPathName {
+		symbols = nil
+	} else {
+		symbols, err = p.cfg.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
+		if err != nil {
+			_ = level.Error(p.log).Log("msg", "Failed to symbolize native frame",
+				"fileID", fileID,
+				"mapping", loc.Mapping.File,
+				"addr", addr,
+				"err", err,
+				"pid", pid,
+			)
+		}
+	}
 
-	symbols := p.cfg.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
 	var args *reporter2.FrameMetadataArgs
 	if len(symbols) > 0 {
 		args = &reporter2.FrameMetadataArgs{

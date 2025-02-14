@@ -8,12 +8,12 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/internalshim/helpers"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/samples"
 	pyrosd "go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 )
 
-func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *cache.FSCache, consumer PPROFConsumer) (reporter.Reporter, error) {
+func New(log log.Logger, cfg *controller.Config, sd pyrosd.TargetFinder, nfs *irsymcache.FSCache, consumer PPROFConsumer) (reporter.Reporter, error) {
 	intervals := times.New(cfg.MonitorInterval,
 		cfg.ReporterInterval, cfg.ProbabilisticInterval)
 	kernelVersion, err := helpers.GetKernelVersion()

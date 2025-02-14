@@ -49,6 +49,7 @@ type Config struct {
 	PyroscopeSymbCacheSizeBytes          int
 	PyroscopeSD                          string
 	PyroscopeReporterType                string
+	PyroscopeSymbolizerTableGSYM         bool
 	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
 
 	Reporter reporter.Reporter

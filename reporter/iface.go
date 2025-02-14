@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/cache"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -94,7 +94,7 @@ type FrameMetadataArgs struct {
 }
 
 type SymbCacheProvider interface { // todo remove this glue
-	SymbCache() *cache.FSCache
+	SymbCache() *irsymcache.FSCache
 }
 
 type SymbolReporter interface {

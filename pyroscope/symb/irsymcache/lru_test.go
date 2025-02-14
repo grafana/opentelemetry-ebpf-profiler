@@ -1,8 +1,9 @@
-package cache
+package irsymcache
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func defaultSizeOf[K comparable, V any](key K, value V) int {

@@ -5,6 +5,7 @@ package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pda
 
 import (
 	lru "github.com/elastic/go-freelru"
+	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -90,6 +91,8 @@ func (p Pdata) symbolizeNativeFrame(pid int64, loc *pprofile.Location, traceInfo
 			line := loc.Line().AppendEmpty()
 			line.SetFunctionIndex(createFunctionEntry(funcMap,
 				si.FunctionName, ""))
+		} else {
+			//todo add libfoo.so + 0xefef function for pyroscope rendering?
 		}
 		if si.FunctionNames != nil {
 			for _, fn := range *si.FunctionNames {
@@ -133,7 +136,17 @@ func (p Pdata) symbolizeNativeFrame(pid int64, loc *pprofile.Location, traceInfo
 	}
 
 	if !frameKnown(frameID) {
-		symbols := p.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
+		symbols, err := p.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
+		if err != nil {
+			if err != nil {
+				logrus.Error("msg", "Failed to symbolize native frame",
+					"fileID", fileID,
+					"addr", addr,
+					"err", err,
+					"pid", pid,
+				)
+			}
+		}
 		if len(symbols) > 0 {
 			si := frameMetadata(symbols)
 			symbolizeSI(si)
