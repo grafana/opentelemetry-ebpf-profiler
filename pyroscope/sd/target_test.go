@@ -110,6 +110,12 @@ func TestTargetFinder(t *testing.T) {
 	require.NotNil(t, target)
 	require.Equal(t, "ebpf/qwe/asd", target.labels.Get("service_name"))
 
+	tf.Update(options)
+
+	target2 := tf.FindTarget(489323)
+	require.NotNil(t, target2)
+	require.True(t, target2 == target) // same instance after update
+
 	target = tf.FindTarget(239)
 	require.Nil(t, target)
 }
@@ -152,6 +158,12 @@ func TestPreferPIDOverContainerID(t *testing.T) {
 	require.NotNil(t, target)
 	require.Equal(t, "ebpf/foo/bar", target.labels.Get("service_name"))
 	require.Equal(t, "/bin/dash", target.labels.Get("exe"))
+
+	tf.Update(options)
+
+	target2 := tf.FindTarget(1801265)
+	require.NotNil(t, target2)
+	require.True(t, target2 == target) // same instance after update
 }
 
 func testLogger(t *testing.T) log.Logger {

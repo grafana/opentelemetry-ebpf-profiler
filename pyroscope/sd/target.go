@@ -30,33 +30,18 @@ func (t *DiscoveryTarget) DebugString() string {
 }
 
 const (
-	labelContainerID                = "__container_id__"
-	labelPID                        = "__process_pid__"
-	labelServiceName                = "service_name"
-	labelServiceNameK8s             = "__meta_kubernetes_pod_annotation_pyroscope_io_service_name"
-	metricValue                     = "process_cpu"
-	labelMetaPyroscopeOptionsPrefix = "__meta_pyroscope_ebpf_options_"
-
-	OptionGoTableFallback          = labelMetaPyroscopeOptionsPrefix + "go_table_fallback"
-	OptionCollectKernel            = labelMetaPyroscopeOptionsPrefix + "collect_kernel"
-	OptionPythonFullFilePath       = labelMetaPyroscopeOptionsPrefix + "python_full_file_path"
-	OptionPythonEnabled            = labelMetaPyroscopeOptionsPrefix + "python_enabled"
-	OptionPythonBPFDebugLogEnabled = labelMetaPyroscopeOptionsPrefix + "python_bpf_debug_log"
-	OptionPythonBPFErrorLogEnabled = labelMetaPyroscopeOptionsPrefix + "python_bpf_error_log"
-	OptionDemangle                 = labelMetaPyroscopeOptionsPrefix + "demangle"
+	labelContainerID    = "__container_id__"
+	labelPID            = "__process_pid__"
+	labelServiceName    = "service_name"
+	labelServiceNameK8s = "__meta_kubernetes_pod_annotation_pyroscope_io_service_name"
+	metricValue         = "process_cpu"
 )
 
 type Target struct {
 	// todo make keep it a map until Append happens
-	labels                labels.Labels
-	serviceName           string
-	fingerprint           uint64
-	fingerprintCalculated bool
-}
-
-// todo remove, make containerID exported or use string
-func NewTargetForTesting(cid string, pid uint32, target DiscoveryTarget) *Target {
-	return NewTarget(containerID(cid), pid, target)
+	labels      labels.Labels
+	serviceName string
+	fingerprint uint64
 }
 
 func NewTarget(cid containerID, pid uint32, target DiscoveryTarget) *Target {
@@ -68,15 +53,14 @@ func NewTarget(cid containerID, pid uint32, target DiscoveryTarget) *Target {
 	lset := make(map[string]string, len(target))
 	for k, v := range target {
 		if strings.HasPrefix(k, model.ReservedLabelPrefix) &&
-			k != labels.MetricName &&
-			!strings.HasPrefix(k, labelMetaPyroscopeOptionsPrefix) {
+			k != labels.MetricName {
 			continue
 		}
 		lset[k] = v
 	}
-	if lset[labels.MetricName] == "" {
-		lset[labels.MetricName] = metricValue
-	}
+	//if lset[labels.MetricName] == "" {
+	//	lset[labels.MetricName] = metricValue //todo this is incorrect
+	//}
 	if lset[labelServiceName] == "" {
 		lset[labelServiceName] = serviceName
 	}
@@ -86,8 +70,10 @@ func NewTarget(cid containerID, pid uint32, target DiscoveryTarget) *Target {
 	if pid != 0 {
 		lset[labelPID] = strconv.Itoa(int(pid))
 	}
+	ls := labels.FromMap(lset)
 	return &Target{
-		labels:      labels.FromMap(lset),
+		labels:      ls,
+		fingerprint: ls.Hash(),
 		serviceName: serviceName,
 	}
 }
@@ -120,10 +106,6 @@ func inferServiceName(target DiscoveryTarget) string {
 }
 
 func (t *Target) Labels() (uint64, labels.Labels) {
-	if !t.fingerprintCalculated {
-		t.fingerprint = t.labels.Hash()
-		t.fingerprintCalculated = true
-	}
 	return t.fingerprint, t.labels
 }
 
@@ -193,13 +175,19 @@ func (tf *targetFinder) setTargets(opts TargetsOptions) {
 	_ = level.Debug(tf.l).Log("msg", "set targets", "count", len(opts.Targets))
 	containerID2Target := make(map[containerID]*Target)
 	pid2Target := make(map[uint32]*Target)
+	oco := func(prev, next *Target) *Target {
+		if prev != nil && prev.fingerprint == next.fingerprint {
+			return prev
+		}
+		return next
+	}
 	for _, target := range opts.Targets {
 		if pid := pidFromTarget(target); pid != 0 {
 			t := NewTarget("", pid, target)
-			pid2Target[pid] = t
+			pid2Target[pid] = oco(tf.pid2target[pid], t)
 		} else if cid := containerIDFromTarget(target); cid != "" {
 			t := NewTarget(cid, 0, target)
-			containerID2Target[cid] = t
+			containerID2Target[cid] = oco(tf.cid2target[cid], t)
 		}
 	}
 	if len(opts.Targets) > 0 && len(containerID2Target) == 0 && len(pid2Target) == 0 {
@@ -211,7 +199,7 @@ func (tf *targetFinder) setTargets(opts TargetsOptions) {
 		tf.defaultTarget = nil
 	} else {
 		t := NewTarget("", 0, opts.DefaultTarget)
-		tf.defaultTarget = t
+		tf.defaultTarget = oco(tf.defaultTarget, t)
 	}
 	_ = level.Debug(tf.l).Log("msg", "created targets", "cid2target", len(tf.cid2target), "pid2target", len(tf.pid2target))
 }
