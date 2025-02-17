@@ -1,12 +1,14 @@
 package sd
 
 import (
+	"bytes"
 	"fmt"
-	"github.com/go-kit/log"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/elastic/go-freelru"
+	"github.com/go-kit/log"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 
 	"github.com/stretchr/testify/require"
 )
@@ -56,59 +58,26 @@ func TestCGroupMatching(t *testing.T) {
 		},
 	}
 	for i, tc := range testcases {
+		idx := i
 		t.Run(fmt.Sprintf("testcase %d %s", i, tc.cgroup), func(t *testing.T) {
-			cid := getContainerIDFromCGroup([]byte(tc.cgroup))
+			cid := getContainerIDFromCGroup(tc.cgroup)
 			expected := tc.expectedID
 			require.Equal(t, expected, cid)
 			cid = string(getContainerIDFromK8S(tc.containerID))
+			require.Equal(t, expected, cid)
+
+			cache, err := freelru.NewSynced[libpf.PID, string](1024,
+				func(pid libpf.PID) uint32 { return uint32(pid) })
+			require.NoError(t, err)
+			extractedCgroup, err := libpf.LookupCgroupFromReader(cache, libpf.PID(idx), bytes.NewReader([]byte(tc.cgroup)))
+
+			cid = getContainerIDFromCGroup(extractedCgroup)
 			require.Equal(t, expected, cid)
 		})
 	}
 }
 
-type mockFS struct {
-	root     fs.FS
-	rootPath string
-}
-
-func newMockFS() (*mockFS, error) {
-	temp, err := os.MkdirTemp("", "TestTargetFinder")
-	if err != nil {
-		return nil, err
-	}
-	return &mockFS{
-		rootPath: temp,
-		root:     os.DirFS(temp),
-	}, nil
-}
-
-func (fs *mockFS) add(path string, data []byte) error {
-	fpath := filepath.Join(fs.rootPath, path)
-	dir := filepath.Dir(fpath)
-	if _, err := os.Stat(dir); err != nil {
-		err = os.MkdirAll(dir, 0770)
-		if err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(fpath, data, 0660)
-}
-
-func (fs *mockFS) rm() {
-	_ = os.RemoveAll(fs.rootPath)
-}
-
 func TestTargetFinder(t *testing.T) {
-	fs, err := newMockFS()
-	require.NoError(t, err)
-	defer fs.rm()
-	err = fs.add("/proc/1801264/cgroup",
-		[]byte("12:blkio:/kubepods/burstable/pod7e5f5ac0-1af4-49ab-8938-664970a26cfd/9a7c72f122922fe3445ba85ce72c507c8976c0f3d919403fda7c22dfe516f66f"))
-	require.NoError(t, err)
-	err = fs.add("/proc/489323/cgroup",
-		[]byte("12:blkio:/kubepods/burstable/pod83ca8044-3e7c-457b-8647-a21dabad5079/57ac76ffc93d7e7735ca186bc67115656967fc8aecbe1f65526c4c48b033e6a5"))
-	require.NoError(t, err)
-
 	options := TargetsOptions{
 		Targets: []DiscoveryTarget{
 			map[string]string{
@@ -122,12 +91,15 @@ func TestTargetFinder(t *testing.T) {
 				"__meta_kubernetes_pod_container_name": "asd",
 			},
 		},
-		TargetsOnly:        true,
-		DefaultTarget:      nil,
-		ContainerCacheSize: 1024,
+		TargetsOnly:   true,
+		DefaultTarget: nil,
 	}
-
-	tf, err := NewTargetFinder(fs.root, testLogger(t), options)
+	cgroups, err := freelru.NewSynced[libpf.PID, string](1024,
+		func(pid libpf.PID) uint32 { return uint32(pid) })
+	require.NoError(t, err)
+	cgroups.Add(1801264, "/kubepods/burstable/pod7e5f5ac0-1af4-49ab-8938-664970a26cfd/9a7c72f122922fe3445ba85ce72c507c8976c0f3d919403fda7c22dfe516f66f")
+	cgroups.Add(489323, "/kubepods/burstable/pod83ca8044-3e7c-457b-8647-a21dabad5079/57ac76ffc93d7e7735ca186bc67115656967fc8aecbe1f65526c4c48b033e6a5")
+	tf, err := NewTargetFinder(testLogger(t), cgroups, options)
 	require.NoError(t, err)
 
 	target := tf.FindTarget(1801264)
@@ -143,9 +115,6 @@ func TestTargetFinder(t *testing.T) {
 }
 
 func TestPreferPIDOverContainerID(t *testing.T) {
-	fs, err := newMockFS()
-	require.NoError(t, err)
-	defer fs.rm()
 
 	options := TargetsOptions{
 		Targets: []DiscoveryTarget{
@@ -164,12 +133,14 @@ func TestPreferPIDOverContainerID(t *testing.T) {
 				"exe":                                  "/bin/dash",
 			},
 		},
-		TargetsOnly:        true,
-		DefaultTarget:      nil,
-		ContainerCacheSize: 1024,
+		TargetsOnly:   true,
+		DefaultTarget: nil,
 	}
 
-	tf, err := NewTargetFinder(fs.root, testLogger(t), options)
+	cgroups, err := freelru.NewSynced[libpf.PID, string](1024,
+		func(pid libpf.PID) uint32 { return uint32(pid) })
+	require.NoError(t, err)
+	tf, err := NewTargetFinder(testLogger(t), cgroups, options)
 	require.NoError(t, err)
 
 	target := tf.FindTarget(1801264)

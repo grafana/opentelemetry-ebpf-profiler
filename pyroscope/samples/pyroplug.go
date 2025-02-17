@@ -2,9 +2,9 @@ package samples
 
 import (
 	"context"
-	"os"
 	"sync"
 
+	"github.com/elastic/go-freelru"
 	log2 "github.com/go-kit/log"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -17,11 +17,11 @@ import (
 
 type AttributesProvider struct {
 	symcachelock sync.Mutex
-	sd           sd.TargetFinder
+	Discovery    sd.TargetFinder
 }
 
 func (p *AttributesProvider) CollectExtraSampleMeta(trace *libpf.Trace, meta *samples.TraceEventMeta) any {
-	return p.sd.FindTarget(uint32(meta.PID)) // todo this may be bad if sd creates a new target with same labels
+	return p.Discovery.FindTarget(uint32(meta.PID)) // todo this may be bad if sd creates a new target with same labels
 }
 
 func (p *AttributesProvider) ExtraSampleAttrs(attrMgr *samples.AttrTableManager, meta any) []int32 {
@@ -45,10 +45,10 @@ type Options struct {
 	Kubernetes, Docker bool
 }
 
-func NewAttributesProvider(logger log2.Logger, opt Options) (*AttributesProvider, error) {
+func NewAttributesProvider(logger log2.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], opt Options) (*AttributesProvider, error) {
 
 	pyrosdOpt := opt.SD
-	pyrosd, err := sd.NewTargetFinder(os.DirFS("/"), logger, pyrosdOpt)
+	pyrosd, err := sd.NewTargetFinder(logger, cgroups, pyrosdOpt)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +82,6 @@ func NewAttributesProvider(logger log2.Logger, opt Options) (*AttributesProvider
 
 func NewAttributesProviderFromSD(sd sd.TargetFinder) *AttributesProvider {
 	return &AttributesProvider{
-		sd: sd,
+		Discovery: sd,
 	}
 }

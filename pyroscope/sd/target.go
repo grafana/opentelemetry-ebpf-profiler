@@ -2,16 +2,16 @@ package sd
 
 import (
 	"fmt"
-	"io/fs"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/elastic/go-freelru"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
 type DiscoveryTarget map[string]string
@@ -145,15 +145,12 @@ type containerID string
 
 type TargetFinder interface {
 	FindTarget(pid uint32) *Target
-	RemoveDeadPID(pid uint32)
-	DebugInfo() []map[string]string
 	Update(args TargetsOptions)
 }
 type TargetsOptions struct {
-	Targets            []DiscoveryTarget
-	TargetsOnly        bool
-	DefaultTarget      DiscoveryTarget
-	ContainerCacheSize int
+	Targets       []DiscoveryTarget
+	TargetsOnly   bool
+	DefaultTarget DiscoveryTarget
 }
 
 type targetFinder struct {
@@ -161,23 +158,16 @@ type targetFinder struct {
 	cid2target map[containerID]*Target
 	pid2target map[uint32]*Target
 
-	// todo make it never evict during a reset
-	containerIDCache *lru.Cache[uint32, containerID]
-	defaultTarget    *Target
-	fs               fs.FS
+	cgroups       *freelru.SyncedLRU[libpf.PID, string]
+	defaultTarget *Target
 
 	sync sync.Mutex
 }
 
-func NewTargetFinder(fs fs.FS, l log.Logger, options TargetsOptions) (TargetFinder, error) {
-	containerIDCache, err := lru.New[uint32, containerID](options.ContainerCacheSize)
-	if err != nil {
-		return nil, fmt.Errorf("containerIDCache create: %w", err)
-	}
+func NewTargetFinder(l log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], options TargetsOptions) (TargetFinder, error) {
 	res := &targetFinder{
-		l:                l,
-		containerIDCache: containerIDCache,
-		fs:               fs,
+		l:       l,
+		cgroups: cgroups,
 	}
 	res.setTargets(options)
 	return res, nil
@@ -193,18 +183,10 @@ func (tf *targetFinder) FindTarget(pid uint32) *Target {
 	return tf.defaultTarget
 }
 
-func (tf *targetFinder) RemoveDeadPID(pid uint32) {
-	tf.sync.Lock()
-	defer tf.sync.Unlock()
-	tf.containerIDCache.Remove(pid)
-	delete(tf.pid2target, pid)
-}
-
 func (tf *targetFinder) Update(args TargetsOptions) {
 	tf.sync.Lock()
 	defer tf.sync.Unlock()
 	tf.setTargets(args)
-	tf.resizeContainerIDCache(args.ContainerCacheSize)
 }
 
 func (tf *targetFinder) setTargets(opts TargetsOptions) {
@@ -238,42 +220,16 @@ func (tf *targetFinder) findTarget(pid uint32) *Target {
 	if target, ok := tf.pid2target[pid]; ok {
 		return target
 	}
-	cid, ok := tf.containerIDCache.Get(pid)
-	if ok {
-		return tf.cid2target[cid]
+	cgroup, err := libpf.LookupCgroupv2(tf.cgroups, libpf.PID(pid))
+	if err != nil {
+		return nil
+	}
+	cid := getContainerIDFromCGroup(cgroup)
+	if cid == "" {
+		return nil
 	}
 
-	cid = tf.getContainerIDFromPID(pid)
-	tf.containerIDCache.Add(pid, cid)
-	return tf.cid2target[cid]
-}
-
-func (tf *targetFinder) resizeContainerIDCache(size int) {
-	tf.containerIDCache.Resize(size)
-}
-
-func (tf *targetFinder) DebugInfo() []map[string]string {
-	tf.sync.Lock()
-	defer tf.sync.Unlock()
-
-	debugTargets := make([]map[string]string, 0, len(tf.cid2target))
-	for _, target := range tf.cid2target {
-
-		_, ls := target.Labels()
-		debugTargets = append(debugTargets, ls.Map())
-	}
-	return debugTargets
-}
-
-func (tf *targetFinder) Targets() []*Target {
-	tf.sync.Lock()
-	defer tf.sync.Unlock()
-
-	res := make([]*Target, 0, len(tf.cid2target))
-	for _, target := range tf.cid2target {
-		res = append(res, target)
-	}
-	return res
+	return tf.cid2target[containerID(cid)]
 }
 
 func pidFromTarget(target DiscoveryTarget) uint32 {

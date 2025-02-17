@@ -91,6 +91,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		PyroscopeDeltasSizeLimit:             c.config.PyroscopeStackDeltaLimitBytes,
 		PyroscopeStackDeltaElfSizeLimitBytes: c.config.PyroscopeStackDeltaElfSizeLimitBytes,
 		NativeFrameSymbolizer:                c.config.NativeFrameSymbolizer,
+		Policy:                               c.config.Policy,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)

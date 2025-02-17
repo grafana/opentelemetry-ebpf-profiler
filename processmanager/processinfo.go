@@ -78,7 +78,7 @@ func (pm *ProcessManager) getTSDInfo(pid libpf.PID) *tpbase.TSDInfo {
 // already exists, it returns true. Otherwise false or an error.
 //
 // Caller must hold pm.mu write lock.
-func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping, ei eim.ExecutableInfo) (bool, error) {
+func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping) (bool, error) {
 	info, ok := pm.pidToProcessInfo[pid]
 	if !ok {
 		// We don't have information for this pid, so we first need to
@@ -91,7 +91,7 @@ func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping, ei eim
 		info = &processInfo{
 			meta:             ProcessMeta{Name: processName, Executable: exePath},
 			mappings:         make(map[libpf.Address]*Mapping),
-			mappingsByFileID: make(map[host.FileID]*fileMappingInfo),
+			mappingsByFileID: make(map[host.FileID]map[libpf.Address]*Mapping),
 			tsdInfo:          nil,
 		}
 		pm.pidToProcessInfo[pid] = info
@@ -235,7 +235,7 @@ func (pm *ProcessManager) handleNewMapping(pr process.Process, m *Mapping,
 	defer pm.mu.Unlock()
 
 	// Update the eBPF maps with information about this mapping.
-	_, err = pm.updatePidInformation(pid, m, ei)
+	_, err = pm.updatePidInformation(pid, m)
 	if err != nil {
 		return err
 	}
@@ -612,6 +612,11 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	util.AtomicUpdateMaxUint32(&pm.mappingStats.maxProcParseUsec, uint32(elapsed.Microseconds()))
 	pm.mappingStats.totalProcParseUsec.Add(uint32(elapsed.Microseconds()))
 
+	if !pm.profilingEnabled(pr, mappings) {
+		log.Debugf("- PID: %d Skip profiling for", pid)
+		return
+	}
+
 	if pm.synchronizeMappings(pr, mappings) {
 		log.Debugf("+ PID: %v", pid)
 		// TODO: Fine-grained reported_pids handling (evaluate per-PID mapping
@@ -627,6 +632,17 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		// Also see: Unified PID Events design doc
 		pm.ebpf.RemoveReportedPID(pid)
 	}
+}
+
+func (pm *ProcessManager) profilingEnabled(pr process.Process, mappings []process.Mapping) bool {
+	enabled := pm.policy.ProfilingEnabled(pr, mappings)
+	if enabled {
+		return true
+	}
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	_, enabled = pm.pidToProcessInfo[pr.PID()]
+	return enabled
 }
 
 // CleanupPIDs executes a periodic synchronization of pidToProcessInfo table with system processes.
@@ -677,7 +693,7 @@ func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
 		return Mapping{}, false
 	}
 
-	for _, candidate := range fidMappings.mappingsByAddress {
+	for _, candidate := range fidMappings {
 		procSpaceVA := libpf.Address(uint64(addr) + candidate.Bias)
 		mappingEnd := candidate.Vaddr + libpf.Address(candidate.Length)
 		if procSpaceVA >= candidate.Vaddr && procSpaceVA <= mappingEnd {

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 	log "github.com/sirupsen/logrus"
@@ -50,7 +51,9 @@ type Config struct {
 	PyroscopeSD                          string
 	PyroscopeReporterType                string
 	PyroscopeSymbolizerTableGSYM         bool
+	PyroscopeDynamicProfilingPolicy      bool
 	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
+	Policy                               dynamicprofiling.Policy
 
 	Reporter reporter.Reporter
 

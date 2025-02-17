@@ -45,7 +45,7 @@ type Config struct {
 type PPROFReporter struct {
 	cfg         *Config
 	log         log.Logger
-	cgroupv2ID  *freelru.SyncedLRU[libpf.PID, string]
+	cgroups     *freelru.SyncedLRU[libpf.PID, string]
 	traceEvents xsync.RWMutex[map[libpf.Origin]samples.KeyToEventMapping]
 	Executables *lru.SyncedLRU[libpf.FileID, samples.ExecInfo]
 	Frames      *lru.SyncedLRU[
@@ -58,14 +58,9 @@ type PPROFReporter struct {
 	cancelReporting context.CancelFunc
 }
 
-func NewPPROF(log log.Logger, cfg *Config, sd sd.TargetFinder) (*PPROFReporter, error) {
-	cgroupv2ID, err := lru.NewSynced[libpf.PID, string](cfg.CGroupCacheElements,
-		func(pid libpf.PID) uint32 { return uint32(pid) })
-	if err != nil {
-		return nil, err
-	}
+func NewPPROF(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg *Config, sd sd.TargetFinder) (*PPROFReporter, error) {
 	// Set a lifetime to reduce risk of invalid data in case of PID reuse.
-	cgroupv2ID.SetLifetime(90 * time.Second)
+	cgroups.SetLifetime(90 * time.Second)
 
 	originsMap := make(map[libpf.Origin]samples.KeyToEventMapping, 2)
 	for _, origin := range []libpf.Origin{support.TraceOriginSampling,
@@ -93,7 +88,7 @@ func NewPPROF(log log.Logger, cfg *Config, sd sd.TargetFinder) (*PPROFReporter, 
 	return &PPROFReporter{
 		cfg:         cfg,
 		log:         log,
-		cgroupv2ID:  cgroupv2ID,
+		cgroups:     cgroups,
 		traceEvents: xsync.NewRWMutex(originsMap),
 		Executables: executables,
 		Frames:      frames,
@@ -116,7 +111,7 @@ func (p *PPROFReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.Trace
 
 	var extraMeta any
 
-	containerID, err := libpf.LookupCgroupv2(p.cgroupv2ID, meta.PID)
+	containerID, err := libpf.LookupCgroupv2(p.cgroups, meta.PID)
 	if err != nil {
 		_ = p.log.Log("msg", "Failed to get a cgroupv2 ID as container ID for", "PID", meta.PID, "err", err)
 	}
@@ -253,7 +248,7 @@ func (p *PPROFReporter) Start(ctx context.Context) error {
 				p.Executables.Purge()
 				p.Frames.Purge()
 				//p.hostmetadata.Purge()
-				p.cgroupv2ID.PurgeExpired()
+				p.cgroups.PurgeExpired()
 			}
 		}
 	}()

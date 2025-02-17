@@ -24,6 +24,7 @@ import (
 	"github.com/elastic/go-perf"
 	log "github.com/sirupsen/logrus"
 	"github.com/zeebo/xxh3"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -161,6 +162,7 @@ type Config struct {
 	PyroscopeDeltasSizeLimit             int
 	PyroscopeStackDeltaElfSizeLimitBytes int
 	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
+	Policy                               dynamicprofiling.Policy
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -307,7 +309,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		cfg.PyroscopeDeltasSizeLimit, cfg.PyroscopeStackDeltaElfSizeLimitBytes)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, sdp,
-		cfg.FilterErrorFrames, cfg.NativeFrameSymbolizer)
+		cfg.FilterErrorFrames, cfg.NativeFrameSymbolizer, cfg.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}

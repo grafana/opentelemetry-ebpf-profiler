@@ -12,16 +12,18 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/go-kit/log/level"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
-
+	"github.com/elastic/go-freelru"
+	lru "github.com/elastic/go-freelru"
 	pyrolog "github.com/go-kit/log"
-	pyrosamples "go.opentelemetry.io/ebpf-profiler/pyroscope/samples"
-	pyrosd "go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
-
+	"github.com/go-kit/log/level"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
 	"go.opentelemetry.io/ebpf-profiler/internal/helpers"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
+	pyrosamples "go.opentelemetry.io/ebpf-profiler/pyroscope/samples"
+	pyrosd "go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/vc"
@@ -120,9 +122,15 @@ func mainWithExitCode() exitCode {
 	}
 	cfg.HostName, cfg.IPAddress = hostname, sourceIP
 
+	cgroups, err := lru.NewSynced[libpf.PID, string](1024,
+		func(pid libpf.PID) uint32 { return uint32(pid) })
+	if err != nil {
+		log.Error(err)
+		return exitFailure
+	}
 	pyrologger := pyrolog.NewLogfmtLogger(pyrolog.NewSyncWriter(os.Stderr))
 	pyrologger = level.NewFilter(pyrologger, level.AllowDebug())
-	attrProd, err := createPyroscopeSamplesAttrProd(cfg, pyrologger)
+	attrProd, err := createPyroscopeSamplesAttrProd(cfg, pyrologger, cgroups)
 	if err != nil {
 		log.Error(err)
 		return exitFailure
@@ -140,6 +148,11 @@ func mainWithExitCode() exitCode {
 		return exitFailure
 	}
 	cfg.NativeFrameSymbolizer = nfs
+	if cfg.PyroscopeDynamicProfilingPolicy {
+		cfg.Policy = &dynamicprofiling.ServiceDiscoveryTargetsOnlyPolicy{Discovery: attrProd.Discovery}
+	} else {
+		cfg.Policy = dynamicprofiling.AlwaysOnPolicy{}
+	}
 
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		CollAgentAddr:            cfg.CollAgentAddr,
@@ -163,7 +176,7 @@ func mainWithExitCode() exitCode {
 		PyroscopeUsername:          cfg.PyroscopeUsername,
 		PyroscopePasswordFile:      cfg.PyroscopePasswordFile,
 		ExtranativeFrameSymbolizer: nfs,
-	})
+	}, cgroups)
 	if err != nil {
 		log.Error(err)
 		return exitFailure
@@ -187,14 +200,12 @@ func mainWithExitCode() exitCode {
 	return exitSuccess
 }
 
-func createPyroscopeSamplesAttrProd(cfg *controller.Config, pyrologger pyrolog.Logger) (*pyrosamples.AttributesProvider, error) {
-
+func createPyroscopeSamplesAttrProd(cfg *controller.Config, pyrologger pyrolog.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string]) (*pyrosamples.AttributesProvider, error) {
 	pyroOptions := pyrosamples.Options{
 		SD: pyrosd.TargetsOptions{
-			Targets:            nil,
-			TargetsOnly:        true,
-			DefaultTarget:      nil,
-			ContainerCacheSize: 0x1000,
+			Targets:       nil,
+			TargetsOnly:   true,
+			DefaultTarget: nil,
 		},
 	}
 	if cfg.PyroscopeSD == "kubernetes" {
@@ -202,7 +213,7 @@ func createPyroscopeSamplesAttrProd(cfg *controller.Config, pyrologger pyrolog.L
 	} else if cfg.PyroscopeSD == "docker" {
 		pyroOptions.Docker = true
 	}
-	return pyrosamples.NewAttributesProvider(pyrologger, pyroOptions)
+	return pyrosamples.NewAttributesProvider(pyrologger, cgroups, pyroOptions)
 }
 
 func failure(msg string, args ...interface{}) exitCode {

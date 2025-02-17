@@ -62,14 +62,10 @@ type OTLPReporter struct {
 }
 
 // NewOTLP returns a new instance of OTLPReporter
-func NewOTLP(cfg *Config) (*OTLPReporter, error) {
-	cgroupv2ID, err := lru.NewSynced[libpf.PID, string](cfg.CGroupCacheElements,
-		func(pid libpf.PID) uint32 { return uint32(pid) })
-	if err != nil {
-		return nil, err
-	}
+func NewOTLP(cfg *Config, cgroups *lru.SyncedLRU[libpf.PID, string]) (*OTLPReporter, error) {
+
 	// Set a lifetime to reduce risk of invalid data in case of PID reuse.
-	cgroupv2ID.SetLifetime(90 * time.Second)
+	cgroups.SetLifetime(90 * time.Second)
 
 	// Next step: Dynamically configure the size of this LRU.
 	// Currently, we use the length of the JSON array in
@@ -111,7 +107,7 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 			name:         cfg.Name,
 			version:      cfg.Version,
 			pdata:        data,
-			cgroupv2ID:   cgroupv2ID,
+			cgroupv2ID:   cgroups,
 			traceEvents:  xsync.NewRWMutex(originsMap),
 			hostmetadata: hostmetadata,
 			runLoop: &runLoop{
