@@ -545,14 +545,14 @@ func (g *Gsym) locationsForInlineInfo(info inlineInfo, addr uint64) ([]SourceLoc
 		return locations, err
 	}
 
-	file, err := g.GetFile(info.FileIndex)
-	if err != nil {
-		return locations, err
-	}
+	//file, err := g.GetFile(info.FileIndex)
+	//if err != nil {
+	//	return locations, err
+	//}
 
 	loc := SourceLocation{
-		Name:   name,
-		File:   file,
+		Name: name,
+		//File:   file,
 		Line:   info.Line,
 		Offset: uint32(addr - info.Ranges[0].Start),
 	}

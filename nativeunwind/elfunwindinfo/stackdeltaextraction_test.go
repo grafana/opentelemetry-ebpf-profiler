@@ -162,11 +162,6 @@ func TestExtractStackDeltasFromFilename(t *testing.T) {
 	require.Equal(t, data.Deltas[:len(firstDeltas)], firstDeltas)
 }
 
-func BenchmarkClickHouse(b *testing.B) {
-	path := "/home/korniltsev/p/clickhouse"
-	bench(b, path, WithDeltaSizeLimit(-1))
-}
-
 func bench(b *testing.B, path string, limit ExtractOption) {
 	ref := pfelf.NewReference(path, pfelf.SystemOpener)
 	var ii *sdtypes.IntervalData
@@ -180,14 +175,6 @@ func bench(b *testing.B, path string, limit ExtractOption) {
 }
 func BenchmarkSelf(b *testing.B) {
 	bench(b, "/proc/self/exe", WithDeltaSizeLimit(-1))
-}
-
-func TestClickhouse(b *testing.T) {
-	path := "/home/korniltsev/p/clickhouse"
-	ref := pfelf.NewReference(path, pfelf.SystemOpener)
-	interval := &sdtypes.IntervalData{}
-	err := ExtractELF(ref, interval, WithDeltaSizeLimit(-1))
-	require.NoError(b, err)
 }
 
 func TestSelf(b *testing.T) {
