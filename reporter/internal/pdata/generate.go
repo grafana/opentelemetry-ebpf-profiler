@@ -183,8 +183,6 @@ func (p *Pdata) setProfile(
 				} else {
 					fileIDInfo := fileIDInfoLock.RLock()
 					if si, exists := (*fileIDInfo)[traceInfo.Linenos[i]]; exists {
-						//line.SetLine(int64(si.LineNumber))
-
 						line.SetFunctionIndex(createFunctionEntry(funcMap,
 							si.FunctionName, "" /*si.FilePath*/))
 					} else {

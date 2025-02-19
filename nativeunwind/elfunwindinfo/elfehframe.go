@@ -1206,12 +1206,11 @@ func (ee *elfExtractor) walkBinSearchTable(parsedFile *pfelf.File, ehFrameHdrSec
 		if ee.deltaSizeLimit > 0 {
 			deltasSize := len(*ee.deltas) * int(unsafe.Sizeof(sdtypes.StackDelta{}))
 			if deltasSize > ee.deltaSizeLimit {
-				return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize, ee.deltaSizeLimit)
+				return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize,
+					ee.deltaSizeLimit)
 			}
 		}
-
 	}
-
 	return nil
 }
 

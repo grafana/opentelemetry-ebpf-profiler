@@ -49,7 +49,11 @@ func NewProfileBuilders(options BuildersOptions) *ProfileBuilders {
 	return &ProfileBuilders{Builders: make(map[builderHashKey]*ProfileBuilder), opt: options}
 }
 
-func (b *ProfileBuilders) BuilderForSample(target *sd.Target, pid uint32, st libpf.Origin) *ProfileBuilder {
+func (b *ProfileBuilders) BuilderForSample(
+	target *sd.Target,
+	pid uint32,
+	st libpf.Origin,
+) *ProfileBuilder {
 	labelsHash, _ := target.Labels()
 
 	k := builderHashKey{labelsHash: labelsHash, sampleType: st}
@@ -168,18 +172,18 @@ func (p *ProfileBuilder) NewSample(locSize int) *profile.Sample {
 }
 
 func (p *ProfileBuilder) AddValue(v int64, sample *profile.Sample) {
-	sample.Value[0] += int64(v) * p.Profile.Period
+	sample.Value[0] += v * p.Profile.Period
 }
 
-func (p *ProfileBuilder) Location(frameId libpf.FrameID) (*profile.Location, bool) {
-	loc, ok := p.locations[frameId]
+func (p *ProfileBuilder) Location(frameID libpf.FrameID) (*profile.Location, bool) {
+	loc, ok := p.locations[frameID]
 	if ok {
 		return loc, false
 	}
 	loc = p.p.locations.pop()
 	loc.ID = uint64(len(p.Profile.Location) + 1)
 	loc.Mapping = p.dummyMapping
-	p.locations[frameId] = loc
+	p.locations[frameID] = loc
 	p.Profile.Location = append(p.Profile.Location, loc)
 	return loc, true
 }

@@ -68,11 +68,8 @@ type ExecInfo struct {
 
 // SourceInfo allows mapping a frame to its source origin.
 type SourceInfo struct {
-	//LineNumber     libpf.SourceLineno
-	//FunctionOffset uint32
 	FunctionName  string
 	FunctionNames *[]string
-	//FilePath       string
 }
 
 // FuncInfo is a helper to construct profile.Function messages.

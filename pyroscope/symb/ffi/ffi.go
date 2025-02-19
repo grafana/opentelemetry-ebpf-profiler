@@ -12,6 +12,7 @@ SymblibStatus rangeVisitorWrapper(void* user_data, SymblibRange* range);
 */
 import "C"
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -21,23 +22,23 @@ import (
 func symlibError(c C.SymblibStatus) error {
 	switch c {
 	case C.SymblibStatus(0):
-		return fmt.Errorf("OK: not actually an error")
+		return errors.New("OK: not actually an error")
 	case C.SymblibStatus(1):
-		return fmt.Errorf("IO error")
+		return errors.New("IO error")
 	case C.SymblibStatus(2):
-		return fmt.Errorf("IO error: file not found")
+		return errors.New("IO error: file not found")
 	case C.SymblibStatus(3):
-		return fmt.Errorf("Object file reading error")
+		return errors.New("object file reading error")
 	case C.SymblibStatus(4):
-		return fmt.Errorf("DWARF reading error")
+		return errors.New("DWARF reading error")
 	case C.SymblibStatus(5):
-		return fmt.Errorf("Symbol conversion error")
+		return errors.New("symbol conversion error")
 	case C.SymblibStatus(6):
-		return fmt.Errorf("Return pad extraction error")
+		return errors.New("return pad extraction error")
 	case C.SymblibStatus(7):
-		return fmt.Errorf("Invalid UTF-8")
+		return errors.New("invalid UTF-8")
 	case C.SymblibStatus(8):
-		return fmt.Errorf("The channel was already closed in a previous call")
+		return errors.New("the channel was already closed in a previous call")
 	default:
 		return fmt.Errorf("unknown error code: %v", c)
 	}

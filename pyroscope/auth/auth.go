@@ -3,12 +3,13 @@ package auth
 import (
 	"context"
 	"encoding/base64"
-	"google.golang.org/grpc"
 	"os"
 	"strings"
+
+	"google.golang.org/grpc"
 )
 
-func NewBasicAuth(user string, passwordFile string) (grpc.CallOption, error) {
+func NewBasicAuth(user, passwordFile string) (grpc.CallOption, error) {
 	basicAuth := func(username, password string) string {
 		auth := username + ":" + password
 		return base64.StdEncoding.EncodeToString([]byte(auth))
@@ -27,7 +28,10 @@ type BasicAuthRPCCreds struct {
 	header string
 }
 
-func (b *BasicAuthRPCCreds) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+func (b *BasicAuthRPCCreds) GetRequestMetadata(
+	context.Context,
+	...string,
+) (map[string]string, error) {
 	return map[string]string{
 		"Authorization": b.header,
 	}, nil

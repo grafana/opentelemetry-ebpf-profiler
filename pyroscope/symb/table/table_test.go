@@ -1,14 +1,11 @@
 package table
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"reflect"
 	"strconv"
 	"strings"
@@ -70,7 +67,7 @@ func createTestFile(t testing.TB) string {
 		length := uint32(len(s))
 		err = binary.Write(file, binary.LittleEndian, length)
 		require.NoError(t, err)
-		_, err = file.Write([]byte(s))
+		_, err = file.WriteString(s)
 		require.NoError(t, err)
 	}
 
@@ -125,10 +122,10 @@ func TestSymbTab(t *testing.T) {
 
 func TestSymbTabErrors(t *testing.T) {
 	_, err := OpenPath("nonexistent")
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	_, err = OpenPath("")
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestSymbTabClose(t *testing.T) {
@@ -150,15 +147,13 @@ func BenchmarkFindFunc(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		symtab.Lookup(0x1075) // Test with an inlined function case
+		_, err = symtab.Lookup(0x1075) // Test with an inlined function case
+		require.NoError(b, err)
 	}
 }
 
 func TestLibc(t *testing.T) {
 	var err error
-	//libc, err := os.Open("/usr/lib/x86_64-linux-gnu/libc.so.6")
-	//require.NoError(t, err)
-	//defer libc.Close()
 	libc, err := os.Open("/usr/lib/debug/.build-id/6d/64b17fbac799e68da7ebd9985ddf9b5cb375e6.debug")
 	require.NoError(t, err)
 	defer libc.Close()
@@ -166,19 +161,17 @@ func TestLibc(t *testing.T) {
 	tableFile, err := os.Create(t.TempDir() + "/out")
 	require.NoError(t, err)
 	defer tableFile.Close()
-	err = FDToTable(libc, nil, tableFile)
+	err = FDToTable(libc, tableFile)
 	require.NoError(t, err)
 
-	//tableFile, err := os.Open("/tmp/symb-cache/e8735d5b23f3627ce8735d5b23f3627c")
-	//require.NoError(t, err)
-
-	tableFile.Seek(io.SeekStart, 0)
+	_, err = tableFile.Seek(0, io.SeekStart)
+	require.NoError(t, err)
 	table, err := OpenFile(tableFile)
 	require.NoError(t, err)
 
 	check := func(addr uint64, expected []string) {
 		syms, err := table.Lookup(addr)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		fmt.Printf("%v\n", syms)
 		assert.NotEmpty(t, syms)
 		assert.Equal(t, expected, syms)
@@ -187,7 +180,8 @@ func TestLibc(t *testing.T) {
 	check(0x18833e, []string{"__memcmp_avx2_movbe"})
 	check(0x9ca94, []string{"start_thread"})
 	check(0x129c3c, []string{"__clone3"})
-	check(0x98d61, []string{"__futex_abstimed_wait_common64", "__futex_abstimed_wait_common", "__GI___futex_abstimed_wait_cancelable64"})
+	check(0x98d61, []string{"__futex_abstimed_wait_common64",
+		"__futex_abstimed_wait_common", "__GI___futex_abstimed_wait_cancelable64"})
 	check(0x9bc7e, []string{"__pthread_cond_wait_common", "___pthread_cond_timedwait64"})
 }
 
@@ -201,10 +195,11 @@ func BenchmarkLibc(b *testing.B) {
 	tableFile, err := os.Create(b.TempDir() + "/out")
 	require.NoError(b, err)
 	defer tableFile.Close()
-	err = FDToTable(libc, nil, tableFile)
+	err = FDToTable(libc, tableFile)
 	require.NoError(b, err)
 
-	tableFile.Seek(io.SeekStart, 0)
+	_, err = tableFile.Seek(0, io.SeekStart)
+	require.NoError(b, err)
 	table, err := OpenFile(tableFile)
 	require.NoError(b, err)
 	b.ResetTimer()
@@ -219,7 +214,6 @@ func BenchmarkLibc(b *testing.B) {
 }
 
 func TestSelfAddrLookup(t *testing.T) {
-
 	tests := []struct {
 		addr uint64
 		name string
@@ -237,9 +231,9 @@ func TestSelfAddrLookup(t *testing.T) {
 	dstf, err := os.Create(dst)
 	require.NoError(t, err)
 
-	err = FDToTable(exef, nil, dstf)
-	assert.NoError(t, err)
-	assert.NoError(t, err)
+	err = FDToTable(exef, dstf)
+	require.NoError(t, err)
+	require.NoError(t, err)
 
 	table, err := OpenPath(dst)
 	require.NoError(t, err)
@@ -259,15 +253,12 @@ func TestSelfAddrLookup(t *testing.T) {
 func TestLibcAddrLookup(t *testing.T) {
 	dst := "../testdata/libc.gtbl"
 
-	//err := ExeToTable("/lib/x86_64-linux-gnu/libc.so.6", dst)
-	//assert.NoError(t, err)
-
 	table, err := OpenPath(dst)
 	require.NoError(t, err)
 	require.NotNil(t, table)
 
 	readelfData, err := os.ReadFile("../testdata/libc_readelf_funcs.txt")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	expectedFuncLines := strings.Split(string(readelfData), "\n")
 
 	checked := 0
@@ -283,14 +274,14 @@ func TestLibcAddrLookup(t *testing.T) {
 			name = strings.Split(name, "@")[0]
 		}
 		iaddr, err := strconv.ParseUint(addr, 16, 64)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		if _, ok := checkedAddresses[iaddr]; ok {
 			continue
 		}
 		checkedAddresses[iaddr] = struct{}{}
-		assert.True(t, iaddr >= 0 && iaddr <= math.MaxUint32)
+		assert.LessOrEqual(t, iaddr, uint64(math.MaxUint32))
 
-		res, _ := table.Lookup(uint64(iaddr))
+		res, _ := table.Lookup(iaddr)
 		require.NotEmpty(t, res)
 		require.Len(t, res, 1)
 		assert.Contains(t, name, res[0])
@@ -298,25 +289,4 @@ func TestLibcAddrLookup(t *testing.T) {
 	}
 
 	assert.Greater(t, checked, 100)
-}
-
-func loadSyms(t *testing.T, dbgExePath string) map[string]string {
-	cmd := exec.Command("go", "tool", "nm", dbgExePath)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v: %v\n%s", cmd, err, string(out))
-	}
-	syms := make(map[string]string)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		f := strings.Fields(scanner.Text())
-		if len(f) < 3 {
-			continue
-		}
-		syms[f[2]] = f[0]
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("error reading symbols: %v", err)
-	}
-	return syms
 }

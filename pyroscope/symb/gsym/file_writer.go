@@ -16,7 +16,6 @@ type FileWriter struct {
 }
 
 func NewFileWriter(f *os.File) *FileWriter {
-
 	return &FileWriter{inner: f, bw: bufio.NewWriter(f)}
 }
 
@@ -67,12 +66,12 @@ func (w *FileWriter) WriteULEB(v uint64) {
 		return
 	}
 	for {
-		byte := uint8(v & 0x7f)
+		b := uint8(v & 0x7f)
 		v >>= 7
 		if v != 0 {
-			byte |= 0x80
+			b |= 0x80
 		}
-		w.WriteU8(byte)
+		w.WriteU8(b)
 		if v == 0 {
 			break
 		}

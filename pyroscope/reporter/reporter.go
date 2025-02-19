@@ -1,7 +1,7 @@
 package reporter
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/elastic/go-freelru"
 	"github.com/go-kit/log"
@@ -15,7 +15,14 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/times"
 )
 
-func New(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg *controller.Config, sd pyrosd.TargetFinder, nfs *irsymcache.FSCache, consumer PPROFConsumer) (reporter.Reporter, error) {
+func New(
+	log log.Logger,
+	cgroups *freelru.SyncedLRU[libpf.PID, string],
+	cfg *controller.Config,
+	sd pyrosd.TargetFinder,
+	nfs *irsymcache.FSCache,
+	consumer PPROFConsumer,
+) (reporter.Reporter, error) {
 	intervals := times.New(cfg.MonitorInterval,
 		cfg.ReporterInterval, cfg.ProbabilisticInterval)
 	kernelVersion, err := helpers.GetKernelVersion()
@@ -23,7 +30,7 @@ func New(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg *con
 		return nil, err
 	}
 	if cfg.CollAgentAddr == "" {
-		return nil, fmt.Errorf("missing otlp collector address")
+		return nil, errors.New("missing otlp collector address")
 	}
 
 	// hostname and sourceIP will be populated from the root namespace.
@@ -74,5 +81,4 @@ func New(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg *con
 		ExtraSampleAttrProd:        sap,
 	}
 	return reporter.NewOTLP(reporterConfig, cgroups)
-
 }

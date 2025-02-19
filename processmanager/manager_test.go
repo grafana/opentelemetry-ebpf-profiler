@@ -646,9 +646,9 @@ func TestDynamicProfilingPolicy(t *testing.T) {
 		true,
 		nil,
 		policy)
-	defer manager.Close()
 	require.NoError(t, err)
-	manager.metricsAddSlice = func(m []metrics.Metric) {}
+	defer manager.Close()
+	manager.metricsAddSlice = func([]metrics.Metric) {}
 
 	pid := libpf.PID(os.Getpid())
 	pr := newTestProcess(pid)

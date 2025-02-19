@@ -19,7 +19,10 @@ type ServiceDiscoveryTargetsOnlyPolicy struct {
 	Discovery sd.TargetFinder
 }
 
-func (s *ServiceDiscoveryTargetsOnlyPolicy) ProfilingEnabled(p process.Process, mappings []process.Mapping) bool {
+func (s *ServiceDiscoveryTargetsOnlyPolicy) ProfilingEnabled(
+	p process.Process,
+	_ []process.Mapping,
+) bool {
 	target := s.Discovery.FindTarget(uint32(p.PID()))
 	return target != nil
 }

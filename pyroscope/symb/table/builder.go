@@ -2,7 +2,7 @@ package table
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"sort"
@@ -27,12 +27,12 @@ func (sb *stringBuilder) add(s string) (uint32, error) {
 	}
 
 	if sb.offset >= uint64(^uint32(0)) {
-		return 0, fmt.Errorf("string offset overflow")
+		return 0, errors.New("string offset overflow")
 	}
 
 	strLen := len(s)
 	if strLen >= int(^uint32(0)) {
-		return 0, fmt.Errorf("string length overflow")
+		return 0, errors.New("string length overflow")
 	}
 
 	lenBytes := make([]byte, 4)
@@ -59,13 +59,13 @@ func newRangesBuilder() *rangesBuilder {
 }
 
 func (rb *rangesBuilder) add(va, length, depth, funcID uint32) {
-	entry := entry{
+	e := entry{
 		va:     va,
 		length: length,
 		depth:  depth,
 		fun:    funcID,
 	}
-	rb.entries = append(rb.entries, entry)
+	rb.entries = append(rb.entries, e)
 }
 
 func (rb *rangesBuilder) sort() {
@@ -82,7 +82,7 @@ type rangeCollector struct {
 	rb *rangesBuilder
 }
 
-func (rc *rangeCollector) VisitRange(va uint64, length uint32, depth uint32, function string) {
+func (rc *rangeCollector) VisitRange(va uint64, length, depth uint32, function string) {
 	if va >= uint64(^uint32(0)) {
 		return // Skip if VA doesn't fit in uint32
 	}
@@ -98,18 +98,18 @@ func (rc *rangeCollector) VisitRange(va uint64, length uint32, depth uint32, fun
 func write(output *os.File, rc *rangeCollector) error {
 	rb := rc.rb
 	sb := rc.sb
-	header := header{
+	hdr := header{
 		magic:   magic,
 		version: version,
 	}
 	headerBytes := make([]byte, 16)
-	binary.LittleEndian.PutUint32(headerBytes[0:], header.magic)
-	binary.LittleEndian.PutUint32(headerBytes[4:], header.version)
+	binary.LittleEndian.PutUint32(headerBytes[0:], hdr.magic)
+	binary.LittleEndian.PutUint32(headerBytes[4:], hdr.version)
 	if err := writeAligned(output, headerBytes); err != nil {
 		return err
 	}
 
-	rangesOffset, err := output.Seek(0, os.SEEK_CUR)
+	rangesOffset, err := output.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
@@ -120,38 +120,38 @@ func write(output *os.File, rc *rangeCollector) error {
 		binary.LittleEndian.PutUint32(entryBytes[4:], entry.length)
 		binary.LittleEndian.PutUint32(entryBytes[8:], entry.depth)
 		binary.LittleEndian.PutUint32(entryBytes[12:], entry.fun)
-		if err := writeAligned(output, entryBytes); err != nil {
+		if err = writeAligned(output, entryBytes); err != nil {
 			return err
 		}
 	}
 
-	stringsOffset, err := output.Seek(0, os.SEEK_CUR)
+	stringsOffset, err := output.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
 
-	if err := writeAligned(output, sb.buf); err != nil {
+	if err = writeAligned(output, sb.buf); err != nil {
 		return err
 	}
 
-	header.rangesOffset = uint64(rangesOffset)
-	header.stringsOffset = uint64(stringsOffset)
+	hdr.rangesOffset = uint64(rangesOffset)
+	hdr.stringsOffset = uint64(stringsOffset)
 
-	if _, err := output.Seek(0, os.SEEK_SET); err != nil {
+	if _, err = output.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
 	headerBytes = make([]byte, 32)
-	binary.LittleEndian.PutUint32(headerBytes[0:], header.magic)
-	binary.LittleEndian.PutUint32(headerBytes[4:], header.version)
-	binary.LittleEndian.PutUint64(headerBytes[8:], header.rangesOffset)
-	binary.LittleEndian.PutUint64(headerBytes[16:], header.stringsOffset)
+	binary.LittleEndian.PutUint32(headerBytes[0:], hdr.magic)
+	binary.LittleEndian.PutUint32(headerBytes[4:], hdr.version)
+	binary.LittleEndian.PutUint64(headerBytes[8:], hdr.rangesOffset)
+	binary.LittleEndian.PutUint64(headerBytes[16:], hdr.stringsOffset)
 
-	if _, err := output.Write(headerBytes); err != nil {
+	if _, err = output.Write(headerBytes); err != nil {
 		return err
 	}
 
-	if _, err := output.Seek(0, io.SeekStart); err != nil {
+	if _, err = output.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	return nil
@@ -163,7 +163,7 @@ func writeAligned(f *os.File, data []byte) error {
 	}
 
 	// Align to 16 bytes
-	currentPos, err := f.Seek(0, os.SEEK_CUR)
+	currentPos, err := f.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}

@@ -171,7 +171,9 @@ func bench(b *testing.B, path string, limit ExtractOption) {
 		require.NoError(b, err)
 		ii = interval
 	}
-	fmt.Printf("Extracted %d intervals size %d \n", len(ii.Deltas), len(ii.Deltas)*int(unsafe.Sizeof(sdtypes.StackDelta{})))
+	fmt.Printf("Extracted %d intervals size %d \n",
+		len(ii.Deltas),
+		len(ii.Deltas)*int(unsafe.Sizeof(sdtypes.StackDelta{})))
 }
 func BenchmarkSelf(b *testing.B) {
 	bench(b, "/proc/self/exe", WithDeltaSizeLimit(-1))

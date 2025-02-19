@@ -305,7 +305,8 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		elfunwindinfo.WithDeltaSizeLimit(cfg.PyroscopeDeltasSizeLimit),
 		elfunwindinfo.WithElfSizeLimit(cfg.PyroscopeStackDeltaElfSizeLimitBytes),
 	)
-	log.Infof("Stack delta provider initialized with size limit %d bytes and ELF size limit %d bytes",
+	log.Infof(
+		"Stack delta provider initialized with size limit %d bytes and ELF size limit %d bytes",
 		cfg.PyroscopeDeltasSizeLimit, cfg.PyroscopeStackDeltaElfSizeLimitBytes)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, sdp,

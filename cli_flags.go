@@ -6,13 +6,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	controller2 "go.opentelemetry.io/ebpf-profiler/pyroscope/internalshim/controller"
 	"os"
 	"time"
 
 	"github.com/peterbourgon/ff/v3"
-
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+	controller2 "go.opentelemetry.io/ebpf-profiler/pyroscope/internalshim/controller"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )

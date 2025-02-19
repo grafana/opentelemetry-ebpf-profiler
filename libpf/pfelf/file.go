@@ -624,16 +624,17 @@ func (f *File) OpenDebugLink(elfFilePath string, elfOpener ELFOpener) (
 
 	if buildID != "" {
 		for _, debugDir := range globalDebugDirs {
-			if len(buildID) >= 3 {
-				prefix := buildID[:2]
-				suffix := buildID[2:]
-				debugFile = filepath.Join(debugDir, ".build-id", prefix, suffix+".debug")
+			if len(buildID) < 3 {
+				continue
+			}
+			prefix := buildID[:2]
+			suffix := buildID[2:]
+			debugFile = filepath.Join(debugDir, ".build-id", prefix, suffix+".debug")
 
-				debugELF, err = elfOpener.OpenELF(debugFile)
-				if err == nil {
-					f.debuglinkPath = debugFile
-					return debugELF, debugFile
-				}
+			debugELF, err = elfOpener.OpenELF(debugFile)
+			if err == nil {
+				f.debuglinkPath = debugFile
+				return debugELF, debugFile
 			}
 		}
 	}
@@ -655,10 +656,7 @@ func (f *File) OpenDebugLink(elfFilePath string, elfOpener ELFOpener) (
 		if filepath.IsAbs(relPath) {
 			relPath = relPath[1:] // Remove leading "/"
 			searchPaths = append(searchPaths, filepath.Join(debugDir, relPath, linkName))
-		} else {
-			//todo
-		}
-
+		} // todo handle relative case
 	}
 
 	for _, path := range searchPaths {

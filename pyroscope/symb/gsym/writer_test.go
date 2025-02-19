@@ -2,16 +2,16 @@ package gsym
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGSYMWriter(t *testing.T) {
-
 	w := NewWriter()
 	w.AddFuncInfo(FunctionInfo{
 		Addr: 0xef,
@@ -63,8 +63,10 @@ func TestGSYMWriter(t *testing.T) {
 
 	dir := t.TempDir()
 	f, err := os.Create(filepath.Join(dir, "test.gsym"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer f.Close()
-	require.NoError(t, err)
 	err = w.Encode(f)
 	require.NoError(t, err)
 	_, err = f.Seek(0, io.SeekStart)
@@ -97,15 +99,12 @@ func TestGSYMWriter(t *testing.T) {
 			}
 			if len(testdatum.names) == 0 {
 				require.Error(t, err)
-
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, testdatum.names, actual)
 			}
-
 		})
 	}
-
 }
 
 func TestEmptyWriterEncode(t *testing.T) {

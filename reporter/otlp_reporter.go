@@ -63,7 +63,6 @@ type OTLPReporter struct {
 
 // NewOTLP returns a new instance of OTLPReporter
 func NewOTLP(cfg *Config, cgroups *lru.SyncedLRU[libpf.PID, string]) (*OTLPReporter, error) {
-
 	// Set a lifetime to reduce risk of invalid data in case of PID reuse.
 	cgroups.SetLifetime(90 * time.Second)
 
@@ -281,8 +280,7 @@ func setupGrpcConnection(parent context.Context, cfg *Config,
 		opts = append(opts,
 			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 				// Support only TLS1.3+ with valid CA certificates
-				MinVersion:         tls.VersionTLS13,
-				InsecureSkipVerify: true, // todo why does it complain?
+				MinVersion: tls.VersionTLS13,
 			})))
 	}
 

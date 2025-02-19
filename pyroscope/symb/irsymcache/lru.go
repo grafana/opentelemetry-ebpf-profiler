@@ -12,16 +12,16 @@ type entry[K comparable, V any] struct {
 }
 
 type LRUCache[K comparable, V any] struct {
-	mu          sync.Mutex
-	maxSize     int
-	size        int
-	ll          *list.List
-	cache       map[K]*list.Element
-	putCount    int
-	createCount int
-	evictCount  int
-	hitCount    int
-	missCount   int
+	mu       sync.Mutex
+	maxSize  int
+	size     int
+	ll       *list.List
+	cache    map[K]*list.Element
+	putCount int
+
+	evictCount int
+	hitCount   int
+	missCount  int
 
 	sizeOf  func(key K, value V) int
 	onEvict func(key K, value V)

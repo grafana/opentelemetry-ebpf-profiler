@@ -58,15 +58,6 @@ func (ii *InlineInfo) Encode(w *FileWriter, baseAddr uint64) {
 	}
 }
 
-func (ii *InlineInfo) containsRange(r AddressRange) bool {
-	for _, parentRange := range ii.Ranges {
-		if r.Start >= parentRange.Start && r.End <= parentRange.End {
-			return true
-		}
-	}
-	return false
-}
-
 func boolToU8(b bool) uint8 {
 	if b {
 		return 1
@@ -79,10 +70,8 @@ func (funcInfo *FunctionInfo) encode(w *FileWriter) {
 	w.WriteU32(uint32(funcInfo.Name))
 	if funcInfo.InlineInfo != nil && funcInfo.InlineInfo.IsValid() {
 		w.WriteU32(uint32(InfoTypeInline))
-		//sizeOffset := w.Tell()
 		w.WriteU32(0)
 		funcInfo.InlineInfo.Encode(w, funcInfo.Addr)
-		//w.Fixup32(uint32(w.Tell()-sizeOffset-4), sizeOffset) // it is not used by the reader
 	}
 	w.WriteU32(uint32(InfoTypeEndOfList))
 	w.WriteU32(0)

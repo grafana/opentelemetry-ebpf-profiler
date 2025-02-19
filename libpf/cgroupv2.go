@@ -35,7 +35,11 @@ func LookupCgroupv2(cgrouplru *lru.SyncedLRU[PID, string], pid PID) (string, err
 	return LookupCgroupFromReader(cgrouplru, pid, f)
 }
 
-func LookupCgroupFromReader(cgrouplru *lru.SyncedLRU[PID, string], pid PID, f io.Reader) (string, error) {
+func LookupCgroupFromReader(
+	cgrouplru *lru.SyncedLRU[PID, string],
+	pid PID,
+	f io.Reader,
+) (string, error) {
 	var genericCgroupv2 string
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 512)

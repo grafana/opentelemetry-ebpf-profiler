@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func defaultSizeOf[K comparable, V any](key K, value V) int {
+func defaultSizeOf[K comparable, V any](K, V) int {
 	return 1
 }
 
@@ -128,7 +128,7 @@ func TestLRUCache_CustomSize(t *testing.T) {
 	}
 
 	cache := newCustomCache(5)
-	cache.LRUCache.sizeOf = func(key string, value string) int {
+	cache.LRUCache.sizeOf = func(_ string, value string) int {
 		return len(value)
 	}
 
@@ -161,7 +161,7 @@ func TestLRUCache_CustomSize(t *testing.T) {
 }
 
 func TestLRUCache_evict(t *testing.T) {
-	cache := New[string, int](1024, func(key string, value int) int {
+	cache := New[string, int](1024, func(_ string, value int) int {
 		return value
 	})
 	cache.Put("f1", 512)
@@ -178,5 +178,4 @@ func TestLRUCache_evict(t *testing.T) {
 	assert.True(t, ok)
 	_, ok = cache.Get("f3")
 	assert.True(t, ok)
-
 }

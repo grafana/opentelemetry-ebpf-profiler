@@ -2,6 +2,7 @@ package table
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -69,20 +70,20 @@ func OpenFile(f *os.File) (*Table, error) {
 	res.file = f
 
 	headerBuf := make([]byte, unsafe.Sizeof(header{}))
-	if _, err := res.file.Read(headerBuf); err != nil {
+	if _, readErr := res.file.Read(headerBuf); readErr != nil {
 		res.Close()
-		return nil, err
+		return nil, readErr
 	}
 
 	hdr := (*header)(unsafe.Pointer(&headerBuf[0]))
 
 	if hdr.magic != magic {
 		res.Close()
-		return nil, fmt.Errorf("invalid magic number")
+		return nil, errors.New("invalid magic number")
 	}
 	if hdr.version != version {
 		res.Close()
-		return nil, fmt.Errorf("unsupported version")
+		return nil, errors.New("unsupported version")
 	}
 
 	res.rangesOffset = hdr.rangesOffset
@@ -100,15 +101,12 @@ func OpenFile(f *os.File) (*Table, error) {
 			r.file.Close()
 		}
 	})
-	//for _, e := range res.ranges {
-	//	fmt.Printf("        range %8x %8x %s\n", e.va, e.length, res.extractFuncName(e.fun))
-	//}
 	return res, nil
 }
 
 func (st *Table) getEntry(i int) (entry, error) {
 	if i < 0 || uint64(i) >= st.rangesCount {
-		return entry{}, fmt.Errorf("index out of bounds")
+		return entry{}, errors.New("index out of bounds")
 	}
 
 	entrySize := int64(unsafe.Sizeof(entry{}))
@@ -126,13 +124,10 @@ func (st *Table) getEntry(i int) (entry, error) {
 func (st *Table) Close() {
 	if st.file != nil {
 		_ = st.file.Close()
-		st.file = nil
-		return
 	}
-	return
 }
 
-func (st *Table) func_(offset uint32) string {
+func (st *Table) function(offset uint32) string {
 	var strLen uint32
 	buf := make([]byte, 4)
 	if _, err := st.file.ReadAt(buf, int64(st.strOff+uint64(offset))); err != nil {
@@ -152,7 +147,7 @@ func (st *Table) func_(offset uint32) string {
 func (st *Table) Lookup(addr64 uint64) ([]string, error) {
 	var result []string
 	if addr64 >= math.MaxUint32 {
-		return result, fmt.Errorf("table address out of bounds")
+		return result, errors.New("table address out of bounds")
 	}
 	addr := uint32(addr64)
 	var err error
@@ -176,7 +171,7 @@ func (st *Table) Lookup(addr64 uint64) ([]string, error) {
 
 		covered := it.va <= addr && addr < it.va+it.length
 		if covered {
-			name := st.func_(it.fun)
+			name := st.function(it.fun)
 			result = append(result, name)
 		}
 		if it.depth == 0 {
@@ -195,7 +190,7 @@ func (st *Table) String() string {
 	return fmt.Sprintf("ranges: %d", st.rangesCount)
 }
 
-func FDToTable(executable *os.File, dwarfSup *os.File, output *os.File) error {
+func FDToTable(executable, output *os.File) error {
 	sb := newStringBuilder()
 	rb := newRangesBuilder()
 	rc := &rangeCollector{sb: sb, rb: rb}
@@ -209,7 +204,11 @@ func FDToTable(executable *os.File, dwarfSup *os.File, output *os.File) error {
 	if err2 != nil {
 		return err2
 	}
-	log.Debugf("converted %s -> %s : %d ranges, %d strings", executable.Name(), output.Name(), len(rb.entries), len(sb.unique))
+	log.Debugf("converted %s -> %s : %d ranges, %d strings",
+		executable.Name(),
+		output.Name(),
+		len(rb.entries),
+		len(sb.unique))
 
 	return nil
 }

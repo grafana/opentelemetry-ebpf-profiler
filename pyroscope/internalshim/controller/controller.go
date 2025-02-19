@@ -1,7 +1,10 @@
 package controller
 
-import "context"
-import "go.opentelemetry.io/ebpf-profiler/internal/controller"
+import (
+	"context"
+
+	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+)
 
 type Controller struct {
 	*controller.Controller

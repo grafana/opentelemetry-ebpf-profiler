@@ -134,7 +134,9 @@ func WithElfSizeLimit(limit int) ExtractOption {
 
 // ExtractELF takes a pfelf.Reference and provides the stack delta
 // intervals for it in the interval parameter.
-func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData, opt ...ExtractOption) error {
+func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData,
+	opt ...ExtractOption,
+) error {
 	elfFile, err := elfRef.GetELF()
 	if err != nil {
 		return err
@@ -155,7 +157,8 @@ func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData, opt ...
 	}
 	elfSize := elfFile.FileSize()
 	if ee.eflSizeLimit > 0 && elfSize > ee.eflSizeLimit {
-		return fmt.Errorf("file size %d exceeds ELFStackDeltaProvider elf limit %d", elfSize, ee.eflSizeLimit)
+		return fmt.Errorf("file size %d exceeds ELFStackDeltaProvider elf limit %d",
+			elfSize, ee.eflSizeLimit)
 	}
 
 	if err = ee.parseGoPclntab(); err != nil {

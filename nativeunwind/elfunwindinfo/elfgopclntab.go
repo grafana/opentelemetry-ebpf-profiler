@@ -586,7 +586,16 @@ func (ee *elfExtractor) parseGoPclntab() error {
 }
 
 // parseX86pclntabFunc extracts interval information from x86_64 based pclntabFunc.
-func parseX86pclntabFunc(ee *elfExtractor, deltas *sdtypes.StackDeltaArray, fun *pclntabFunc, dataLen uintptr, pctab []byte, strategy int, i uint64, quantum uint8) error {
+func parseX86pclntabFunc(
+	ee *elfExtractor,
+	deltas *sdtypes.StackDeltaArray,
+	fun *pclntabFunc,
+	dataLen uintptr,
+	pctab []byte,
+	strategy int,
+	i uint64,
+	quantum uint8,
+) error {
 	switch {
 	case strategy == strategyFramePointer:
 		// Use stack frame-pointer delta
@@ -623,7 +632,8 @@ func parseX86pclntabFunc(ee *elfExtractor, deltas *sdtypes.StackDeltaArray, fun 
 			if ee.deltaSizeLimit > 0 {
 				deltasSize := len(*ee.deltas) * int(unsafe.Sizeof(sdtypes.StackDelta{}))
 				if deltasSize > ee.deltaSizeLimit {
-					return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize, ee.deltaSizeLimit)
+					return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize,
+						ee.deltaSizeLimit)
 				}
 			}
 		}
@@ -633,7 +643,15 @@ func parseX86pclntabFunc(ee *elfExtractor, deltas *sdtypes.StackDeltaArray, fun 
 }
 
 // parseArm64pclntabFunc extracts interval information from ARM64 based pclntabFunc.
-func parseArm64pclntabFunc(ee *elfExtractor, deltas *sdtypes.StackDeltaArray, fun *pclntabFunc, dataLen uintptr, pctab []byte, i uint64, quantum uint8) error {
+func parseArm64pclntabFunc(
+	ee *elfExtractor,
+	deltas *sdtypes.StackDeltaArray,
+	fun *pclntabFunc,
+	dataLen uintptr,
+	pctab []byte,
+	i uint64,
+	quantum uint8,
+) error {
 	if fun.pcspOff == 0 {
 		// Some CGO functions don't have PCSP info: skip them.
 		return nil
@@ -679,7 +697,8 @@ func parseArm64pclntabFunc(ee *elfExtractor, deltas *sdtypes.StackDeltaArray, fu
 		if ee.deltaSizeLimit > 0 {
 			deltasSize := len(*ee.deltas) * int(unsafe.Sizeof(sdtypes.StackDelta{}))
 			if deltasSize > ee.deltaSizeLimit {
-				return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize, ee.deltaSizeLimit)
+				return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize,
+					ee.deltaSizeLimit)
 			}
 		}
 	}

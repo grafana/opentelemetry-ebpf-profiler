@@ -9,8 +9,8 @@ import (
 type TableTableFactory struct {
 }
 
-func (t TableTableFactory) ConvertTable(src *os.File, dst *os.File) error {
-	return table.FDToTable(src, nil, dst)
+func (t TableTableFactory) ConvertTable(src, dst *os.File) error {
+	return table.FDToTable(src, dst)
 }
 
 func (t TableTableFactory) OpenTable(path string) (Table, error) {

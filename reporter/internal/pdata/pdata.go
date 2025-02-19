@@ -34,16 +34,14 @@ type Pdata struct {
 	ExtraNativeFrameSymbolizer samples.NativeFrameSymbolizer
 }
 
-func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uint32, extra samples.SampleAttrProducer, sym samples.NativeFrameSymbolizer) (*Pdata, error) {
+func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uint32,
+	extra samples.SampleAttrProducer, sym samples.NativeFrameSymbolizer) (*Pdata, error) {
 	executables, err :=
 		lru.NewSynced[libpf.FileID, samples.ExecInfo](executablesCacheElements, libpf.FileID.Hash32)
 	if err != nil {
 		return nil, err
 	}
 	executables.SetLifetime(ExecutableCacheLifetime) // Allow GC to clean stale items.
-	executables.SetOnEvict(func(id libpf.FileID, info samples.ExecInfo) {
-
-	})
 
 	frames, err := lru.NewSynced[libpf.FileID,
 		*xsync.RWMutex[map[libpf.AddressOrLineno]samples.SourceInfo]](
@@ -69,7 +67,13 @@ func (p *Pdata) Purge() {
 	p.Frames.PurgeExpired()
 }
 
-func (p Pdata) symbolizeNativeFrame(pid int64, loc *pprofile.Location, traceInfo *samples.TraceEvents, i int, funcMap map[samples.FuncInfo]int32) {
+func (p *Pdata) symbolizeNativeFrame(
+	pid int64,
+	loc *pprofile.Location,
+	traceInfo *samples.TraceEvents,
+	i int,
+	funcMap map[samples.FuncInfo]int32,
+) {
 	if p.ExtraNativeFrameSymbolizer == nil {
 		return
 	}
@@ -91,9 +95,9 @@ func (p Pdata) symbolizeNativeFrame(pid int64, loc *pprofile.Location, traceInfo
 			line := loc.Line().AppendEmpty()
 			line.SetFunctionIndex(createFunctionEntry(funcMap,
 				si.FunctionName, ""))
-		} else {
-			//todo add libfoo.so + 0xefef function for pyroscope rendering?
 		}
+		// else todo add libfoo.so + 0xefef function for pyroscope rendering?
+
 		if si.FunctionNames != nil {
 			for _, fn := range *si.FunctionNames {
 				line := loc.Line().AppendEmpty()
@@ -138,14 +142,12 @@ func (p Pdata) symbolizeNativeFrame(pid int64, loc *pprofile.Location, traceInfo
 	if !frameKnown(frameID) {
 		symbols, err := p.ExtraNativeFrameSymbolizer.Lookup(fileID, uint64(addr))
 		if err != nil {
-			if err != nil {
-				logrus.Error("msg", "Failed to symbolize native frame",
-					"fileID", fileID,
-					"addr", addr,
-					"err", err,
-					"pid", pid,
-				)
-			}
+			logrus.Error("msg", "Failed to symbolize native frame",
+				"fileID", fileID,
+				"addr", addr,
+				"err", err,
+				"pid", pid,
+			)
 		}
 		if len(symbols) > 0 {
 			si := frameMetadata(symbols)

@@ -107,7 +107,7 @@ func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping) (bool,
 	} else if mf, ok := info.mappings[m.Vaddr]; ok {
 		if *m == *mf {
 			// We try to update our information about a particular mapping we already know about.
-			return true, nil //todo does this break eim refcounting
+			return true, nil
 		}
 	}
 

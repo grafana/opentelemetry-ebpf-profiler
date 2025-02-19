@@ -164,10 +164,6 @@ type processInfo struct {
 	tsdInfo *tpbase.TSDInfo
 }
 
-type fileMappingInfo struct {
-	mappingsByAddress map[libpf.Address]*Mapping
-}
-
 // addMapping adds a mapping to the internal indices.
 func (pi *processInfo) addMapping(m Mapping) {
 	p := &m

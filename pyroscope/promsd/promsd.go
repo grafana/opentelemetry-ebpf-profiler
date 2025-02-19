@@ -2,7 +2,9 @@ package promsd
 
 import (
 	"context"
-	"fmt"
+	"os"
+	"time"
+
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -13,8 +15,6 @@ import (
 	"github.com/prometheus/prometheus/discovery/moby"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/sd"
-	"os"
-	"time"
 )
 
 // DefaultHTTPClientConfig for initializing objects
@@ -41,14 +41,10 @@ type DiscovererWithMetrics struct {
 	log      log.Logger
 }
 
-func NewK8SServiceDiscovery(logger log.Logger, callback func(exports Exports)) (*DiscovererWithMetrics, error) {
-	//discovery.kubernetes "local_pods" {
-	//	selectors {
-	//		field = "spec.nodeName=" + env("HOSTNAME")
-	//		role = "pod"
-	//	}
-	//	role = "pod"
-	//}
+func NewK8SServiceDiscovery(
+	logger log.Logger,
+	callback func(exports Exports),
+) (*DiscovererWithMetrics, error) {
 	hostname := os.Getenv("HOSTNAME")
 	_ = logger.Log("msg", "NewK8SServiceDiscovery", "hostname", hostname)
 	cfg := &kubernetes.SDConfig{
@@ -65,7 +61,8 @@ func NewK8SServiceDiscovery(logger log.Logger, callback func(exports Exports)) (
 	return NewDiscovererWithMetrics(cfg, reg, logger, callback)
 }
 
-func NewDockerServiceDiscovery(logger log.Logger, callback func(exports Exports)) (*DiscovererWithMetrics, error) {
+func NewDockerServiceDiscovery(logger log.Logger,
+	callback func(exports Exports)) (*DiscovererWithMetrics, error) {
 	cfg := &moby.DockerSDConfig{
 		HTTPClientConfig: DefaultHTTPClientConfig,
 		Host:             "unix:///var/run/docker.sock",
@@ -75,7 +72,10 @@ func NewDockerServiceDiscovery(logger log.Logger, callback func(exports Exports)
 	return NewDiscovererWithMetrics(cfg, reg, logger, callback)
 }
 
-func NewDiscovererWithMetrics(cfg promdiscovery.Config, reg prometheus.Registerer, logger log.Logger, callback func(exports Exports)) (*DiscovererWithMetrics, error) {
+func NewDiscovererWithMetrics(cfg promdiscovery.Config, reg prometheus.Registerer,
+	logger log.Logger,
+	callback func(exports Exports),
+) (*DiscovererWithMetrics, error) {
 	refreshMetrics := promdiscovery.NewRefreshMetrics(reg)
 	cfg.NewDiscovererMetrics(reg, refreshMetrics)
 
@@ -158,8 +158,8 @@ func (d *DiscovererWithMetrics) RunDiscovery(ctx context.Context) {
 	}
 
 	ticker := time.NewTicker(MaxUpdateFrequency)
-	// true if we have received new targets and need to send. Initially set it to true to send empty targets in case
-	// the discoverer never sends any targets.
+	// true if we have received new targets and need to send. Initially set it to true
+	// to send empty targets in case the discoverer never sends any targets.
 	haveUpdates := true
 	for {
 		select {
@@ -169,13 +169,15 @@ func (d *DiscovererWithMetrics) RunDiscovery(ctx context.Context) {
 				haveUpdates = false
 			}
 		case <-ctx.Done():
-			// shut down the discoverer - send latest targets and wait for discoverer goroutine to exit
+			// shut down the discoverer - send latest targets and wait for
+			// discoverer goroutine to exit
 			send()
 			<-runExited
 			return
 		case groups := <-ch:
 			for _, group := range groups {
-				// Discoverer will send an empty target set to indicate the group (keyed by Source field)
+				// Discoverer will send an empty target set to indicate the group
+				// (keyed by Source field)
 				// should be removed
 				if len(group.Targets) == 0 {
 					delete(cache, group.Source)
@@ -204,16 +206,15 @@ func ConvertToPyroscopeTarget(target Target) sd.DiscoveryTarget {
 		case "__meta_docker_container_name":
 			res["container"] = v
 		}
-
 	}
 	k8sNamespace := target["__meta_kubernetes_namespace"]
 	k8sContainer := target["__meta_kubernetes_pod_container_name"]
 	dockerContainer := target["__meta_docker_container_name"]
 	if k8sNamespace != "" && k8sContainer != "" {
-		svc := fmt.Sprintf("otel-ebpf/%s/%s", k8sNamespace, k8sContainer)
+		svc := "otel-ebpf/" + k8sNamespace + "/" + k8sContainer
 		res["service_name"] = svc
 	} else if dockerContainer != "" {
-		svc := fmt.Sprintf("otel-ebpf-docker/%s", dockerContainer)
+		svc := "otel-ebpf-docker/" + dockerContainer
 		res["service_name"] = svc
 	}
 

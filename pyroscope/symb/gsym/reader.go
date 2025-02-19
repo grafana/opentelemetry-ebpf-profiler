@@ -15,17 +15,17 @@ import (
 	"github.com/chimehq/binarycursor"
 )
 
-const GSYM_MAGIC uint32 = 0x4753594d
-const GSYM_CIGAM uint32 = 0x4d595347
-const GSYM_VERSION = 1
-const GSYM_MAX_UUID_SIZE = 20
-const GSYM_HEADER_SIZE = 28 + GSYM_MAX_UUID_SIZE
+const Magic uint32 = 0x4753594d
+const Cigam uint32 = 0x4d595347
+const Version = 1
+const MaxUUIDSize = 20
+const HeaderSize = 28 + MaxUUIDSize
 
-var ErrUnsupportedVersion = errors.New("Unsupported Version")
-var ErrAddressOutOfRange = errors.New("Address out of range")
+var ErrUnsupportedVersion = errors.New("unsupported Version")
+var ErrAddressOutOfRange = errors.New("address out of range")
 var ErrUUIDSizeOutOfRange = errors.New("UUID size out of range")
-var ErrAddressSizeOutOfrange = errors.New("Address size out of range")
-var ErrAddressNotFound = errors.New("Address not found")
+var ErrAddressSizeOutOfrange = errors.New("address size out of range")
+var ErrAddressNotFound = errors.New("address not found")
 
 type Header struct {
 	Magic        uint32
@@ -36,11 +36,11 @@ type Header struct {
 	NumAddresses uint32
 	StrtabOffset uint32
 	StrtabSize   uint32
-	UUID         [GSYM_MAX_UUID_SIZE]byte
+	UUID         [MaxUUIDSize]byte
 }
 
 func (h Header) Size() int64 {
-	return int64(GSYM_HEADER_SIZE)
+	return int64(HeaderSize)
 }
 
 func newHeader(bc binarycursor.BinaryCursor) (Header, error) {
@@ -53,9 +53,9 @@ func newHeader(bc binarycursor.BinaryCursor) (Header, error) {
 		return h, err
 	}
 
-	if h.Magic == GSYM_CIGAM {
+	if h.Magic == Cigam {
 		bc.FlipOrder()
-	} else if h.Magic != GSYM_MAGIC {
+	} else if h.Magic != Magic {
 		return h, fmt.Errorf("invalid magic: %x", h.Magic)
 	}
 
@@ -78,7 +78,7 @@ func newHeader(bc binarycursor.BinaryCursor) (Header, error) {
 		return h, err
 	}
 
-	if h.UUIDSize > GSYM_MAX_UUID_SIZE {
+	if h.UUIDSize > MaxUUIDSize {
 		return h, ErrUUIDSizeOutOfRange
 	}
 
@@ -102,7 +102,7 @@ func newHeader(bc binarycursor.BinaryCursor) (Header, error) {
 		return h, err
 	}
 
-	n, err := bc.Read(h.UUID[0:h.UUIDSize])
+	n, _ := bc.Read(h.UUID[0:h.UUIDSize])
 	if n != int(h.UUIDSize) {
 		return h, fmt.Errorf("expected %d UUIDS bytes, got %d", h.UUIDSize, n)
 	}
@@ -186,7 +186,7 @@ func (g *Gsym) bufferedCursorAt(offset int64) binarycursor.BinaryCursor {
 }
 
 func (g *Gsym) AddressTableOffset() int64 {
-	return int64(g.Header.Size())
+	return g.Header.Size()
 }
 
 func (g *Gsym) ReadAddressEntry(idx int) (uint64, error) {
@@ -252,20 +252,6 @@ func (g *Gsym) GetAddressIndex(addr uint64) (int, error) {
 	if idx < 0 {
 		return 0, ErrAddressNotFound
 	}
-
-	//entryAddr, err := g.ReadAddressEntry(idx)
-	//if err != nil {
-	//	return 0, err
-	//}
-
-	//if idx == 0 && relAddr < entryAddr {
-	//	return 0, ErrAddressNotFound
-	//}
-
-	//if idx == count || relAddr < entryAddr {
-	//	idx -= 1
-	//}
-
 	return idx, nil
 }
 
@@ -294,15 +280,17 @@ func (g *Gsym) GetString(offset int64) (string, error) {
 		buf := g.buf[:]
 		for {
 			n, err := g.readerAt.ReadAt(buf, strOffset)
+			if err != nil {
+				return "", err
+			}
 			null := bytes.IndexByte(buf, 0)
 			if null != -1 {
 				sb.Write(buf[:null])
 				break
-			} else {
-				sb.Write(buf)
-				strOffset += int64(n)
 			}
-			if err != nil || n != len(buf) {
+			sb.Write(buf)
+			strOffset += int64(n)
+			if n != len(buf) {
 				break
 			}
 		}
@@ -332,7 +320,7 @@ func (g *Gsym) GetFileEntry(index uint32) (FileEntry, error) {
 	c := g.cursorAt(offset)
 
 	entry := FileEntry{}
-	var err error = nil
+	var err error
 
 	entry.DirStrOffset, err = c.ReadUint32()
 	if err != nil {
@@ -369,7 +357,6 @@ func (g *Gsym) GetFile(index uint32) (string, error) {
 
 type SourceLocation struct {
 	Name   string
-	File   string
 	Line   uint32
 	Offset uint32
 }
@@ -408,7 +395,6 @@ func (g *Gsym) LookupTextRelativeAddress(relAddr uint64) (LookupResult, error) {
 		return lr, err
 	}
 
-	//c := g.cursorAt(addrInfoOffset)
 	c := g.bufferedCursorAt(addrInfoOffset)
 
 	fnSize, err := c.ReadUint32()
@@ -441,16 +427,10 @@ func (g *Gsym) LookupTextRelativeAddress(relAddr uint64) (LookupResult, error) {
 		return lr, err
 	}
 
-	//path, err := g.GetFile(lineInfo.entry.FileIndex)
-	//if err != nil {
-	//	path = ""
-	//}
-
 	entryLoc := SourceLocation{
 		Name:   name,
 		Line:   lineInfo.entry.Line,
 		Offset: uint32(relAddr - entryAddr),
-		//File:   path,
 	}
 
 	lr.Locations = []SourceLocation{entryLoc}
@@ -475,7 +455,6 @@ func (g *Gsym) LookupTextRelativeAddress(relAddr uint64) (LookupResult, error) {
 		adjustedLoc := loc
 
 		adjustedLoc.Line = entryLoc.Line
-		adjustedLoc.File = entryLoc.File
 
 		entryLoc = loc
 
@@ -498,12 +477,15 @@ type lineInfoResult struct {
 	inline inlineInfo
 }
 
-func (g *Gsym) lookupLineInfo(c binarycursor.BinaryCursor, startAddr uint64, addr uint64) (lineInfoResult, error) {
+func (g *Gsym) lookupLineInfo(
+	c binarycursor.BinaryCursor,
+	startAddr, addr uint64,
+) (lineInfoResult, error) {
 	done := false
 
 	result := lineInfoResult{}
 
-	for done == false {
+	for !done {
 		infoType, err := c.ReadUint32()
 		if err != nil {
 			return result, err
@@ -536,7 +518,7 @@ func (g *Gsym) lookupLineInfo(c binarycursor.BinaryCursor, startAddr uint64, add
 func (g *Gsym) locationsForInlineInfo(info inlineInfo, addr uint64) ([]SourceLocation, error) {
 	locations := []SourceLocation{}
 
-	if info.Contains(addr) == false {
+	if !info.Contains(addr) {
 		return locations, nil
 	}
 
@@ -545,14 +527,8 @@ func (g *Gsym) locationsForInlineInfo(info inlineInfo, addr uint64) ([]SourceLoc
 		return locations, err
 	}
 
-	//file, err := g.GetFile(info.FileIndex)
-	//if err != nil {
-	//	return locations, err
-	//}
-
 	loc := SourceLocation{
-		Name: name,
-		//File:   file,
+		Name:   name,
 		Line:   info.Line,
 		Offset: uint32(addr - info.Ranges[0].Start),
 	}
@@ -591,7 +567,7 @@ const (
 	LineTableOpFirstSpecial LineTableOpCode = 0x04
 )
 
-func lookupLineTable(c *binarycursor.BinaryCursor, startAddr uint64, addr uint64) (LineEntry, error) {
+func lookupLineTable(c *binarycursor.BinaryCursor, startAddr, addr uint64) (LineEntry, error) {
 	entry := LineEntry{
 		Address: startAddr,
 	}
@@ -619,7 +595,7 @@ func lookupLineTable(c *binarycursor.BinaryCursor, startAddr uint64, addr uint64
 
 	done := false
 
-	for done == false {
+	for !done {
 		op, err := c.ReadUint8()
 		if err != nil {
 			return entry, err

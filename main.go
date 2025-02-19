@@ -7,13 +7,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+
 	//nolint:gosec
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
 
 	"github.com/elastic/go-freelru"
-	lru "github.com/elastic/go-freelru"
 	pyrolog "github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	log "github.com/sirupsen/logrus"
@@ -122,7 +122,7 @@ func mainWithExitCode() exitCode {
 	}
 	cfg.HostName, cfg.IPAddress = hostname, sourceIP
 
-	cgroups, err := lru.NewSynced[libpf.PID, string](1024,
+	cgroups, err := freelru.NewSynced[libpf.PID, string](1024,
 		func(pid libpf.PID) uint32 { return uint32(pid) })
 	if err != nil {
 		log.Error(err)
@@ -149,7 +149,9 @@ func mainWithExitCode() exitCode {
 	}
 	cfg.NativeFrameSymbolizer = nfs
 	if cfg.PyroscopeDynamicProfilingPolicy {
-		cfg.Policy = &dynamicprofiling.ServiceDiscoveryTargetsOnlyPolicy{Discovery: attrProd.Discovery}
+		cfg.Policy = &dynamicprofiling.ServiceDiscoveryTargetsOnlyPolicy{
+			Discovery: attrProd.Discovery,
+		}
 	} else {
 		cfg.Policy = dynamicprofiling.AlwaysOnPolicy{}
 	}
@@ -200,7 +202,11 @@ func mainWithExitCode() exitCode {
 	return exitSuccess
 }
 
-func createPyroscopeSamplesAttrProd(cfg *controller.Config, pyrologger pyrolog.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string]) (*pyrosamples.AttributesProvider, error) {
+func createPyroscopeSamplesAttrProd(
+	cfg *controller.Config,
+	pyrologger pyrolog.Logger,
+	cgroups *freelru.SyncedLRU[libpf.PID, string],
+) (*pyrosamples.AttributesProvider, error) {
 	pyroOptions := pyrosamples.Options{
 		SD: pyrosd.TargetsOptions{
 			Targets:       nil,

@@ -1,7 +1,6 @@
 package sd
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,13 +87,14 @@ func inferServiceName(target DiscoveryTarget) string {
 	k8sNamespace := target["__meta_kubernetes_namespace"]
 	k8sContainer := target["__meta_kubernetes_pod_container_name"]
 	if k8sNamespace != "" && k8sContainer != "" {
-		return fmt.Sprintf("ebpf/%s/%s", k8sNamespace, k8sContainer)
+		return "ebpf/" + k8sNamespace + "/" + k8sContainer
 	}
 	dockerContainer := target["__meta_docker_container_name"]
 	if dockerContainer != "" {
 		return dockerContainer
 	}
-	if swarmService := target["__meta_dockerswarm_container_label_service_name"]; swarmService != "" {
+	swarmServiceKey := "__meta_dockerswarm_container_label_service_name"
+	if swarmService := target[swarmServiceKey]; swarmService != "" {
 		return swarmService
 	}
 	if swarmService := target["__meta_dockerswarm_service_name"]; swarmService != "" {
@@ -114,11 +114,6 @@ func (t *Target) String() string {
 func (t *Target) Get(k string) (string, bool) {
 	v := t.labels.Get(k)
 	return v, v != ""
-}
-
-func (t *Target) GetFlag(k string) (bool, bool) {
-	v := t.labels.Get(k)
-	return v == "true", v != ""
 }
 
 type containerID string
@@ -144,7 +139,11 @@ type targetFinder struct {
 	sync sync.Mutex
 }
 
-func NewTargetFinder(l log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], options TargetsOptions) (TargetFinder, error) {
+func NewTargetFinder(
+	l log.Logger,
+	cgroups *freelru.SyncedLRU[libpf.PID, string],
+	options TargetsOptions,
+) (TargetFinder, error) {
 	res := &targetFinder{
 		l:       l,
 		cgroups: cgroups,
@@ -199,7 +198,9 @@ func (tf *targetFinder) setTargets(opts TargetsOptions) {
 		t := NewTarget("", 0, opts.DefaultTarget)
 		tf.defaultTarget = oco(tf.defaultTarget, t)
 	}
-	_ = level.Debug(tf.l).Log("msg", "created targets", "cid2target", len(tf.cid2target), "pid2target", len(tf.pid2target))
+	_ = level.Debug(tf.l).Log("msg", "created targets",
+		"cid2target", len(tf.cid2target),
+		"pid2target", len(tf.pid2target))
 }
 
 func (tf *targetFinder) findTarget(pid uint32) *Target {

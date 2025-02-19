@@ -2,7 +2,6 @@ package samples
 
 import (
 	"context"
-	"sync"
 
 	"github.com/elastic/go-freelru"
 	log2 "github.com/go-kit/log"
@@ -16,12 +15,12 @@ import (
 )
 
 type AttributesProvider struct {
-	symcachelock sync.Mutex
-	Discovery    sd.TargetFinder
+	Discovery sd.TargetFinder
 }
 
-func (p *AttributesProvider) CollectExtraSampleMeta(trace *libpf.Trace, meta *samples.TraceEventMeta) any {
-	return p.Discovery.FindTarget(uint32(meta.PID)) // todo this may be bad if sd creates a new target with same labels
+func (p *AttributesProvider) CollectExtraSampleMeta(_ *libpf.Trace,
+	meta *samples.TraceEventMeta) any {
+	return p.Discovery.FindTarget(uint32(meta.PID))
 }
 
 func (p *AttributesProvider) ExtraSampleAttrs(attrMgr *samples.AttrTableManager, meta any) []int32 {
@@ -45,8 +44,11 @@ type Options struct {
 	Kubernetes, Docker bool
 }
 
-func NewAttributesProvider(logger log2.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], opt Options) (*AttributesProvider, error) {
-
+func NewAttributesProvider(
+	logger log2.Logger,
+	cgroups *freelru.SyncedLRU[libpf.PID, string],
+	opt Options,
+) (*AttributesProvider, error) {
 	pyrosdOpt := opt.SD
 	pyrosd, err := sd.NewTargetFinder(logger, cgroups, pyrosdOpt)
 	if err != nil {

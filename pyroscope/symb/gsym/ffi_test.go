@@ -1,8 +1,9 @@
 package gsym
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBuildInlineInfo(t *testing.T) {
@@ -16,13 +17,12 @@ func TestBuildInlineInfo(t *testing.T) {
 	assert.NotNil(t, ii)
 	assert.Len(t, ii.Children, 2)
 	assert.Len(t, ii.Children[0].Children, 1)
-	assert.Len(t, ii.Children[0].Children[0].Children, 0)
+	assert.Empty(t, ii.Children[0].Children[0].Children)
 	assert.Len(t, ii.Children[1].Children, 1)
-	assert.Len(t, ii.Children[1].Children[0].Children, 0)
+	assert.Empty(t, ii.Children[1].Children[0].Children)
 	assert.Equal(t, StringOffset(1), ii.Name)
 	assert.Equal(t, StringOffset(2), ii.Children[0].Name)
 	assert.Equal(t, StringOffset(3), ii.Children[0].Children[0].Name)
 	assert.Equal(t, StringOffset(4), ii.Children[1].Name)
 	assert.Equal(t, StringOffset(5), ii.Children[1].Children[0].Name)
-
 }

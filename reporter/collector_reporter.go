@@ -47,7 +47,13 @@ func NewCollector(cfg *Config, nextConsumer xconsumer.Profiles) (*CollectorRepor
 		return nil, err
 	}
 
-	data, err := pdata.New(cfg.SamplesPerSecond, cfg.ExecutablesCacheElements, cfg.FramesCacheElements, cfg.ExtraSampleAttrProd, nil)
+	data, err := pdata.New(
+		cfg.SamplesPerSecond,
+		cfg.ExecutablesCacheElements,
+		cfg.FramesCacheElements,
+		cfg.ExtraSampleAttrProd,
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}

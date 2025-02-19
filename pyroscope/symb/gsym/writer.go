@@ -57,13 +57,12 @@ func (b *Writer) AddFuncInfo(fi FunctionInfo) {
 }
 
 func (b *Writer) Encode(f *os.File) error {
-
 	slices.SortFunc(b.addressData, func(a, b FunctionInfo) int {
 		return cmp.Compare(a.Addr, b.Addr)
 	})
 
-	b.hdr.Magic = GSYM_MAGIC
-	b.hdr.Version = GSYM_VERSION
+	b.hdr.Magic = Magic
+	b.hdr.Version = Version
 	b.hdr.NumAddresses = uint32(len(b.addressData))
 
 	if len(b.addressData) == 0 {
@@ -141,16 +140,9 @@ func (b *Writer) Encode(f *os.File) error {
 	w.Fixup32(uint32(strtabSize), 24)   // 24 is offset of StrtabSize in Header
 
 	if len(addrInfoOffsets) > 0 {
-		addrInfoOffsetsByteSlice := unsafe.Slice((*byte)(unsafe.Pointer(&addrInfoOffsets[0])), len(addrInfoOffsets)*4)
+		addrInfoOffsetsByteSlice := unsafe.Slice((*byte)(unsafe.Pointer(
+			&addrInfoOffsets[0])), len(addrInfoOffsets)*4)
 		w.Fixup(addrInfoOffsetsByteSlice, addrInfoOffsetsOffset)
 	}
 	return w.err
-}
-
-func (b *Writer) str(o StringOffset) []byte {
-	res := b.strtab[o:]
-	if i := slices.Index(res, 0); i != -1 {
-		res = res[:i]
-	}
-	return res
 }

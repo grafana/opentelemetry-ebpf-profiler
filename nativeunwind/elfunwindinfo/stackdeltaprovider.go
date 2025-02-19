@@ -25,8 +25,7 @@ type ELFStackDeltaProvider struct {
 	successCount         atomic.Uint64
 	extractionErrorCount atomic.Uint64
 
-	opts             []ExtractOption
-	elfFileSizeLimit int
+	opts []ExtractOption
 }
 
 // Compile time check that the ELFStackDeltaProvider implements its interface correctly.
@@ -42,7 +41,12 @@ func NewStackDeltaProvider(opts ...ExtractOption) nativeunwind.StackDeltaProvide
 // GetIntervalStructuresForFile builds the stack delta information for a single executable.
 func (provider *ELFStackDeltaProvider) GetIntervalStructuresForFile(fid host.FileID,
 	elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
-	log.Debugf("Extracting stack deltas from %s sz %d %s ", fid.StringNoQuotes(), elfRef.FileSize(), elfRef.FileName())
+	log.Debugf(
+		"Extracting stack deltas from %s sz %d %s ",
+		fid.StringNoQuotes(),
+		elfRef.FileSize(),
+		elfRef.FileName(),
+	)
 	err := ExtractELF(elfRef, interval, provider.opts...)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -52,7 +56,13 @@ func (provider *ELFStackDeltaProvider) GetIntervalStructuresForFile(fid host.Fil
 			elfRef.FileName(), err)
 	}
 	sz := len(interval.Deltas) * int(unsafe.Sizeof(sdtypes.IntervalData{}))
-	log.Debugf("Successfully extracted stack deltas from %s %s count: %d size: %d", fid.StringNoQuotes(), elfRef.FileName(), len(interval.Deltas), sz)
+	log.Debugf(
+		"Successfully extracted stack deltas from %s %s count: %d size: %d",
+		fid.StringNoQuotes(),
+		elfRef.FileName(),
+		len(interval.Deltas),
+		sz,
+	)
 
 	provider.successCount.Add(1)
 	return nil

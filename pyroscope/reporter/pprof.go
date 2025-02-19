@@ -9,12 +9,10 @@ import (
 	"time"
 
 	"github.com/elastic/go-freelru"
-	lru "github.com/elastic/go-freelru"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/google/pprof/profile"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/zeebo/xxh3"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -48,8 +46,8 @@ type PPROFReporter struct {
 	log         log.Logger
 	cgroups     *freelru.SyncedLRU[libpf.PID, string]
 	traceEvents xsync.RWMutex[map[libpf.Origin]samples.KeyToEventMapping]
-	Executables *lru.SyncedLRU[libpf.FileID, samples.ExecInfo]
-	Frames      *lru.SyncedLRU[
+	Executables *freelru.SyncedLRU[libpf.FileID, samples.ExecInfo]
+	Frames      *freelru.SyncedLRU[
 		libpf.FileID,
 		*xsync.RWMutex[map[libpf.AddressOrLineno]samples.SourceInfo],
 	]
@@ -59,7 +57,12 @@ type PPROFReporter struct {
 	cancelReporting context.CancelFunc
 }
 
-func NewPPROF(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg *Config, sd sd.TargetFinder) (*PPROFReporter, error) {
+func NewPPROF(
+	log log.Logger,
+	cgroups *freelru.SyncedLRU[libpf.PID, string],
+	cfg *Config,
+	sd sd.TargetFinder,
+) (*PPROFReporter, error) {
 	// Set a lifetime to reduce risk of invalid data in case of PID reuse.
 	cgroups.SetLifetime(90 * time.Second)
 
@@ -69,16 +72,19 @@ func NewPPROF(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg
 		originsMap[origin] = make(samples.KeyToEventMapping)
 	}
 	executables, err :=
-		lru.NewSynced[libpf.FileID, samples.ExecInfo](cfg.ExecutablesCacheElements, libpf.FileID.Hash32)
+		freelru.NewSynced[libpf.FileID, samples.ExecInfo](
+			cfg.ExecutablesCacheElements,
+			libpf.FileID.Hash32,
+		)
 	if err != nil {
 		return nil, err
 	}
 	executables.SetLifetime(ExecutableCacheLifetime)
-	executables.SetOnEvict(func(id libpf.FileID, info samples.ExecInfo) {
+	executables.SetOnEvict(func(_ libpf.FileID, _ samples.ExecInfo) {
 
 	})
 
-	frames, err := lru.NewSynced[libpf.FileID,
+	frames, err := freelru.NewSynced[libpf.FileID,
 		*xsync.RWMutex[map[libpf.AddressOrLineno]samples.SourceInfo]](
 		cfg.FramesCacheElements, libpf.FileID.Hash32)
 	if err != nil {
@@ -97,11 +103,15 @@ func NewPPROF(log log.Logger, cgroups *freelru.SyncedLRU[libpf.PID, string], cfg
 	}, nil
 }
 
-func (p *PPROFReporter) ReportFramesForTrace(trace *libpf.Trace) {
+func (p *PPROFReporter) ReportFramesForTrace(_ *libpf.Trace) {
 
 }
 
-func (p *PPROFReporter) ReportCountForTrace(traceHash libpf.TraceHash, count uint16, meta *samples.TraceEventMeta) {
+func (p *PPROFReporter) ReportCountForTrace(
+	_ libpf.TraceHash,
+	_ uint16,
+	_ *samples.TraceEventMeta,
+) {
 
 }
 
@@ -114,7 +124,9 @@ func (p *PPROFReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.Trace
 
 	containerID, err := libpf.LookupCgroupv2(p.cgroups, meta.PID)
 	if err != nil {
-		_ = p.log.Log("msg", "Failed to get a cgroupv2 ID as container ID for", "PID", meta.PID, "err", err)
+		_ = p.log.Log("msg", "Failed to get a cgroupv2 ID as container ID for",
+			"PID", meta.PID,
+			"err", err)
 	}
 
 	key := samples.TraceAndMetaKey{
@@ -215,15 +227,23 @@ func (p *PPROFReporter) frameMetadata(args *reporter2.FrameMetadataArgs) samples
 	return si
 }
 
-func (p *PPROFReporter) ReportHostMetadata(metadataMap map[string]string) {
+func (p *PPROFReporter) ReportHostMetadata(_ map[string]string) {
 }
 
-func (p *PPROFReporter) ReportHostMetadataBlocking(_ context.Context,
-	metadataMap map[string]string, _ int, _ time.Duration) error {
+func (p *PPROFReporter) ReportHostMetadataBlocking(
+	_ context.Context,
+	_ map[string]string,
+	_ int,
+	_ time.Duration,
+) error {
 	return nil
 }
 
-func (p *PPROFReporter) ReportMetrics(timestamp uint32, ids []uint32, values []int64) {
+func (p *PPROFReporter) ReportMetrics(
+	_ uint32,
+	_ []uint32,
+	_ []int64,
+) {
 
 }
 
@@ -248,7 +268,6 @@ func (p *PPROFReporter) Start(ctx context.Context) error {
 			case <-purgeTick.C:
 				p.Executables.Purge()
 				p.Frames.Purge()
-				//p.hostmetadata.Purge()
 				p.cgroups.PurgeExpired()
 			}
 		}
@@ -268,7 +287,7 @@ func (p *PPROFReporter) GetMetrics() reporter2.Metrics {
 	return reporter2.Metrics{}
 }
 
-func (p *PPROFReporter) reportProfile(ctx context.Context) {
+func (p *PPROFReporter) reportProfile(_ context.Context) {
 	traceEvents := p.traceEvents.WLock()
 	events := make(map[libpf.Origin]samples.KeyToEventMapping, 2)
 	for _, origin := range []libpf.Origin{support.TraceOriginSampling,
@@ -294,7 +313,7 @@ func (p *PPROFReporter) reportProfile(ctx context.Context) {
 	for _, it := range profiles {
 		sz += len(it.Raw)
 	}
-	_ = level.Debug(p.log).Log("msg", "pprof report successful", "count", len(profiles), "total-size", sz)
+	_ = p.log.Log("msg", "pprof report successful", "count", len(profiles), "total-size", sz)
 }
 
 func (p *PPROFReporter) createProfile(
@@ -308,7 +327,7 @@ func (p *PPROFReporter) createProfile(
 	}()
 
 	bs := NewProfileBuilders(BuildersOptions{
-		SampleRate:    int64(p.cfg.SamplesPerSecond),
+		SampleRate:    p.cfg.SamplesPerSecond,
 		PerPIDProfile: true,
 	})
 
@@ -334,10 +353,10 @@ func (p *PPROFReporter) createProfile(
 
 		// Walk every frame of the trace.
 		for i := range traceInfo.FrameTypes {
-			fileId := traceInfo.Files[i]
+			fileID := traceInfo.Files[i]
 			addrOrLineNo := traceInfo.Linenos[i]
-			frameId := libpf.NewFrameID(fileId, addrOrLineNo)
-			location, locationFresh := b.Location(frameId)
+			frameID := libpf.NewFrameID(fileID, addrOrLineNo)
+			location, locationFresh := b.Location(frameID)
 			s.Location = append(s.Location, location)
 			if !locationFresh {
 				continue
@@ -389,13 +408,12 @@ func (p *PPROFReporter) createProfile(
 			}
 		}
 	}
-
-	var res []PPROF
+	res := make([]PPROF, 0, len(bs.Builders))
 	for _, b := range bs.Builders {
 		buf := bytes.NewBuffer(nil)
 		_, err := b.Write(buf)
 		if err != nil {
-			p.log.Log("err", err)
+			_ = p.log.Log("err", err)
 			continue
 		}
 		_, ls := b.Target.Labels()
@@ -405,7 +423,10 @@ func (p *PPROFReporter) createProfile(
 		}
 		labelsWithMetric := make([]labels.Label, 0, len(ls)+1)
 		labelsWithMetric = append(labelsWithMetric, ls...)
-		labelsWithMetric = append(labelsWithMetric, labels.Label{Name: labels.MetricName, Value: metric})
+		labelsWithMetric = append(labelsWithMetric, labels.Label{
+			Name:  labels.MetricName,
+			Value: metric,
+		})
 		res = append(res, PPROF{
 			Raw:    buf.Bytes(),
 			Labels: labelsWithMetric,
@@ -415,8 +436,12 @@ func (p *PPROFReporter) createProfile(
 	return res
 }
 
-func (p *PPROFReporter) symbolizeNativeFrame(b *ProfileBuilder, loc *profile.Location, traceInfo *samples.TraceEvents, i int, pid int) {
-
+func (p *PPROFReporter) symbolizeNativeFrame(
+	b *ProfileBuilder,
+	loc *profile.Location,
+	traceInfo *samples.TraceEvents,
+	i, pid int,
+) {
 	fileID := traceInfo.Files[i]
 	addr := traceInfo.Linenos[i]
 	frameID := libpf.NewFrameID(fileID, addr)
@@ -479,7 +504,3 @@ const (
 	ExecutableCacheLifetime = 1 * time.Hour
 	FramesCacheLifetime     = 1 * time.Hour
 )
-
-func hashString(s string) uint32 {
-	return uint32(xxh3.HashString(s))
-}

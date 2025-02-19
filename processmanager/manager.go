@@ -71,9 +71,10 @@ var (
 // implementation.
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
 	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
-	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool, nfs samples.NativeFrameSymbolizer, policy dynamicprofiling.Policy) (*ProcessManager, error) {
+	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool,
+	nfs samples.NativeFrameSymbolizer, policy dynamicprofiling.Policy) (*ProcessManager, error) {
 	if policy == nil {
-		return nil, fmt.Errorf("no dynamicprofiling Policy provided")
+		return nil, errors.New("no dynamicprofiling Policy provided")
 	}
 	if fileIDMapper == nil {
 		var err error

@@ -2,10 +2,11 @@ package gsym
 
 import (
 	"cmp"
-	log "github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/ffi"
 	"os"
 	"slices"
+
+	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/ffi"
 )
 
 type rangeCollector struct {
@@ -20,7 +21,7 @@ type rangeEntry struct {
 	fun    StringOffset
 }
 
-func (rc *rangeCollector) VisitRange(va uint64, length uint32, depth uint32, function string) {
+func (rc *rangeCollector) VisitRange(va uint64, length, depth uint32, function string) {
 	rc.entries = append(rc.entries, rangeEntry{
 		va:     va,
 		length: length,
@@ -51,7 +52,7 @@ func (rc *rangeCollector) eachFunc(f func([]rangeEntry)) {
 	}
 }
 
-func FDToGSym(executable *os.File, output *os.File) error {
+func FDToGSym(executable, output *os.File) error {
 	w := NewWriter()
 	rc := &rangeCollector{w: w}
 
@@ -59,9 +60,6 @@ func FDToGSym(executable *os.File, output *os.File) error {
 		return err
 	}
 	rc.eachFunc(func(entries []rangeEntry) {
-		//for _, e := range entries {
-		//
-		//}
 		root := entries[0]
 		info := FunctionInfo{
 			Addr: root.va,
@@ -86,7 +84,10 @@ func buildInlineInfo(entries []rangeEntry) *InlineInfo {
 	res := make([]InlineInfo, len(entries))
 	for i := 0; i < len(entries); i++ {
 		res[i].Name = entries[i].fun
-		res[i].Ranges = []AddressRange{{Start: entries[i].va, End: entries[i].va + uint64(entries[i].length)}}
+		res[i].Ranges = []AddressRange{{
+			Start: entries[i].va,
+			End:   entries[i].va + uint64(entries[i].length),
+		}}
 		res[i].Name = entries[i].fun
 		for j := i - 1; j >= 0; j-- {
 			if entries[j].depth == entries[i].depth-1 {

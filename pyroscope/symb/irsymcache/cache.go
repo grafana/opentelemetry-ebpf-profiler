@@ -71,8 +71,8 @@ type Options struct {
 
 func NewFSCache(l logkit.Logger, impl TableFactory, opt Options) (*FSCache, error) {
 	l = logkit.With(l, "component", "irsymtab")
-	l.Log("enabled", opt.Enabled, "path", opt.Path, "size", opt.Size)
-	lru := New[libpf.FileID, int](opt.Size, func(key libpf.FileID, value int) int {
+	_ = l.Log("enabled", opt.Enabled, "path", opt.Path, "size", opt.Size)
+	lru := New[libpf.FileID, int](opt.Size, func(_ libpf.FileID, value int) int {
 		return value
 	})
 
@@ -88,13 +88,13 @@ func NewFSCache(l logkit.Logger, impl TableFactory, opt Options) (*FSCache, erro
 		enabled:  opt.Enabled,
 	}
 	res.cacheDir = filepath.Join(res.cacheDir, impl.Name())
-	err := os.MkdirAll(res.cacheDir, 0700)
+	err := os.MkdirAll(res.cacheDir, 0o700)
 	if err != nil {
 		return nil, err
 	}
-	lru.SetOnEvict(func(id libpf.FileID, v int) {
+	lru.SetOnEvict(func(id libpf.FileID, sz int) {
 		filePath := res.tableFilePath(id)
-		level.Debug(l).Log("msg", "symbcache evicting", "file", filePath)
+		_ = level.Debug(l).Log("msg", "symbcache evicting", "file", filePath, "size", sz)
 		_ = os.Remove(filePath)
 		res.mu.Lock()
 		delete(res.known, id)
@@ -118,16 +118,19 @@ func NewFSCache(l logkit.Logger, impl TableFactory, opt Options) (*FSCache, erro
 			return nil
 		}
 
-		res.lru.Put(libpf.FileID(id), int(info.Size()))
-		res.known[libpf.FileID(id)] = struct{}{}
+		res.lru.Put(id, int(info.Size()))
+		res.known[id] = struct{}{}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	go func() {
 		i := 0
 		for {
 			time.Sleep(time.Minute)
-			l.Log("msg", "fscache lru size", "size", lru.Size())
+			_ = l.Log("msg", "fscache lru size", "size", lru.Size())
 			i++
 			if i%10 == 0 {
 				res.mu.Lock()
@@ -136,7 +139,7 @@ func NewFSCache(l logkit.Logger, impl TableFactory, opt Options) (*FSCache, erro
 			}
 		}
 	}()
-	go func() { //todo shutdown
+	go func() { // todo shutdown
 		convertLoop(res)
 	}()
 
@@ -159,7 +162,7 @@ func (c *FSCache) Convert(fid libpf.FileID, elfRef *pfelf.Reference) {
 	if !c.enabled {
 		return
 	}
-	if elfRef.FileName() == process.VdsoPathName { //todo
+	if elfRef.FileName() == process.VdsoPathName {
 		return
 	}
 
@@ -186,10 +189,15 @@ func (c *FSCache) Convert(fid libpf.FileID, elfRef *pfelf.Reference) {
 		l = level.Debug(l)
 		c.known[fid] = struct{}{}
 	}
-	l.Log("msg", "converted", "duration", time.Since(t1))
+	_ = l.Log("msg", "converted", "duration", time.Since(t1))
 }
 
-func (c *FSCache) convert(l logkit.Logger, fid libpf.FileID, elfRef *pfelf.Reference, o pfelf.RootFSOpener) error {
+func (c *FSCache) convert(
+	l logkit.Logger,
+	fid libpf.FileID,
+	elfRef *pfelf.Reference,
+	o pfelf.RootFSOpener,
+) error {
 	var err error
 	var dst *os.File
 	var src *os.File
@@ -210,7 +218,7 @@ func (c *FSCache) convert(l logkit.Logger, fid libpf.FileID, elfRef *pfelf.Refer
 	if debugLinkFileName != "" {
 		src, err = o.OpenRootFSFile(debugLinkFileName)
 		if err != nil {
-			level.Debug(l).Log("msg", "open debug file", "err", err)
+			_ = level.Debug(l).Log("msg", "open debug file", "err", err)
 		} else {
 			defer src.Close()
 		}
@@ -219,7 +227,7 @@ func (c *FSCache) convert(l logkit.Logger, fid libpf.FileID, elfRef *pfelf.Refer
 		src = elf.OSFile()
 	}
 	if src == nil {
-		return fmt.Errorf("failed to open elf os file")
+		return errors.New("failed to open elf os file")
 	}
 
 	dst, err = os.Create(tableFilePath)
@@ -250,7 +258,7 @@ func (c *FSCache) getElf(l logkit.Logger, elfRef *pfelf.Reference) (*pfelf.File,
 	if err == nil {
 		return elf, nil
 	}
-	//todo why is this happening? mostly on my firefox sleeping processes
+	// todo why is this happening? mostly on my firefox sleeping processes
 	if !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -258,24 +266,24 @@ func (c *FSCache) getElf(l logkit.Logger, elfRef *pfelf.Reference) (*pfelf.File,
 	if !ok {
 		return nil, err
 	}
-	_, _ = p.GetMappings() //todo we have the mapping 3 stack frames above
-	level.Debug(l).Log("msg", "Get mappings", "proc", fmt.Sprintf("%+v", p))
+	_, _ = p.GetMappings() // todo we have the mapping 3 stack frames above
+	_ = level.Debug(l).Log("msg", "Get mappings", "proc", fmt.Sprintf("%+v", p))
 	openELF, err := p.OpenELF(elfRef.FileName())
 	if err != nil {
-		level.Error(l).Log("msg", "DEBUG ESRCH open elf", "err", err)
+		_ = level.Error(l).Log("msg", "DEBUG ESRCH open elf", "err", err)
 		return nil, err
 	}
 
 	return openELF, err
 }
 
-func (c *FSCache) convertAsync(src *os.File, dst *os.File) error {
+func (c *FSCache) convertAsync(src, dst *os.File) error {
 	job := convertJob{src: src, dst: dst, result: make(chan error)}
 	c.jobs <- job
 	return <-job.result
 }
 
-func (c *FSCache) convertSync(src *os.File, dst *os.File) error {
+func (c *FSCache) convertSync(src, dst *os.File) error {
 	return c.f.ConvertTable(src, dst)
 }
 
@@ -283,7 +291,7 @@ func (c *FSCache) tableFilePath(fid libpf.FileID) string {
 	return filepath.Join(c.cacheDir, fid.StringNoQuotes())
 }
 
-var errUnknwnFile = fmt.Errorf("unknown file")
+var errUnknwnFile = errors.New("unknown file")
 
 func (c *FSCache) Lookup(fid libpf.FileID, addr uint64) ([]string, error) {
 	if !c.enabled {
@@ -301,7 +309,6 @@ func (c *FSCache) Lookup(fid libpf.FileID, addr uint64) ([]string, error) {
 	path := c.tableFilePath(fid)
 	table, err := c.f.OpenTable(path)
 	if err != nil {
-		//c.l.Log("msg", "failed to open table", "path", path, "err", err)
 		_ = os.Remove(path)
 		return nil, err
 	}

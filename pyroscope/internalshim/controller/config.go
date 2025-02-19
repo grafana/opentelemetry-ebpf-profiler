@@ -139,20 +139,48 @@ func ParseArgs() (*Config, error) {
 		ff.WithIgnoreUndefined(true),
 		ff.WithAllowMissingConfigFile(true),
 	)
-
 }
 
 func RegisterPyroscopeFlags(fs *flag.FlagSet, args *controller.Config) {
 	fs.BoolVar(&args.PyroscopeSymbolizeNativeFrames, "pyroscope-symbolize-native-frames", true, "")
-	fs.IntVar(&args.PyroscopeStackDeltaLimitBytes, "pyroscope-stack-delta-limit-bytes", 0, "<=0 means no limit")
-	fs.IntVar(&args.PyroscopeStackDeltaElfSizeLimitBytes, "pyroscope-stack-delta-elf-size-limit-bytes", 0, "<=0 means no limit")
+	fs.IntVar(
+		&args.PyroscopeStackDeltaLimitBytes,
+		"pyroscope-stack-delta-limit-bytes",
+		0,
+		"<=0 means no limit",
+	)
+	fs.IntVar(
+		&args.PyroscopeStackDeltaElfSizeLimitBytes,
+		"pyroscope-stack-delta-elf-size-limit-bytes",
+		0,
+		"<=0 means no limit",
+	)
 	fs.StringVar(&args.PyroscopeUsername, "pyroscope-username", "", "")
 	fs.StringVar(&args.PyroscopePasswordFile, "pyroscope-password-file", "", "")
-	fs.IntVar(&args.PyroscopeSymbCacheSizeBytes, "pyroscope-symb-cache-size-bytes", 2*1024*1024*1024, "")
+	fs.IntVar(
+		&args.PyroscopeSymbCacheSizeBytes,
+		"pyroscope-symb-cache-size-bytes",
+		2*1024*1024*1024,
+		"",
+	)
 	fs.StringVar(&args.PyroscopeSymbCachePath, "pyroscope-symb-cache-path", "/tmp/symb-cache", "")
 	fs.StringVar(&args.PyroscopeSD, "pyroscope-sd", "", "possible values: kubernetes, docker")
-	fs.StringVar(&args.PyroscopeReporterType, "pyroscope-reporter-type", "pprof", "possible values: otel, pprof")
-	fs.BoolVar(&args.PyroscopeSymbolizerTableGSYM, "pyroscope-symbolizer-gsym", false, "true for gsym, false for a custom table implementation")
-	fs.BoolVar(&args.
-		PyroscopeDynamicProfilingPolicy, "pyroscope-dynamic-profiling-policy", true, "true for sd targets only profiling policy")
+	fs.StringVar(
+		&args.PyroscopeReporterType,
+		"pyroscope-reporter-type",
+		"pprof",
+		"possible values: otel, pprof",
+	)
+	fs.BoolVar(
+		&args.PyroscopeSymbolizerTableGSYM,
+		"pyroscope-symbolizer-gsym",
+		false,
+		"true for gsym, false for a custom table implementation",
+	)
+	fs.BoolVar(
+		&args.PyroscopeDynamicProfilingPolicy,
+		"pyroscope-dynamic-profiling-policy",
+		true,
+		"true for sd targets only profiling policy",
+	)
 }

@@ -9,7 +9,7 @@ import (
 type GsymTableFactory struct {
 }
 
-func (g GsymTableFactory) ConvertTable(src *os.File, dst *os.File) error {
+func (g GsymTableFactory) ConvertTable(src, dst *os.File) error {
 	return gsym.FDToGSym(src, dst)
 }
 
