@@ -13,6 +13,7 @@ import (
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/google/pprof/profile"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/zeebo/xxh3"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -25,7 +26,7 @@ import (
 
 type PPROF struct {
 	Raw    []byte
-	Target *sd.Target
+	Labels labels.Labels
 	Origin libpf.Origin
 }
 type PPROFConsumer interface {
@@ -397,9 +398,17 @@ func (p *PPROFReporter) createProfile(
 			p.log.Log("err", err)
 			continue
 		}
+		_, ls := b.Target.Labels()
+		metric := sd.MetricValueProcessCPU
+		if origin == support.TraceOriginOffCPU {
+			metric = sd.MetricValueOffCPU
+		}
+		labelsWithMetric := make([]labels.Label, 0, len(ls)+1)
+		labelsWithMetric = append(labelsWithMetric, ls...)
+		labelsWithMetric = append(labelsWithMetric, labels.Label{Name: labels.MetricName, Value: metric})
 		res = append(res, PPROF{
 			Raw:    buf.Bytes(),
-			Target: b.Target,
+			Labels: labelsWithMetric,
 			Origin: origin,
 		})
 	}

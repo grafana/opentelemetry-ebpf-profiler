@@ -153,5 +153,6 @@ func RegisterPyroscopeFlags(fs *flag.FlagSet, args *controller.Config) {
 	fs.StringVar(&args.PyroscopeSD, "pyroscope-sd", "", "possible values: kubernetes, docker")
 	fs.StringVar(&args.PyroscopeReporterType, "pyroscope-reporter-type", "pprof", "possible values: otel, pprof")
 	fs.BoolVar(&args.PyroscopeSymbolizerTableGSYM, "pyroscope-symbolizer-gsym", false, "true for gsym, false for a custom table implementation")
-	fs.BoolVar(&args.PyroscopeDynamicProfilingPolicy, "pyroscope-dynamic-profiling-policy", true, "true for sd targets only profiling policy")
+	fs.BoolVar(&args.
+		PyroscopeDynamicProfilingPolicy, "pyroscope-dynamic-profiling-policy", true, "true for sd targets only profiling policy")
 }

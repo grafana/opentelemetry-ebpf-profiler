@@ -69,7 +69,7 @@ func (b *ProfileBuilders) BuilderForSample(target *sd.Target, pid uint32, st lib
 		periodType = &profile.ValueType{Type: "cpu", Unit: "nanoseconds"}
 		period = time.Second.Nanoseconds() / b.opt.SampleRate
 	} else if st == support.TraceOriginOffCPU {
-		sampleType = []*profile.ValueType{{Type: "wall", Unit: "nanoseconds"}}
+		sampleType = []*profile.ValueType{{Type: "offcpu", Unit: "nanoseconds"}}
 		period = 1
 	} else {
 		panic(fmt.Sprintf("unknown sample type %v", sampleType))

@@ -30,11 +30,12 @@ func (t *DiscoveryTarget) DebugString() string {
 }
 
 const (
-	labelContainerID    = "__container_id__"
-	labelPID            = "__process_pid__"
-	labelServiceName    = "service_name"
-	labelServiceNameK8s = "__meta_kubernetes_pod_annotation_pyroscope_io_service_name"
-	metricValue         = "process_cpu"
+	labelContainerID      = "__container_id__"
+	labelPID              = "__process_pid__"
+	labelServiceName      = "service_name"
+	labelServiceNameK8s   = "__meta_kubernetes_pod_annotation_pyroscope_io_service_name"
+	MetricValueProcessCPU = "process_cpu"
+	MetricValueOffCPU     = "offcpu"
 )
 
 type Target struct {
@@ -58,9 +59,6 @@ func NewTarget(cid containerID, pid uint32, target DiscoveryTarget) *Target {
 		}
 		lset[k] = v
 	}
-	//if lset[labels.MetricName] == "" {
-	//	lset[labels.MetricName] = metricValue //todo this is incorrect
-	//}
 	if lset[labelServiceName] == "" {
 		lset[labelServiceName] = serviceName
 	}
