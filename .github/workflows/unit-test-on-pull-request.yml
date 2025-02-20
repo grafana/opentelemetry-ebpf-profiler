@@ -126,6 +126,19 @@ jobs:
         with:
           name: integration-test-binaries-${{ matrix.target_arch }}
           path: support/*.test
+  pyroscope-dockerfile:
+    name: Pyroscope docker ${{ matrix.target_arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - { target_arch: amd64 }
+          - { target_arch: arm64 }
+    steps:
+      - name: Clone code
+        uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --platform=linux/${{ matrix.target_arch }} -f pyroscope.Dockerfile  .
 
   integration-tests:
     name: Integration tests (v${{ matrix.kernel }} ${{ matrix.target_arch }})
