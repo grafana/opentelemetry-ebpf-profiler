@@ -101,19 +101,14 @@ ENV CGO_ENABLED=1
 ENV GOARCH=$TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
     export ARCH_PREFIX=aarch64-linux-gnu-; \
-    export CC=${ARCH_PREFIX}gcc; \
-    export OBJCOPY=${ARCH_PREFIX}objcopy; \
-    /usr/local/go/bin/go build -buildvcs=false \
-      -ldflags="-extldflags=-static -extldflags=target/aarch64-unknown-linux-musl/release/libsymblib_capi.a" \
-      -tags osusergo,netgo ; \
 else \
     export ARCH_PREFIX=x86_64-linux-gnu-; \
-    export CC=${ARCH_PREFIX}gcc; \
-    export OBJCOPY=${ARCH_PREFIX}objcopy ; \
-    /usr/local/go/bin/go build -buildvcs=false \
-          -ldflags="-extldflags=-static -extldflags=target/x86_64-unknown-linux-musl/release/libsymblib_capi.a" \
-          -tags osusergo,netgo ; \
-fi
+fi; \
+export CC=${ARCH_PREFIX}gcc; \
+export OBJCOPY=${ARCH_PREFIX}objcopy; \
+/usr/local/go/bin/go build -buildvcs=false \
+  -ldflags="-extldflags=-static" \
+  -tags osusergo,netgo,symbliblink
 
 
 FROM debian:bookworm

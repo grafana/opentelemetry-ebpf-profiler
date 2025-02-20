@@ -45,7 +45,7 @@ LDFLAGS := -X go.opentelemetry.io/ebpf-profiler/vc.version=$(VERSION) \
 	-X go.opentelemetry.io/ebpf-profiler/vc.buildTimestamp=$(BUILD_TIMESTAMP) \
 	-extldflags=-static
 
-GO_TAGS := osusergo,netgo
+GO_TAGS := osusergo,netgo,symbliblink
 EBPF_FLAGS := 
 
 GO_FLAGS := -buildvcs=false -ldflags="$(LDFLAGS)"
