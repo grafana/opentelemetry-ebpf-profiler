@@ -26,7 +26,7 @@ func TestRegex(t *testing.T) {
 			//nolint:lll
 			"12:blkio:/kubepods/burstable/pod83ca8044-3e7c-457b-8647-a21dabad5079/57ac76ffc93d7e7735ca186bc67115656967fc8aecbe1f65526c4c48b033e6a5",
 			//nolint:lll
-			"/kubepods/burstable/pod83ca8044-3e7c-457b-8647-a21dabadcache5079/57ac76ffc93d7e7735ca186bc67115656967fc8aecbe1f65526c4c48b033e6a5",
+			"/kubepods/burstable/pod83ca8044-3e7c-457b-8647-a21dabad5079/57ac76ffc93d7e7735ca186bc67115656967fc8aecbe1f65526c4c48b033e6a5",
 		},
 	}
 	for _, td := range testdata {

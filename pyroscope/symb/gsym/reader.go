@@ -280,19 +280,17 @@ func (g *Gsym) GetString(offset int64) (string, error) {
 		buf := g.buf[:]
 		for {
 			n, err := g.readerAt.ReadAt(buf, strOffset)
-			if err != nil {
-				return "", err
-			}
+
 			null := bytes.IndexByte(buf, 0)
 			if null != -1 {
 				sb.Write(buf[:null])
 				break
 			}
-			sb.Write(buf)
-			strOffset += int64(n)
-			if n != len(buf) {
+			if err != nil || n != len(buf) {
 				break
 			}
+			sb.Write(buf[:n])
+			strOffset += int64(n)
 		}
 		return sb.String(), nil
 	}

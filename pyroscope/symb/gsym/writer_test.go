@@ -93,7 +93,7 @@ func TestGSYMWriter(t *testing.T) {
 	for _, testdatum := range testdata {
 		t.Run(fmt.Sprintf("test_%x", testdatum.addr), func(t *testing.T) {
 			address, err := reader.LookupAddress(testdatum.addr)
-			actual := []string{}
+			var actual []string
 			for _, loc := range address.Locations {
 				actual = append(actual, loc.Name)
 			}
