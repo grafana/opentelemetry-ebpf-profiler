@@ -14,6 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/pdata/pprofile/pprofileotlp"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/auth"
 	semconv "go.opentelemetry.io/otel/semconv/v1.22.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -57,17 +58,13 @@ type OTLPReporter struct {
 
 	// pkgGRPCOperationTimeout sets the time limit for GRPC requests.
 	pkgGRPCOperationTimeout time.Duration
+	callOptions             []grpc.CallOption
 }
 
 // NewOTLP returns a new instance of OTLPReporter
-func NewOTLP(cfg *Config) (*OTLPReporter, error) {
-	cgroupv2ID, err := lru.NewSynced[libpf.PID, string](cfg.CGroupCacheElements,
-		func(pid libpf.PID) uint32 { return uint32(pid) })
-	if err != nil {
-		return nil, err
-	}
+func NewOTLP(cfg *Config, cgroups *lru.SyncedLRU[libpf.PID, string]) (*OTLPReporter, error) {
 	// Set a lifetime to reduce risk of invalid data in case of PID reuse.
-	cgroupv2ID.SetLifetime(90 * time.Second)
+	cgroups.SetLifetime(90 * time.Second)
 
 	// Next step: Dynamically configure the size of this LRU.
 	// Currently, we use the length of the JSON array in
@@ -82,6 +79,7 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		cfg.ExecutablesCacheElements,
 		cfg.FramesCacheElements,
 		cfg.ExtraSampleAttrProd,
+		cfg.ExtranativeFrameSymbolizer,
 	)
 	if err != nil {
 		return nil, err
@@ -93,13 +91,22 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		originsMap[origin] = make(samples.KeyToEventMapping)
 	}
 
+	var callOptions []grpc.CallOption
+	if cfg.PyroscopeUsername != "" && cfg.PyroscopePasswordFile != "" {
+		opt, err := auth.NewBasicAuth(cfg.PyroscopeUsername, cfg.PyroscopePasswordFile)
+		if err != nil {
+			return nil, err
+		}
+		callOptions = append(callOptions, opt)
+	}
+
 	return &OTLPReporter{
 		baseReporter: &baseReporter{
 			cfg:          cfg,
 			name:         cfg.Name,
 			version:      cfg.Version,
 			pdata:        data,
-			cgroupv2ID:   cgroupv2ID,
+			cgroupv2ID:   cgroups,
 			traceEvents:  xsync.NewRWMutex(originsMap),
 			hostmetadata: hostmetadata,
 			runLoop: &runLoop{
@@ -113,6 +120,8 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 		pkgGRPCOperationTimeout: cfg.GRPCOperationTimeout,
 		client:                  nil,
 		rpcStats:                NewStatsHandler(),
+
+		callOptions: callOptions,
 	}, nil
 }
 
@@ -145,6 +154,8 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 	r.runLoop.Start(ctx, r.cfg.ReportInterval, func() {
 		if err := r.reportOTLPProfile(ctx); err != nil {
 			log.Errorf("Request failed: %v", err)
+		} else {
+			log.Debug("OTLP profile sent successfully")
 		}
 	}, func() {
 		// Allow the GC to purge expired entries to avoid memory leaks.
@@ -190,7 +201,7 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
-	_, err := r.client.Export(reqCtx, req)
+	_, err := r.client.Export(reqCtx, req, r.callOptions...)
 	return err
 }
 
@@ -269,8 +280,7 @@ func setupGrpcConnection(parent context.Context, cfg *Config,
 		opts = append(opts,
 			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 				// Support only TLS1.3+ with valid CA certificates
-				MinVersion:         tls.VersionTLS13,
-				InsecureSkipVerify: false,
+				MinVersion: tls.VersionTLS13,
 			})))
 	}
 

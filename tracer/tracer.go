@@ -24,6 +24,7 @@ import (
 	"github.com/elastic/go-perf"
 	log "github.com/sirupsen/logrus"
 	"github.com/zeebo/xxh3"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -36,6 +37,7 @@ import (
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/rlimit"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -156,6 +158,11 @@ type Config struct {
 	ProbabilisticThreshold uint
 	// OffCPUThreshold is the user defined threshold for off-cpu profiling.
 	OffCPUThreshold uint32
+
+	PyroscopeDeltasSizeLimit             int
+	PyroscopeStackDeltaElfSizeLimitBytes int
+	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
+	Policy                               dynamicprofiling.Policy
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -294,9 +301,16 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	hasBatchOperations := ebpfHandler.SupportsGenericBatchOperations()
 
+	sdp := elfunwindinfo.NewStackDeltaProvider(
+		elfunwindinfo.WithDeltaSizeLimit(cfg.PyroscopeDeltasSizeLimit),
+		elfunwindinfo.WithElfSizeLimit(cfg.PyroscopeStackDeltaElfSizeLimitBytes),
+	)
+	log.Infof(
+		"Stack delta provider initialized with size limit %d bytes and ELF size limit %d bytes",
+		cfg.PyroscopeDeltasSizeLimit, cfg.PyroscopeStackDeltaElfSizeLimitBytes)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
-		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames)
+		ebpfHandler, nil, cfg.Reporter, sdp,
+		cfg.FilterErrorFrames, cfg.NativeFrameSymbolizer, cfg.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}

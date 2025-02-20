@@ -1203,8 +1203,14 @@ func (ee *elfExtractor) walkBinSearchTable(parsedFile *pfelf.File, ehFrameHdrSec
 		if err != nil && !errors.Is(err, errEmptyEntry) {
 			return fmt.Errorf("failed to parse FDE: %v", err)
 		}
+		if ee.deltaSizeLimit > 0 {
+			deltasSize := len(*ee.deltas) * int(unsafe.Sizeof(sdtypes.StackDelta{}))
+			if deltasSize > ee.deltaSizeLimit {
+				return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize,
+					ee.deltaSizeLimit)
+			}
+		}
 	}
-
 	return nil
 }
 

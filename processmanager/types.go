@@ -7,6 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+
 	lru "github.com/elastic/go-freelru"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
@@ -96,6 +99,9 @@ type ProcessManager struct {
 
 	// filterErrorFrames determines whether error frames are dropped by `ConvertTrace`.
 	filterErrorFrames bool
+
+	nativeFrameSymbolizer samples.NativeFrameSymbolizer
+	policy                dynamicprofiling.Policy
 }
 
 // Mapping represents an executable memory mapping of a process.
@@ -125,6 +131,8 @@ type Mapping struct {
 
 	// File offset of the backing file
 	FileOffset uint64
+
+	FilePath string
 }
 
 // GetOnDiskFileIdentifier returns the OnDiskFileIdentifier for the mapping

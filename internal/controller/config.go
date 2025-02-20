@@ -7,6 +7,9 @@ import (
 	"runtime"
 	"time"
 
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -37,6 +40,20 @@ type Config struct {
 	// IPAddress is the IP address of the host that sends data to CollAgentAddr.
 	IPAddress       string
 	OffCPUThreshold uint
+
+	PyroscopeUsername                    string
+	PyroscopePasswordFile                string
+	PyroscopeSymbolizeNativeFrames       bool
+	PyroscopeStackDeltaLimitBytes        int
+	PyroscopeStackDeltaElfSizeLimitBytes int
+	PyroscopeSymbCachePath               string
+	PyroscopeSymbCacheSizeBytes          int
+	PyroscopeSD                          string
+	PyroscopeReporterType                string
+	PyroscopeSymbolizerTableGSYM         bool
+	PyroscopeDynamicProfilingPolicy      bool
+	NativeFrameSymbolizer                samples.NativeFrameSymbolizer
+	Policy                               dynamicprofiling.Policy
 
 	Reporter reporter.Reporter
 

@@ -6,6 +6,8 @@ package samples // import "go.opentelemetry.io/ebpf-profiler/reporter/samples"
 import (
 	"fmt"
 
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/otel/attribute"
@@ -28,6 +30,15 @@ type SampleAttrProducer interface {
 	// as Sample attributes. `meta` receives the pointer that was returned from
 	// CollectExtraSampleMeta.
 	ExtraSampleAttrs(attrMgr *AttrTableManager, meta any) []int32
+}
+
+type NativeFrameSymbolizer interface {
+	// Lookup returns only function names because pyroscope does not display
+	// file names and line numbers
+	Lookup(file libpf.FileID, addr uint64) ([]string, error)
+	Cleanup()
+	// Convert todo better name
+	Convert(id libpf.FileID, ref *pfelf.Reference)
 }
 
 // AttrTableManager maintains index allocation and deduplication for attribute tables.

@@ -14,6 +14,7 @@ import (
 
 	cebpf "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,6 +138,7 @@ func TestTraceTransmissionAndParsing(t *testing.T) {
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
 		OffCPUThreshold:        support.OffCPUThresholdMax,
+		Policy:                 dynamicprofiling.AlwaysOnPolicy{},
 	})
 	require.NoError(t, err)
 
@@ -264,6 +266,7 @@ func TestAllTracers(t *testing.T) {
 		DebugTracer:         false,
 		BPFVerifierLogLevel: 0,
 		OffCPUThreshold:     10,
+		Policy:              dynamicprofiling.AlwaysOnPolicy{},
 	})
 	require.NoError(t, err)
 }
