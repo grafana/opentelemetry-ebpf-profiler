@@ -1,7 +1,6 @@
 package ffi
 
 /*
-#cgo LDFLAGS: ${SRCDIR}/../../../target/release/libsymblib_capi.a
 #cgo CFLAGS: -g -Wall
 #include "symblib.h"
 #include <stdlib.h>
