@@ -3,12 +3,10 @@ module go.opentelemetry.io/ebpf-profiler
 go 1.22.2
 
 require (
-	github.com/avvmoto/buf-readerat v0.0.0-20171115124131-a17c8cb89270
 	github.com/aws/aws-sdk-go-v2 v1.30.5
 	github.com/aws/aws-sdk-go-v2/config v1.27.35
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.62.0
 	github.com/cespare/xxhash/v2 v2.3.0
-	github.com/chimehq/binarycursor v0.0.0-20230825172046-f9a5c882a482
 	github.com/cilium/ebpf v0.16.0
 	github.com/elastic/go-freelru v0.16.0
 	github.com/elastic/go-perf v0.0.0-20241016160959-1342461adb4a

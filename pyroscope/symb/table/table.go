@@ -165,7 +165,7 @@ func (st *Table) Lookup(addr64 uint64) ([]string, error) {
 	}
 	idx--
 	for idx >= 0 {
-		it, err := st.getEntry(idx) // todo: prefetch multiple entries to minimise io calls
+		it, err := st.getEntry(idx) // todo: prefetch multiple entries to minimize io calls
 		if err != nil {
 			return result[:0], err
 		}
