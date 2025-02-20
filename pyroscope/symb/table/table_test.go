@@ -154,7 +154,7 @@ func BenchmarkFindFunc(b *testing.B) {
 
 func TestLibc(t *testing.T) {
 	var err error
-	libc, err := os.Open("/usr/lib/debug/.build-id/6d/64b17fbac799e68da7ebd9985ddf9b5cb375e6.debug")
+	libc, err := os.Open("../testdata/64b17fbac799e68da7ebd9985ddf9b5cb375e6.debug")
 	require.NoError(t, err)
 	defer libc.Close()
 

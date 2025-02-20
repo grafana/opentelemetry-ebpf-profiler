@@ -127,7 +127,7 @@ test-deps:
 
 TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support
 
-integration-test-binaries: generate ebpf
+integration-test-binaries: generate ebpf rust-components
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \
 		(go test -ldflags='-extldflags=-static' -trimpath -c \
 			-tags $(GO_TAGS),static_build,integration \
