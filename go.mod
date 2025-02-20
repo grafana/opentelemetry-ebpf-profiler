@@ -1,6 +1,6 @@
 module go.opentelemetry.io/ebpf-profiler
 
-go 1.23
+go 1.22.2
 
 require (
 	github.com/avvmoto/buf-readerat v0.0.0-20171115124131-a17c8cb89270
@@ -13,8 +13,8 @@ require (
 	github.com/elastic/go-freelru v0.16.0
 	github.com/elastic/go-perf v0.0.0-20241016160959-1342461adb4a
 	github.com/go-kit/log v0.2.1
+	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8
 	github.com/google/uuid v1.6.0
-	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jsimonetti/rtnetlink v1.4.2
 	github.com/klauspost/compress v1.17.10
 	github.com/minio/sha256-simd v1.0.1
@@ -80,7 +80,6 @@ require (
 	github.com/google/gnostic-models v0.6.8 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
-	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8 // indirect
 	github.com/grafana/regexp v0.0.0-20221123153739-15dc172cd2db // indirect
 	github.com/imdario/mergo v0.3.16 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
