@@ -28,10 +28,7 @@ type TableFactory interface {
 	Name() string
 }
 
-func NewTableFactory(gsym bool) TableFactory {
-	if gsym {
-		return GsymTableFactory{}
-	}
+func NewTableFactory() TableFactory {
 	return TableTableFactory{}
 }
 

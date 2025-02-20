@@ -48,6 +48,7 @@ func (e entry) String() string {
 }
 
 // todo add 64bit support
+// todo change the layout of the file, separate tables for addresses and the rest of entry fields ?
 type Table struct {
 	file         *os.File
 	rangesOffset uint64
@@ -164,7 +165,7 @@ func (st *Table) Lookup(addr64 uint64) ([]string, error) {
 	}
 	idx--
 	for idx >= 0 {
-		it, err := st.getEntry(idx)
+		it, err := st.getEntry(idx) // todo: prefetch multiple entries to minimise io calls
 		if err != nil {
 			return result[:0], err
 		}

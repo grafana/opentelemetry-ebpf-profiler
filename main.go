@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-
 	//nolint:gosec
 	_ "net/http/pprof"
 	"os"
@@ -136,7 +135,7 @@ func mainWithExitCode() exitCode {
 		return exitFailure
 	}
 
-	tf := irsymcache.NewTableFactory(cfg.PyroscopeSymbolizerTableGSYM)
+	tf := irsymcache.NewTableFactory()
 
 	nfs, err := irsymcache.NewFSCache(pyrologger, tf, irsymcache.Options{
 		Enabled: cfg.PyroscopeSymbolizeNativeFrames,
