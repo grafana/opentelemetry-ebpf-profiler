@@ -1,2 +1,0 @@
-This is a copypaste from pyroscope/ebpf to have no depdenncy on it.
-TODO: remove container id reading/caching from this package and use otel code for that
