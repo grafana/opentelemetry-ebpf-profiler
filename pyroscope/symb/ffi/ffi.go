@@ -51,15 +51,16 @@ type rangeExtractor struct {
 func rangeVisitorWrapper(userData unsafe.Pointer, rangePtr *C.SymblibRange) C.SymblibStatus {
 	e := (*rangeExtractor)(userData)
 	elfVA := uint64(rangePtr.elf_va)
-	length := uint32(rangePtr.length)
+	length := uint64(rangePtr.length)
+	file := C.GoString(rangePtr.file)
 	function := C.GoString(rangePtr._func)
-	e.v.VisitRange(elfVA, length, uint32(rangePtr.depth), function)
+	e.v.VisitRange(elfVA, length, uint32(rangePtr.depth), function, file)
 
 	return 0
 }
 
 type Visitor interface {
-	VisitRange(va uint64, length uint32, depth uint32, function string)
+	VisitRange(va, length uint64, depth uint32, function, file string)
 }
 
 func RangeExtractor(f *os.File, v Visitor) error {
