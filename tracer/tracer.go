@@ -25,6 +25,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/zeebo/xxh3"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -158,6 +159,7 @@ type Config struct {
 	// OffCPUThreshold is the user defined threshold for off-cpu profiling.
 	OffCPUThreshold uint32
 	Policy          dynamicprofiling.Policy
+	FileObserver    samples.FileObserver
 
 	StackDeltasSizeLimit        int
 	StackDeltaElfSizeLimitBytes int
@@ -308,7 +310,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		cfg.StackDeltasSizeLimit, cfg.StackDeltaElfSizeLimitBytes)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, sdp,
-		cfg.FilterErrorFrames, cfg.Policy)
+		cfg.FilterErrorFrames, cfg.FileObserver, cfg.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}

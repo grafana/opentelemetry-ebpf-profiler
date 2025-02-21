@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/helpers"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/vc"
@@ -125,6 +126,18 @@ func mainWithExitCode() exitCode {
 	}
 	cfg.Policy = dynamicprofiling.AlwaysOnPolicy{}
 
+	tf := irsymcache.NewTableFactory()
+	nfs, err := irsymcache.NewFSCache(tf, irsymcache.Options{
+		Enabled: cfg.SymbolizeNativeFrames,
+		Size:    cfg.SymbCacheSizeBytes,
+		Path:    cfg.SymbCachePath,
+	})
+	if err != nil {
+		log.Error(err)
+		return exitFailure
+	}
+	cfg.FileObserver = nfs
+
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		CollAgentAddr:            cfg.CollAgentAddr,
 		DisableTLS:               cfg.DisableTLS,
@@ -136,12 +149,13 @@ func mainWithExitCode() exitCode {
 		ReportInterval:           intervals.ReportInterval(),
 		ExecutablesCacheElements: 16384,
 		// Next step: Calculate FramesCacheElements from numCores and samplingRate.
-		FramesCacheElements: 65536,
-		CGroupCacheElements: 1024,
-		SamplesPerSecond:    cfg.SamplesPerSecond,
-		KernelVersion:       kernelVersion,
-		HostName:            hostname,
-		IPAddress:           sourceIP,
+		FramesCacheElements:       65536,
+		CGroupCacheElements:       1024,
+		SamplesPerSecond:          cfg.SamplesPerSecond,
+		KernelVersion:             kernelVersion,
+		HostName:                  hostname,
+		IPAddress:                 sourceIP,
+		ExtraNativeSymbolResolver: nfs,
 	}, cgroups)
 	if err != nil {
 		log.Error(err)

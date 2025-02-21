@@ -8,9 +8,9 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
@@ -39,7 +39,8 @@ type Config struct {
 	IPAddress       string
 	OffCPUThreshold uint
 
-	Policy dynamicprofiling.Policy
+	Policy       dynamicprofiling.Policy
+	FileObserver samples.FileObserver
 
 	Reporter reporter.Reporter
 
@@ -47,6 +48,10 @@ type Config struct {
 
 	StackDeltaLimitBytes        int
 	StackDeltaElfSizeLimitBytes int
+
+	SymbCachePath         string
+	SymbCacheSizeBytes    int
+	SymbolizeNativeFrames bool
 }
 
 const (

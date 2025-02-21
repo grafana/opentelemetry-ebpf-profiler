@@ -88,6 +88,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		ProbabilisticThreshold: c.config.ProbabilisticThreshold,
 		OffCPUThreshold:        uint32(c.config.OffCPUThreshold),
 		Policy:                 c.config.Policy,
+		FileObserver:           c.config.FileObserver,
 
 		StackDeltasSizeLimit:        c.config.StackDeltaLimitBytes,
 		StackDeltaElfSizeLimitBytes: c.config.StackDeltaElfSizeLimitBytes,
