@@ -54,6 +54,8 @@ type Config struct {
 	// gRPCInterceptor is the client gRPC interceptor, e.g., for sending gRPC metadata.
 	GRPCClientInterceptor grpc.UnaryClientInterceptor
 
+	CallOptions []grpc.CallOption
+
 	// ExtraSampleAttrProd is an optional hook point for adding custom
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
