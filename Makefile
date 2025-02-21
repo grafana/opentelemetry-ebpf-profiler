@@ -27,6 +27,14 @@ else
 $(error Unsupported architecture: $(TARGET_ARCH))
 endif
 
+ifeq ($(TARGET_ARCH),arm64)
+SYMBLIB_PATH := target/aarch64-unknown-linux-musl/release/libsymblib_capi.a
+else ifeq ($(TARGET_ARCH),amd64)
+SYMBLIB_PATH := target/x86_64-unknown-linux-musl/release/libsymblib_capi.a
+else
+$(error Unsupported architecture: $(TARGET_ARCH))
+endif
+
 export TARGET_ARCH
 export CGO_ENABLED = 1
 export GOARCH = $(TARGET_ARCH)
@@ -43,10 +51,10 @@ REVISION ?= $(BRANCH)-$(COMMIT_SHORT_SHA)
 LDFLAGS := -X go.opentelemetry.io/ebpf-profiler/vc.version=$(VERSION) \
 	-X go.opentelemetry.io/ebpf-profiler/vc.revision=$(REVISION) \
 	-X go.opentelemetry.io/ebpf-profiler/vc.buildTimestamp=$(BUILD_TIMESTAMP) \
-	-extldflags=-static
+	-extldflags=-static -extldflags=$(SYMBLIB_PATH)
 
 GO_TAGS := osusergo,netgo
-EBPF_FLAGS := 
+EBPF_FLAGS :=
 
 GO_FLAGS := -buildvcs=false -ldflags="$(LDFLAGS)"
 
@@ -73,8 +81,22 @@ generate:
 ebpf: generate
 	$(MAKE) $(EBPF_FLAGS) -C support/ebpf
 
-ebpf-profiler: generate ebpf
+ebpf-profiler: generate ebpf rust-components
 	go build $(GO_FLAGS) -tags $(GO_TAGS)
+
+rust-targets:
+ifeq ($(TARGET_ARCH),arm64)
+	rustup target add aarch64-unknown-linux-musl
+else ifeq ($(TARGET_ARCH),amd64)
+	rustup target add x86_64-unknown-linux-musl
+endif
+
+rust-components: rust-targets
+ifeq ($(TARGET_ARCH),arm64)
+	cargo build --lib --release --target aarch64-unknown-linux-musl
+else ifeq ($(TARGET_ARCH),amd64)
+	cargo build --lib --release --target x86_64-unknown-linux-musl
+endif
 
 GOLANGCI_LINT_VERSION = "v1.63.4"
 lint: generate vanity-import-check
@@ -98,7 +120,7 @@ vanity-import-fix: $(PORTO)
 	@go install github.com/jcchavezs/porto/cmd/porto@latest
 	@porto --include-internal -w .
 
-test: generate ebpf test-deps
+test: generate ebpf test-deps rust-components
 	go test $(GO_FLAGS) -tags $(GO_TAGS) ./...
 
 TESTDATA_DIRS:= \
@@ -113,7 +135,7 @@ test-deps:
 
 TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support
 
-integration-test-binaries: generate ebpf
+integration-test-binaries: generate ebpf rust-components
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \
 		(go test -ldflags='-extldflags=-static' -trimpath -c \
 			-tags $(GO_TAGS),static_build,integration \
