@@ -88,6 +88,9 @@ func (c *Controller) Start(ctx context.Context) error {
 		ProbabilisticThreshold: c.config.ProbabilisticThreshold,
 		OffCPUThreshold:        uint32(c.config.OffCPUThreshold),
 		Policy:                 c.config.Policy,
+
+		StackDeltasSizeLimit:        c.config.StackDeltaLimitBytes,
+		StackDeltaElfSizeLimitBytes: c.config.StackDeltaElfSizeLimitBytes,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)

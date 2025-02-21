@@ -83,6 +83,9 @@ type elfExtractor struct {
 	// functions that would trash these registers (we cannot recover these registers
 	// during unwind). This is currently enabled for openssl libcrypto only.
 	allowGenericRegs bool
+
+	deltaSizeLimit int
+	eflSizeLimit   int
 }
 
 func (ee *elfExtractor) extractDebugDeltas() error {
@@ -115,9 +118,25 @@ func Extract(filename string, interval *sdtypes.IntervalData) error {
 	return ExtractELF(elfRef, interval)
 }
 
+type ExtractOption func(*elfExtractor)
+
+func WithDeltaSizeLimit(limit int) ExtractOption {
+	return func(ee *elfExtractor) {
+		ee.deltaSizeLimit = limit
+	}
+}
+
+func WithElfSizeLimit(limit int) ExtractOption {
+	return func(ee *elfExtractor) {
+		ee.eflSizeLimit = limit
+	}
+}
+
 // ExtractELF takes a pfelf.Reference and provides the stack delta
 // intervals for it in the interval parameter.
-func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
+func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData,
+	opt ...ExtractOption,
+) error {
 	elfFile, err := elfRef.GetELF()
 	if err != nil {
 		return err
@@ -132,6 +151,14 @@ func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
 		deltas:           &deltas,
 		hooks:            &filter,
 		allowGenericRegs: isLibCrypto(elfFile),
+	}
+	for _, o := range opt {
+		o(&ee)
+	}
+	elfSize := elfFile.FileSize()
+	if ee.eflSizeLimit > 0 && elfSize > ee.eflSizeLimit {
+		return fmt.Errorf("file size %d exceeds ELFStackDeltaProvider elf limit %d",
+			elfSize, ee.eflSizeLimit)
 	}
 
 	if err = ee.parseGoPclntab(); err != nil {

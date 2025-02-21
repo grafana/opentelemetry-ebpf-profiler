@@ -545,12 +545,12 @@ func (ee *elfExtractor) parseGoPclntab() error {
 
 		switch arch {
 		case elf.EM_X86_64:
-			if err := parseX86pclntabFunc(ee.deltas, fun, dataLen, pctab, strategy, i,
+			if err := parseX86pclntabFunc(ee, ee.deltas, fun, dataLen, pctab, strategy, i,
 				hdr.quantum); err != nil {
 				return err
 			}
 		case elf.EM_AARCH64:
-			if err := parseArm64pclntabFunc(ee.deltas, fun, dataLen, pctab, i,
+			if err := parseArm64pclntabFunc(ee, ee.deltas, fun, dataLen, pctab, i,
 				hdr.quantum); err != nil {
 				return err
 			}
@@ -586,8 +586,16 @@ func (ee *elfExtractor) parseGoPclntab() error {
 }
 
 // parseX86pclntabFunc extracts interval information from x86_64 based pclntabFunc.
-func parseX86pclntabFunc(deltas *sdtypes.StackDeltaArray, fun *pclntabFunc, dataLen uintptr,
-	pctab []byte, strategy int, i uint64, quantum uint8) error {
+func parseX86pclntabFunc(
+	ee *elfExtractor,
+	deltas *sdtypes.StackDeltaArray,
+	fun *pclntabFunc,
+	dataLen uintptr,
+	pctab []byte,
+	strategy int,
+	i uint64,
+	quantum uint8,
+) error {
 	switch {
 	case strategy == strategyFramePointer:
 		// Use stack frame-pointer delta
@@ -620,6 +628,14 @@ func parseX86pclntabFunc(deltas *sdtypes.StackDeltaArray, fun *pclntabFunc, data
 				Info:    info,
 			})
 			hints = sdtypes.UnwindHintNone
+
+			if ee.deltaSizeLimit > 0 {
+				deltasSize := len(*ee.deltas) * int(unsafe.Sizeof(sdtypes.StackDelta{}))
+				if deltasSize > ee.deltaSizeLimit {
+					return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize,
+						ee.deltaSizeLimit)
+				}
+			}
 		}
 	}
 	log.Debugf("Unhandled .gopclntab func at %d", i)
@@ -627,8 +643,15 @@ func parseX86pclntabFunc(deltas *sdtypes.StackDeltaArray, fun *pclntabFunc, data
 }
 
 // parseArm64pclntabFunc extracts interval information from ARM64 based pclntabFunc.
-func parseArm64pclntabFunc(deltas *sdtypes.StackDeltaArray, fun *pclntabFunc,
-	dataLen uintptr, pctab []byte, i uint64, quantum uint8) error {
+func parseArm64pclntabFunc(
+	ee *elfExtractor,
+	deltas *sdtypes.StackDeltaArray,
+	fun *pclntabFunc,
+	dataLen uintptr,
+	pctab []byte,
+	i uint64,
+	quantum uint8,
+) error {
 	if fun.pcspOff == 0 {
 		// Some CGO functions don't have PCSP info: skip them.
 		return nil
@@ -670,6 +693,14 @@ func parseArm64pclntabFunc(deltas *sdtypes.StackDeltaArray, fun *pclntabFunc,
 		})
 
 		hint = sdtypes.UnwindHintNone
+
+		if ee.deltaSizeLimit > 0 {
+			deltasSize := len(*ee.deltas) * int(unsafe.Sizeof(sdtypes.StackDelta{}))
+			if deltasSize > ee.deltaSizeLimit {
+				return fmt.Errorf("delta size limit exceeded: %d > %d", deltasSize,
+					ee.deltaSizeLimit)
+			}
+		}
 	}
 
 	return nil

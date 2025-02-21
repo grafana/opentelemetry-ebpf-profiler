@@ -44,6 +44,9 @@ type Config struct {
 	Reporter reporter.Reporter
 
 	Fs *flag.FlagSet
+
+	StackDeltaLimitBytes        int
+	StackDeltaElfSizeLimitBytes int
 }
 
 const (

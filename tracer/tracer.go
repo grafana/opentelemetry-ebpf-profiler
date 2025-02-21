@@ -158,6 +158,9 @@ type Config struct {
 	// OffCPUThreshold is the user defined threshold for off-cpu profiling.
 	OffCPUThreshold uint32
 	Policy          dynamicprofiling.Policy
+
+	StackDeltasSizeLimit        int
+	StackDeltaElfSizeLimitBytes int
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -296,8 +299,15 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	hasBatchOperations := ebpfHandler.SupportsGenericBatchOperations()
 
+	sdp := elfunwindinfo.NewStackDeltaProvider(
+		elfunwindinfo.WithDeltaSizeLimit(cfg.StackDeltasSizeLimit),
+		elfunwindinfo.WithElfSizeLimit(cfg.StackDeltaElfSizeLimitBytes),
+	)
+	log.Infof(
+		"Stack delta provider initialized with size limit %d bytes and ELF size limit %d bytes",
+		cfg.StackDeltasSizeLimit, cfg.StackDeltaElfSizeLimitBytes)
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
-		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
+		ebpfHandler, nil, cfg.Reporter, sdp,
 		cfg.FilterErrorFrames, cfg.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)

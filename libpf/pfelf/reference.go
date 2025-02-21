@@ -45,3 +45,12 @@ func (ref *Reference) Close() {
 		ref.elfFile = nil
 	}
 }
+
+func (ref *Reference) FileSize() int {
+	sz := 0
+	f, _ := ref.GetELF()
+	if f != nil {
+		sz = f.FileSize()
+	}
+	return sz
+}

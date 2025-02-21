@@ -119,6 +119,7 @@ type File struct {
 	debuglinkPath string
 	// Whether we have checked for a debuglink
 	debuglinkChecked bool
+	fileSize         int64
 }
 
 var _ libpf.SymbolFinder = &File{}
@@ -175,6 +176,10 @@ func Open(name string) (*File, error) {
 	if err != nil {
 		f.Close()
 		return nil, err
+	}
+	stat, _ := f.Stat()
+	if stat != nil {
+		ff.fileSize = stat.Size()
 	}
 	return ff, nil
 }
@@ -959,4 +964,13 @@ func (f *File) DynString(tag elf.DynTag) ([]string, error) {
 // IsGolang determines if this ELF is a Golang executable
 func (f *File) IsGolang() bool {
 	return f.Section(".go.buildinfo") != nil || f.Section(".gopclntab") != nil
+}
+
+func (f *File) FileSize() int {
+	return int(f.fileSize)
+}
+
+func (f *File) OSFile() *os.File {
+	ff, _ := f.closer.(*os.File)
+	return ff
 }
