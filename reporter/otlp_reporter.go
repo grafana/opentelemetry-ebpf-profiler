@@ -57,6 +57,7 @@ type OTLPReporter struct {
 
 	// pkgGRPCOperationTimeout sets the time limit for GRPC requests.
 	pkgGRPCOperationTimeout time.Duration
+	callOptions             []grpc.CallOption
 }
 
 // NewOTLP returns a new instance of OTLPReporter
@@ -111,6 +112,8 @@ func NewOTLP(cfg *Config,
 		pkgGRPCOperationTimeout: cfg.GRPCOperationTimeout,
 		client:                  nil,
 		rpcStats:                NewStatsHandler(),
+
+		callOptions: cfg.CallOptions,
 	}, nil
 }
 
@@ -190,7 +193,7 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
-	_, err := r.client.Export(reqCtx, req)
+	_, err := r.client.Export(reqCtx, req, r.callOptions...)
 	return err
 }
 
