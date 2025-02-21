@@ -57,4 +57,6 @@ type Config struct {
 	// ExtraSampleAttrProd is an optional hook point for adding custom
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
+
+	ExtraNativeSymbolResolver samples.NativeSymbolResolver
 }
