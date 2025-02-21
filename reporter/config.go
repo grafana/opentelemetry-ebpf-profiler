@@ -59,4 +59,5 @@ type Config struct {
 	ExtraSampleAttrProd samples.SampleAttrProducer
 
 	ExtraNativeSymbolResolver samples.NativeSymbolResolver
+	CallOptions               []grpc.CallOption
 }
