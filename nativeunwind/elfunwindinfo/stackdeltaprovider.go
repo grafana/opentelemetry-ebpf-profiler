@@ -6,6 +6,7 @@ package elfunwindinfo // import "go.opentelemetry.io/ebpf-profiler/nativeunwind/
 import (
 	"errors"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"os"
 	"sync/atomic"
 
@@ -42,8 +43,25 @@ func (provider *ELFStackDeltaProvider) GetIntervalStructuresForFile(_ host.FileI
 		return fmt.Errorf("failed to extract stack deltas from %s: %w",
 			elfRef.FileName(), err)
 	}
+	debugLogIntervals(elfRef, interval)
 	provider.successCount.Add(1)
 	return nil
+}
+
+func debugLogIntervals(ref *pfelf.Reference, interval *sdtypes.IntervalData) {
+	elf, err := ref.GetELF()
+	if err != nil {
+		return
+	}
+	file := elf.OSFile()
+	if file == nil {
+		return
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return
+	}
+	logrus.Infof("sdp file %s size %d intervals %d", ref.FileName(), info.Size(), len(interval.Deltas))
 }
 
 func (provider *ELFStackDeltaProvider) GetAndResetStatistics() nativeunwind.Statistics {
