@@ -25,7 +25,7 @@ func FDToTable(executable, output *os.File, opt ...Option) error {
 	if err2 != nil {
 		return err2
 	}
-	log.Debugf("converted %s -> %s : %d ranges, %d strings",
+	log.Info("converted %s -> %s : %d ranges, %d strings",
 		executable.Name(),
 		output.Name(),
 		len(rb.entries),
