@@ -170,3 +170,31 @@ func TestPreferPIDOverContainerID(t *testing.T) {
 	require.NotNil(t, target2)
 	require.Same(t, target2, target)
 }
+
+func BenchmarkFindTargetCacheCIDOnly(b *testing.B) {
+	options := TargetsOptions{
+		Targets: []DiscoveredTarget{
+			map[string]string{
+				//nolint:lll
+				"__meta_kubernetes_pod_container_id":   "containerd://9a7c72f122922fe3445ba85ce72c507c8976c0f3d919403fda7c22dfe516f66f",
+				"__meta_kubernetes_namespace":          "foo",
+				"__meta_kubernetes_pod_container_name": "bar",
+			},
+		},
+		TargetsOnly:   true,
+		DefaultTarget: nil,
+	}
+	cgroups, err := freelru.NewSynced[libpf.PID, string](1024,
+		func(pid libpf.PID) uint32 { return uint32(pid) })
+	require.NoError(b, err)
+	cgroups.Add(1801264, "/kubepods/burstable/pod7e5f5ac0-1af4-49ab-8938-664970a26cfd/9a7c72f122922fe3445ba85ce72c507c8976c0f3d919403fda7c22dfe516f66f")
+	tp, err := NewTargetProducer(cgroups, options)
+	require.NoError(b, err)
+
+	for i := 0; i < b.N; i++ {
+		t := tp.FindTarget(1801264)
+		if t == nil {
+			b.FailNow()
+		}
+	}
+}
