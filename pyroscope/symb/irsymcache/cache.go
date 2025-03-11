@@ -81,7 +81,7 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 	l.WithFields(logrus.Fields{
 		"path": opt.Path,
 		"size": opt.Size,
-	}).Info()
+	}).Debug()
 
 	shutdown := make(chan struct{})
 	res := &Resolver{

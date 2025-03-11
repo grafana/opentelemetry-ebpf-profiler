@@ -277,3 +277,27 @@ func calculateLibcConvertedSize(t *testing.T) int {
 	require.NoError(t, err)
 	return int(stat.Size())
 }
+
+func BenchmarkCache(b *testing.B) {
+	resolver, err := NewFSCache(tf, Options{
+		Path: b.TempDir(),
+		Size: 1024 * 1024 * 1024,
+	})
+	loop := func(b *testing.B, resolver *Resolver, fid libpf.FileID) {
+		for i := 0; i < b.N; i++ {
+			elfRef := testElfRef(testLibcFIle)
+			err := resolver.Observe(fid, elfRef)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	require.NoError(b, err)
+	elfRef := testElfRef(testLibcFIle)
+	fid := libpf.NewFileID(456, 123)
+	err = resolver.Observe(fid, elfRef)
+	require.NoError(b, err)
+	b.ResetTimer()
+	loop(b, resolver, fid)
+}
