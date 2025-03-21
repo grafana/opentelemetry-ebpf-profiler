@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
 func BenchmarkDecodeAmd64(b *testing.B) {
@@ -22,11 +21,11 @@ func BenchmarkDecodeAmd64(b *testing.B) {
 			0x8b, 0x3d, 0x78, 0x90, 0x1e, 0x00, // 1bbbae: mov    edi,DWORD PTR [rip+0x1e9078]        # 3a4c2c <_PyRuntime+0x24c>
 			0xe9, 0xe7, 0xea, 0xe9, 0xff, // 1bbbb4: jmp    5a6a0 <pthread_getspecific@plt>
 		}
-		rip := 0x1bbba0
-		val := decodeStubArgumentWrapperX64(
+		rip := uint64(0x1bbba0)
+		val := decodeStubArgumentAMD64(
 			code,
-			libpf.SymbolValue(rip),
-			libpf.SymbolValue(0),
+			rip,
+			0,
 		)
 		if val != 0x3a4c2c {
 			b.Fail()
@@ -189,12 +188,18 @@ func TestAmd64DecodeStub(t *testing.T) {
 
 	for _, td := range testdata {
 		t.Run(td.name, func(t *testing.T) {
-			val := decodeStubArgumentWrapperX64(
+			val := decodeStubArgumentAMD64(
 				td.code,
-				libpf.SymbolValue(td.rip),
-				libpf.SymbolValue(0), // NULL pointer as mem
+				td.rip,
+				0, // NULL pointer as mem
 			)
-			assert.Equal(t, libpf.SymbolValue(td.expected), val)
+			assert.Equal(t, td.expected, val)
 		})
 	}
+}
+
+func FuzzDecodeAmd(f *testing.F) {
+	f.Fuzz(func(t *testing.T, code []byte, rip uint64) {
+		decodeStubArgumentAMD64(code, rip, 0)
+	})
 }
