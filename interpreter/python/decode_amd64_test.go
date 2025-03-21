@@ -12,6 +12,28 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
+func BenchmarkDecodeAmd64(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		code := []byte{
+			0xf3, 0x0f, 0x1e, 0xfa, // 1bbba0: endbr64
+			0x48, 0x83, 0x3d, 0x74, 0x90, 0x1e, 0x00, // 1bbba4: cmp    QWORD PTR [rip+0x1e9074],0x0        # 3a4c20 <_PyRuntime+0x240>
+			0x00,       // 1bbbab:
+			0x74, 0x0b, // 1bbbac: je     1bbbb9 <PyGILState_GetThisThreadState+0x19>
+			0x8b, 0x3d, 0x78, 0x90, 0x1e, 0x00, // 1bbbae: mov    edi,DWORD PTR [rip+0x1e9078]        # 3a4c2c <_PyRuntime+0x24c>
+			0xe9, 0xe7, 0xea, 0xe9, 0xff, // 1bbbb4: jmp    5a6a0 <pthread_getspecific@plt>
+		}
+		rip := 0x1bbba0
+		val := decodeStubArgumentWrapperX64(
+			code,
+			libpf.SymbolValue(rip),
+			libpf.SymbolValue(0),
+		)
+		if val != 0x3a4c2c {
+			b.Fail()
+		}
+	}
+}
+
 func TestAmd64DecodeStub(t *testing.T) {
 	testdata := []struct {
 		name     string
