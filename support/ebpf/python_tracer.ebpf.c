@@ -103,7 +103,7 @@ static inline __attribute__((__always_inline__)) ErrorCode process_python_frame(
     // works on 3.11 and 3.12 though the actual struct members are different.
     if (
       *(u8 *)(&pss->frame[pyinfo->PyFrameObject_entry_member]) == pyinfo->PyFrameObject_entry_val) {
-      *continue_with_next = true;
+//      *continue_with_next = true;
     }
   } else {
     py_f_lasti = *(int *)(&pss->frame[pyinfo->PyFrameObject_f_lasti]);
