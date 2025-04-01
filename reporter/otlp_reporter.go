@@ -6,8 +6,11 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"maps"
+	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
@@ -173,11 +176,28 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 		return nil
 	}
 	req := pprofileotlp.NewExportRequestFromProfiles(profiles)
+	dump(req)
 
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
 	_, err := r.client.Export(reqCtx, req)
 	return err
+}
+
+var cnt = atomic.Int64{}
+
+func dump(req pprofileotlp.ExportRequest) {
+	bs, err := req.MarshalProto()
+	if err != nil {
+		return
+	}
+	fno := cnt.Add(1)
+	if fno > 32 {
+		return
+	}
+	fname := fmt.Sprintf("/tmp/otlp-req-%d.pb", fno)
+	_ = os.WriteFile(fname, bs, 0644)
+
 }
 
 // setResource sets the resource information of the origin of the profiles.
