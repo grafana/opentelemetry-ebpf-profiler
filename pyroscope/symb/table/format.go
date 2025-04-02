@@ -108,7 +108,7 @@ func writeHeader(output io.Writer, hdr *header) error {
 	return nil
 }
 
-func readHeader(file *os.File) (header, error) {
+func readHeader(file io.Reader) (header, error) {
 	headerBuf := make([]byte, headerSize)
 	if _, readErr := file.Read(headerBuf); readErr != nil {
 		return header{}, readErr

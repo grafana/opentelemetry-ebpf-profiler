@@ -9,10 +9,7 @@ import (
 	"os"
 	"sort"
 
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -39,8 +36,14 @@ func (e entry) String() string {
 
 // todo: prefetch multiple range entries to minimize io calls when walking backwards
 // todo: put line tables for inlined functions close to each other
+
+type ReaderAtCloser interface {
+	io.ReadCloser
+	io.ReaderAt
+}
+
 type Table struct {
-	file *os.File
+	file ReaderAtCloser
 	hdr  header
 	opt  options
 
@@ -54,10 +57,10 @@ func OpenPath(path string, opt ...Option) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
-	return OpenFile(f, opt...)
+	return OpenReader(f, opt...)
 }
 
-func OpenFile(f *os.File, opt ...Option) (*Table, error) {
+func OpenReader(f ReaderAtCloser, opt ...Option) (*Table, error) {
 	var err error
 	res := new(Table)
 
@@ -96,6 +99,7 @@ func OpenFile(f *os.File, opt ...Option) (*Table, error) {
 	res.hdr = hdr
 
 	res.fieldsBuffer = make([]byte, int(hdr.rangeTableHeader.fieldSize)*fieldsCount)
+	// all functions address sorted.
 	res.vaTable = make([]byte, int(hdr.vaTableHeader.entrySize)*int(hdr.vaTableHeader.count))
 
 	if _, err = f.ReadAt(res.vaTable, int64(hdr.vaTableHeader.offset)); err != nil {
@@ -109,10 +113,10 @@ func OpenFile(f *os.File, opt ...Option) (*Table, error) {
 		}
 	}
 
-	err = unix.Fadvise(int(res.file.Fd()), 0, 0, unix.FADV_RANDOM)
-	if err != nil {
-		fmt.Printf("failed to Fadvise: %s\n", err)
-	}
+	//err = unix.Fadvise(int(res.file.Fd()), 0, 0, unix.FADV_RANDOM)
+	//if err != nil {
+	//	fmt.Printf("failed to Fadvise: %s\n", err)
+	//}
 
 	return res, nil
 }
@@ -208,6 +212,13 @@ func (st *Table) line(it entry, addr uint64) (int, error) {
 	return prev, nil
 }
 
+// stored on disk:
+//                           addr v
+// | func 1 , depth 0 | func 2 depth 1 | func 3
+
+//                    | func 2        |
+//  | func 1                             |
+
 func (st *Table) Lookup(addr64 uint64) ([]samples.SourceInfoFrame, error) {
 	var result []samples.SourceInfoFrame
 
@@ -217,6 +228,7 @@ func (st *Table) Lookup(addr64 uint64) ([]samples.SourceInfoFrame, error) {
 	})
 	idx--
 	var prev entry
+	_ = prev
 	for idx >= 0 {
 		it, err := st.getEntry(idx) // todo: prefetch multiple entries to minimize io calls
 		if err != nil {
@@ -228,28 +240,6 @@ func (st *Table) Lookup(addr64 uint64) ([]samples.SourceInfoFrame, error) {
 			name := st.str(it.funcOffset)
 			res := samples.SourceInfoFrame{
 				FunctionName: name,
-			}
-			if st.opt.files {
-				if len(result) == 0 {
-					res.FilePath = st.str(it.fileOffset)
-				} else {
-					if prev.callFile != 0 {
-						res.FilePath = st.str(prev.callFile)
-					} else {
-						res.FilePath = st.str(it.fileOffset)
-					}
-				}
-			}
-			if st.opt.lines {
-				if len(result) == 0 {
-					line, err := st.line(it, addr)
-					if err != nil {
-						return nil, err
-					}
-					res.LineNumber = libpf.SourceLineno(line)
-				} else {
-					res.LineNumber = libpf.SourceLineno(int(prev.callLine))
-				}
 			}
 			result = append(result, res)
 			prev = it
@@ -321,7 +311,7 @@ func (st *Table) CheckCRCLineTables() error {
 		"linetable")
 }
 
-func checkCRC(f *os.File, offset, size int64, expected uint32, name string) error {
+func checkCRC(f ReaderAtCloser, offset, size int64, expected uint32, name string) error {
 	crc := crc32.New(castagnoli)
 	n, err := io.Copy(crc, io.NewSectionReader(f, offset, size))
 	if err != nil {

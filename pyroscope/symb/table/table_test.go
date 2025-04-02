@@ -265,7 +265,7 @@ func TestLibc(t *testing.T) {
 
 	_, err = tableFile.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	table, err := OpenFile(tableFile, WithCRC(), WithFiles(), WithLines())
+	table, err := OpenReader(tableFile, WithCRC(), WithFiles(), WithLines())
 	require.NoError(t, err)
 
 	testdata := []struct {
@@ -378,7 +378,7 @@ func BenchmarkLibc(b *testing.B) {
 
 	_, err = tableFile.Seek(0, io.SeekStart)
 	require.NoError(b, err)
-	table, err := OpenFile(tableFile)
+	table, err := OpenReader(tableFile)
 	require.NoError(b, err)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
