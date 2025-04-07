@@ -3,11 +3,12 @@ package table
 import (
 	"bufio"
 	"encoding/binary"
+	"fmt"
+	"github.com/dustin/go-humanize"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/ffi"
 	"hash/crc32"
 	"io"
 	"os"
-
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/symb/ffi"
 )
 
 // sz 0x20
@@ -19,6 +20,15 @@ type vaTableHeader struct {
 	_         uint32
 }
 
+func (h vaTableHeader) String() string {
+	return fmt.Sprintf("vaTableHeader{ size = %s offset = 0x%x }", formatSize(h.entrySize*h.count), h.offset)
+}
+
+func formatSize(sz uint64) string {
+	return humanize.Bytes(sz)
+	//return fmt.Sprintf("%d", sz)
+}
+
 // sz 0x20
 type rangeTableHeader struct {
 	fieldSize uint64
@@ -26,6 +36,10 @@ type rangeTableHeader struct {
 	offset    uint64
 	crc       uint32
 	_         uint32
+}
+
+func (h rangeTableHeader) String() string {
+	return fmt.Sprintf("rangeTableHeader{ size = %s, offset = 0x%x }", formatSize(h.fieldSize*fieldsCount*h.count), h.offset)
 }
 
 // sz 0x18
@@ -36,6 +50,10 @@ type stringsTableHeader struct {
 	_      uint32
 }
 
+func (h stringsTableHeader) String() string {
+	return fmt.Sprintf("stringsTableHeader{ size = %s offset = 0x%x }", formatSize(h.size), h.offset)
+}
+
 // sz 0x20
 type lineTablesHeader struct {
 	fieldSize uint64
@@ -43,6 +61,10 @@ type lineTablesHeader struct {
 	offset    uint64
 	crc       uint32
 	_         uint32
+}
+
+func (h lineTablesHeader) String() string {
+	return fmt.Sprintf("lineTablesHeader{ size = %s offset = 0x%x }", formatSize(h.count*h.fieldSize*lineTableFieldsCount), h.offset)
 }
 
 type header struct {

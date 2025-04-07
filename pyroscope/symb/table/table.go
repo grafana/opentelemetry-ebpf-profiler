@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -263,7 +264,15 @@ func (st *Table) Lookup(addr64 uint64) ([]samples.SourceInfoFrame, error) {
 }
 
 func (st *Table) String() string {
-	return fmt.Sprintf("ranges: %+v", st.hdr)
+	stat, _ := st.file.Stat()
+	hdrs := []string{
+		fmt.Sprintf("gtbl %s size = %s", st.file.Name(), formatSize(uint64(stat.Size()))),
+		st.hdr.vaTableHeader.String(),
+		st.hdr.rangeTableHeader.String(),
+		st.hdr.stringsTableHeader.String(),
+		st.hdr.lineTablesHeader.String(),
+	}
+	return strings.Join(hdrs, "\n")
 }
 
 func (st *Table) Count() int {

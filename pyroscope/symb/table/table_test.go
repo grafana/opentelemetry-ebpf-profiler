@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -480,4 +481,30 @@ func TestLibcAddrLookup(t *testing.T) {
 func TestHeaderSize(t *testing.T) {
 	sz := unsafe.Sizeof(header{})
 	assert.Equal(t, int(headerSize), int(sz))
+}
+
+func TestAlloy(t *testing.T) {
+	//const alloy = "/home/korniltsev/alloy"
+	const alloy = "/home/korniltsev/alloy.debug"
+	t1 := time.Now()
+	srcf, err := os.Open(alloy)
+	require.NoError(t, err)
+
+	tableFile, err := os.Create(t.TempDir() + "/out")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		tableFile.Close()
+	})
+	err = FDToTable(srcf, tableFile, WithCRC(), WithFiles(), WithLines())
+	require.NoError(t, err)
+
+	t2 := time.Now()
+
+	tableFile.Close()
+	require.NoError(t, err)
+	fmt.Printf("converted %s to gtbl in %s\n", srcf.Name(), t2.Sub(t1).String())
+
+	tbl, err := OpenPath(tableFile.Name())
+	require.NoError(t, err)
+	fmt.Printf("gtbl hdr  \n%s\n", tbl.String())
 }
