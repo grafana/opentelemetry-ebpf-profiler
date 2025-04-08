@@ -6,6 +6,7 @@ package python // import "go.opentelemetry.io/ebpf-profiler/interpreter/python"
 import (
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 
 	ah "go.opentelemetry.io/ebpf-profiler/armhelpers"
@@ -109,80 +110,46 @@ func decodeStubArgumentWrapperARM64(code []byte,
 
 func decodeStubArgumentAMD64(code []byte, codeAddress, memoryBase uint64) (
 	libpf.SymbolValue, error) {
-	targetRegister := x86asm.RDI
 
-	instructionOffset := 0
-	regs := amd.RegsState{}
+	//targetRegister := x86asm.RDI
 
-	for instructionOffset < len(code) {
-		rem := code[instructionOffset:]
-		if endbr64, insnLen := amd.IsEndbr64(rem); endbr64 {
-			instructionOffset += insnLen
-			continue
-		}
-
-		inst, err := x86asm.Decode(rem, 64)
+	it := amd.NewInterpreter(code)
+	for {
+		op, err := it.Step()
 		if err != nil {
-			return 0, fmt.Errorf("failed to decode instruction at 0x%x : %w",
-				instructionOffset, err)
-		}
-		instructionOffset += inst.Len
-		regs.Set(x86asm.RIP, codeAddress+uint64(instructionOffset), 0)
-
-		if inst.Op == x86asm.CALL || inst.Op == x86asm.JMP {
-			value, loadedFrom := regs.Get(targetRegister)
-			if loadedFrom != 0 {
-				return libpf.SymbolValue(loadedFrom), nil
+			if errors.Is(err, io.EOF) {
+				return 0, errors.New("no call/jump instructions found")
 			}
-			return libpf.SymbolValue(value), nil
+			return 0, err
 		}
 
-		if (inst.Op == x86asm.LEA || inst.Op == x86asm.MOV) && inst.Args[0] != nil {
-			if reg, ok := inst.Args[0].(x86asm.Reg); ok {
-				var value uint64
-				var loadedFrom uint64
-
-				switch src := inst.Args[1].(type) {
-				case x86asm.Imm:
-					value = uint64(src)
-				case x86asm.Mem:
-					baseAddr, _ := regs.Get(src.Base)
-					displacement := uint64(src.Disp)
-
-					if inst.Op == x86asm.MOV {
-						value = memoryBase
-						loadedFrom = baseAddr + displacement
-						if src.Index != 0 {
-							indexValue, _ := regs.Get(src.Index)
-							loadedFrom += indexValue * uint64(src.Scale)
-						}
-					} else if inst.Op == x86asm.LEA {
-						value = baseAddr + displacement
-						if src.Index != 0 {
-							indexValue, _ := regs.Get(src.Index)
-							value += indexValue * uint64(src.Scale)
-						}
-					}
-
-				case x86asm.Reg:
-					value, _ = regs.Get(src)
-				}
-
-				regs.Set(reg, value, loadedFrom)
-			}
-		}
-
-		if inst.Op == x86asm.ADD && inst.Args[0] != nil && inst.Args[1] != nil {
-			if reg, ok0 := inst.Args[0].(x86asm.Reg); ok0 {
-				if _, ok1 := inst.Args[1].(x86asm.Mem); ok1 {
-					oldValue, _ := regs.Get(reg)
-					value := oldValue + memoryBase
-					regs.Set(reg, value, 0)
-				}
-			}
+		if op == x86asm.JMP || op == x86asm.CALL {
+			break
 		}
 	}
-	return 0, errors.New("no call/jump instructions found")
+	res := it.Regs.Get(x86asm.RDI)
+	fmt.Printf("rdi      %s\n", res)
+	//imm := amd.ImmediateExtractor{Value: new(uint64)}
+	//if res.Match(imm) {
+	//	return libpf.SymbolValue(*imm.Value), nil
+	//}
+	//
+	//if res.Match(amd.Mem(imm)) {
+	//	return libpf.SymbolValue(*imm.Value), nil
+	//}
+	//if res.Match(amd.Mem(amd.Add(it.CodeAddress, imm))) {
+	//	return libpf.SymbolValue(*imm.Value + codeAddress), nil
+	//}
+	//if res.Match(amd.Add(it.CodeAddress, imm)) {
+	//	return libpf.SymbolValue(*imm.Value + codeAddress), nil
+	//}
+	//tmpCodeOffset := amd.ImmediateExtractor{Value: new(uint64)}
+	//it2 := amd.Add(amd.Mem(amd.Add(it.CodeAddress, tmpCodeOffset)), imm)
+	//fmt.Printf("expected %s\n", it2)
+	//if res.Match(it2) {
+	//	return libpf.SymbolValue(*imm.Value), nil
+	//}
+	return 0, nil
 }
 
 func decodeStubArgumentWrapper(
