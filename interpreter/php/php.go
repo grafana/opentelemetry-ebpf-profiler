@@ -5,6 +5,7 @@ package php // import "go.opentelemetry.io/ebpf-profiler/interpreter/php"
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -219,6 +220,7 @@ func recoverExecuteExJumpLabelAddress(ef *pfelf.File) (libpf.SymbolValue, error)
 	}
 
 	returnAddress, err := retrieveExecuteExJumpLabelAddressWrapper(code, executeExAddr)
+	fmt.Printf("retrieveExecuteExJumpLabelAddressWrapper %s %x = %x\n", hex.EncodeToString(code), executeExAddr, returnAddress)
 	if err != nil {
 		return libpf.SymbolValueInvalid,
 			fmt.Errorf("reading the return address from execute_ex failed (%w)",
@@ -246,12 +248,12 @@ func determineVMKind(ef *pfelf.File) (uint, error) {
 	if _, err = ef.ReadVirtualMemory(code, int64(vmKindAddr)); err != nil {
 		return 0, fmt.Errorf("could not read from zend_vm_kind: %w", err)
 	}
-
+	fmt.Printf("zend code %s\n", hex.EncodeToString(code))
 	vmKind, err := retrieveZendVMKindWrapper(code)
 	if err != nil {
 		return 0, fmt.Errorf("an error occurred decoding zend_vm_kind: %w", err)
 	}
-
+	fmt.Printf("vmkind %x\n", vmKind)
 	return vmKind, nil
 }
 

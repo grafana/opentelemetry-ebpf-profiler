@@ -116,6 +116,7 @@ package php // import "go.opentelemetry.io/ebpf-profiler/interpreter/php"
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -323,6 +324,7 @@ func getOpcacheJITInfo(ef *pfelf.File) (dasmBuf, dasmSize libpf.Address, err err
 	}
 
 	dasmBufPtr, dasmSizePtr, err := retrieveJITBufferPtrWrapper(code, zendJit)
+	fmt.Printf("retrieveJITBufferPtrWrapper %s %x = %x %x\n", hex.EncodeToString(code), zendJit, dasmBufPtr, dasmSizePtr)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to extract DASM pointers: %w", err)
 	}

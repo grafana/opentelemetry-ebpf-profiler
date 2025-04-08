@@ -56,11 +56,7 @@ func BenchmarkDecodeAmd64(b *testing.B) {
 			0xe9, 0xe7, 0xea, 0xe9, 0xff, // 1bbbb4: jmp    5a6a0 <pthread_getspecific@plt>
 		}
 		rip := uint64(0x1bbba0)
-		val, _ := decodeStubArgumentAMD64(
-			code,
-			rip,
-			0,
-		)
+		val, _ := decodeStubArgumentAMD64(code, rip)
 		if val != 0x3a4c2c {
 			b.Fail()
 		}
@@ -222,14 +218,14 @@ func TestAmd64DecodeStub(t *testing.T) {
 		{
 			name:          "empty code",
 			code:          nil,
-			expectedError: "no call/jump instructions found",
+			expectedError: "EOF",
 		},
 		{
 			name: "no call/jump instructions found",
 			code: []byte{
 				0x48, 0xC7, 0xC7, 0xEF, 0xEF, 0xEF, 0x00, // mov rdi, 0xefefef
 			},
-			expectedError: "no call/jump instructions found",
+			expectedError: "EOF",
 		},
 		{
 			name: "bad instruction",
@@ -273,11 +269,7 @@ func TestAmd64DecodeStub(t *testing.T) {
 
 	for _, td := range testdata {
 		t.Run(td.name, func(t *testing.T) {
-			val, err := decodeStubArgumentAMD64(
-				td.code,
-				td.rip,
-				0, // NULL pointer as mem
-			)
+			val, err := decodeStubArgumentAMD64(td.code, td.rip)
 			if td.expectedError != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), td.expectedError)
@@ -291,7 +283,7 @@ func TestAmd64DecodeStub(t *testing.T) {
 
 func FuzzDecodeAmd(f *testing.F) {
 	f.Fuzz(func(_ *testing.T, code []byte, rip uint64) {
-		_, err := decodeStubArgumentAMD64(code, rip, 0)
+		_, err := decodeStubArgumentAMD64(code, rip)
 		if err != nil {
 			return
 		}

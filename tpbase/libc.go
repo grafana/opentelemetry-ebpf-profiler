@@ -6,7 +6,11 @@ package tpbase // import "go.opentelemetry.io/ebpf-profiler/tpbase"
 import (
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/ebpf-profiler/asm/amd"
+	"go.opentelemetry.io/ebpf-profiler/asm/sym"
+	"golang.org/x/arch/x86/x86asm"
 	"regexp"
+	"runtime"
 
 	ah "go.opentelemetry.io/ebpf-profiler/armhelpers"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -39,7 +43,7 @@ type TSDInfo struct {
 //
 // The actual symbol and its location is C-library specific:
 //
-// LIBC			DSO			Symbol
+// LIBC			DSO			sym
 // musl/alpine		ld-musl-$ARCH.so.1	pthread_getspecific
 // musl/generic		libc.musl-$ARCH.so.1	pthread_getspecific
 // glibc/new		libc.so.6		__pthread_getspecific
@@ -109,7 +113,7 @@ func ExtractTSDInfo(ef *pfelf.File) (*TSDInfo, error) {
 		return nil, fmt.Errorf("failed to read getspecific function: %s", err)
 	}
 
-	info, err := ExtractTSDInfoNative(code)
+	info, err := ExtractTSDInfoWrapper(code)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract getspecific data: %s", err)
 	}
@@ -372,4 +376,51 @@ func ExtractTSDInfoARM64(code []byte) (TSDInfo, error) {
 		Multiplier: uint8(regs[0].multiplier),
 		Indirect:   indirect,
 	}, nil
+}
+
+func ExtractTSDInfoX64_64(code []byte) (TSDInfo, error) {
+	it := amd.NewInterpreter(code)
+	key := sym.Symbol("key")
+	it.Regs.Set(x86asm.RDI, key)
+	_, err := it.Loop(func(op x86asm.Inst) bool {
+		return op.Op == x86asm.RET
+	})
+	if err != nil {
+		return TSDInfo{}, errArchNotImplemented
+	}
+	res := it.Regs.Get(x86asm.RAX)
+	mul := sym.Symbol("multiplier")
+	offset := sym.Symbol("offset")
+	expected := sym.MemS(0, sym.Add(sym.Mem(sym.Add(sym.MemS(x86asm.FS, sym.Imm(0)), offset)), sym.Mul(key, mul)))
+	ok := res.Eval(expected)
+	if ok {
+		return TSDInfo{
+			Offset:     int16(offset.ExtractedValue),
+			Multiplier: uint8(mul.ExtractedValue),
+			Indirect:   1,
+		}, nil
+	}
+	mul.Reset()
+	offset.Reset()
+	expected = sym.Mem(sym.Add(sym.MemS(x86asm.FS, sym.Imm(0x10)), sym.Mul(key, mul), offset))
+	ok = res.Eval(expected)
+	if ok {
+		return TSDInfo{
+			Offset:     int16(offset.ExtractedValue),
+			Multiplier: uint8(mul.ExtractedValue),
+			Indirect:   0,
+		}, nil
+	}
+	return TSDInfo{}, errors.New("could not extract tsdInfo amd")
+}
+
+func ExtractTSDInfoWrapper(code []byte) (TSDInfo, error) {
+	switch runtime.GOARCH {
+	case "arm64":
+		return ExtractTSDInfoARM64(code)
+	case "amd64":
+		return ExtractTSDInfoX64_64(code)
+	default:
+		return TSDInfo{}, fmt.Errorf("unsupported arch %s", runtime.GOARCH)
+	}
 }
