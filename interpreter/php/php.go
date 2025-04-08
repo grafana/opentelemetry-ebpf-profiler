@@ -246,12 +246,10 @@ func determineVMKind(ef *pfelf.File) (uint, error) {
 	if _, err = ef.ReadVirtualMemory(code, int64(vmKindAddr)); err != nil {
 		return 0, fmt.Errorf("could not read from zend_vm_kind: %w", err)
 	}
-
 	vmKind, err := retrieveZendVMKindWrapper(code)
 	if err != nil {
 		return 0, fmt.Errorf("an error occurred decoding zend_vm_kind: %w", err)
 	}
-
 	return vmKind, nil
 }
 

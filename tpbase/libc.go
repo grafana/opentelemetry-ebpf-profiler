@@ -7,6 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
+
+	"go.opentelemetry.io/ebpf-profiler/asm/amd"
+	"go.opentelemetry.io/ebpf-profiler/asm/variable"
+	"golang.org/x/arch/x86/x86asm"
 
 	ah "go.opentelemetry.io/ebpf-profiler/armhelpers"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -109,7 +114,7 @@ func ExtractTSDInfo(ef *pfelf.File) (*TSDInfo, error) {
 		return nil, fmt.Errorf("failed to read getspecific function: %s", err)
 	}
 
-	info, err := ExtractTSDInfoNative(code)
+	info, err := ExtractTSDInfoWrapper(code)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract getspecific data: %s", err)
 	}
@@ -372,4 +377,68 @@ func ExtractTSDInfoARM64(code []byte) (TSDInfo, error) {
 		Multiplier: uint8(regs[0].multiplier),
 		Indirect:   indirect,
 	}, nil
+}
+
+func ExtractTSDInfoX64_64(code []byte) (TSDInfo, error) {
+	it := amd.NewInterpreter(code)
+	key := variable.Var("key")
+	key.SetMaxValue(0x1f)
+	it.Regs.Set(x86asm.RDI, key)
+	err := it.LoopWithBreak(func(op x86asm.Inst) bool {
+		return op.Op == x86asm.RET
+	})
+	if err != nil {
+		return TSDInfo{}, errArchNotImplemented
+	}
+	res := it.Regs.Get(x86asm.RAX)
+	mul := variable.Var("multiplier")
+	offset := variable.Var("offset")
+	expected := variable.Mem(
+		variable.Add(
+			variable.Mem(
+				variable.Add(
+					variable.MemS(x86asm.FS, variable.Imm(0)),
+					offset,
+				),
+			),
+			variable.Mul(
+				variable.Crop(key, 32),
+				mul),
+		),
+	)
+	ok := res.Eval(expected)
+	if ok {
+		return TSDInfo{
+			Offset:     int16(offset.ExtractedValue),
+			Multiplier: uint8(mul.ExtractedValue),
+			Indirect:   1,
+		}, nil
+	}
+	expected = variable.Mem(
+		variable.Add(
+			variable.MemS(x86asm.FS, variable.Imm(0x10)),
+			variable.Mul(variable.Crop(key, 32), mul),
+			offset,
+		),
+	)
+	ok = res.Eval(expected)
+	if ok {
+		return TSDInfo{
+			Offset:     int16(offset.ExtractedValue),
+			Multiplier: uint8(mul.ExtractedValue),
+			Indirect:   0,
+		}, nil
+	}
+	return TSDInfo{}, errors.New("could not extract tsdInfo amd")
+}
+
+func ExtractTSDInfoWrapper(code []byte) (TSDInfo, error) {
+	switch runtime.GOARCH {
+	case "arm64":
+		return ExtractTSDInfoARM64(code)
+	case "amd64":
+		return ExtractTSDInfoX64_64(code)
+	default:
+		return TSDInfo{}, fmt.Errorf("unsupported arch %s", runtime.GOARCH)
+	}
 }

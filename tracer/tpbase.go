@@ -37,7 +37,11 @@ import (
 func loadTPBaseOffset(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
 	kernelSymbols *libpf.SymbolMap) (uint64, error) {
 	var tpbaseOffset uint32
-	for _, analyzer := range tpbase.GetAnalyzers() {
+	analyzers, err := tpbase.GetAnalyzers()
+	if err != nil {
+		return 0, err
+	}
+	for _, analyzer := range analyzers {
 		sym, err := kernelSymbols.LookupSymbol(libpf.SymbolName(analyzer.FunctionName))
 		if err != nil {
 			continue
