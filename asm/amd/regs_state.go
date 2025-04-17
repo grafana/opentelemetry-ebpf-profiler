@@ -140,6 +140,28 @@ func (r *RegsState) Get(reg x86asm.Reg) variable.U64 {
 	return res
 }
 
+func (r *RegsState) DebugString() string {
+	res := ""
+	res += "RAX: " + r.regs[regIndex(x86asm.RAX)].String() + "\n"
+	res += "RCX: " + r.regs[regIndex(x86asm.RCX)].String() + "\n"
+	res += "RDX: " + r.regs[regIndex(x86asm.RDX)].String() + "\n"
+	res += "RBX: " + r.regs[regIndex(x86asm.RBX)].String() + "\n"
+	res += "RSP: " + r.regs[regIndex(x86asm.RSP)].String() + "\n"
+	res += "RBP: " + r.regs[regIndex(x86asm.RBP)].String() + "\n"
+	res += "RSI: " + r.regs[regIndex(x86asm.RSI)].String() + "\n"
+	res += "RDI: " + r.regs[regIndex(x86asm.RDI)].String() + "\n"
+	res += "R8 : " + r.regs[regIndex(x86asm.R8)].String() + "\n"
+	res += "R9 : " + r.regs[regIndex(x86asm.R9)].String() + "\n"
+	res += "R10: " + r.regs[regIndex(x86asm.R10)].String() + "\n"
+	res += "R11: " + r.regs[regIndex(x86asm.R11)].String() + "\n"
+	res += "R12: " + r.regs[regIndex(x86asm.R12)].String() + "\n"
+	res += "R13: " + r.regs[regIndex(x86asm.R13)].String() + "\n"
+	res += "R14: " + r.regs[regIndex(x86asm.R14)].String() + "\n"
+	res += "R15: " + r.regs[regIndex(x86asm.R15)].String() + "\n"
+	res += "RIP: " + r.regs[regIndex(x86asm.RIP)].String() + "\n"
+	return res
+}
+
 type Interpreter struct {
 	Regs        RegsState
 	code        []byte
@@ -147,10 +169,22 @@ type Interpreter struct {
 	pc          int
 }
 
-func NewInterpreter(code []byte) Interpreter {
+func NewInterpreter() Interpreter {
+	it := Interpreter{}
+	it.initRegs()
+	return it
+}
+
+func NewInterpreterWithCode(code []byte) Interpreter {
 	it := Interpreter{code: code, CodeAddress: variable.Var("code address")}
 	it.initRegs()
 	return it
+}
+
+func (i *Interpreter) ResetCode(code []byte, address variable.U64) {
+	i.code = code
+	i.CodeAddress = address
+	i.pc = 0
 }
 
 func (i *Interpreter) initRegs() {
@@ -174,22 +208,42 @@ func (i *Interpreter) initRegs() {
 	i.Regs.regs[regIndex(x86asm.RIP)] = variable.Var("initial RIP")
 }
 
-func (i *Interpreter) Loop() error {
+func (i *Interpreter) LoopBlocks(blocks []Block) (x86asm.Inst, error) {
+	var insn x86asm.Inst
+	var err error
+	for j := range blocks {
+		i.ResetCode(blocks[j].Code, blocks[j].Address)
+		insn, err = i.Loop()
+		if !errors.Is(err, io.EOF) {
+			return insn, err
+		}
+	}
+	return insn, err
+}
+
+func (i *Interpreter) Loop() (x86asm.Inst, error) {
 	return i.LoopWithBreak(nil)
 }
-func (i *Interpreter) LoopWithBreak(breakLoop func(op x86asm.Inst) bool) error {
+
+func (i *Interpreter) LoopWithBreak(breakLoop func(op x86asm.Inst) bool) (x86asm.Inst, error) {
+	prev := x86asm.Inst{}
 	for j := 0; j < 137; j++ {
 		op, err := i.Step()
 		if err != nil {
-			return err
+			return prev, err
 		}
 		if breakLoop != nil && breakLoop(op) {
-			return nil
+			return op, nil
 		}
+		prev = op
 	}
-	return errors.New("interpreter loop bound")
+	return prev, errors.New("interpreter loop bound")
 }
+
 func (i *Interpreter) Step() (x86asm.Inst, error) {
+	if len(i.code) == 0 {
+		return x86asm.Inst{}, errors.New("no code")
+	}
 	rem := i.code[i.pc:]
 	if len(rem) == 0 {
 		return x86asm.Inst{}, io.EOF
@@ -220,21 +274,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Reg:
 				i.Regs.Set(dst, variable.Add(i.Regs.Get(dst), i.Regs.Get(src)))
 			case x86asm.Mem:
-				vs := make([]variable.U64, 0, 3)
-				if src.Disp != 0 {
-					vs = append(vs, variable.Imm(uint64(src.Disp)))
-				}
-				if src.Base != 0 {
-					vs = append(vs, i.Regs.Get(src.Base))
-				}
-				if src.Index != 0 {
-					v := variable.Mul(
-						i.Regs.Get(src.Index),
-						variable.Imm(uint64(src.Scale)),
-					)
-					vs = append(vs, v)
-				}
-				v := variable.Add(vs...)
+				v := i.MemArg(src)
 				v = variable.MemS(src.Segment, v)
 				i.Regs.Set(dst, variable.Add(i.Regs.Get(dst), v))
 			}
@@ -259,21 +299,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Reg:
 				i.Regs.Set(dst, i.Regs.Get(src))
 			case x86asm.Mem:
-				vs := make([]variable.U64, 0, 3)
-				if src.Disp != 0 {
-					vs = append(vs, variable.Imm(uint64(src.Disp)))
-				}
-				if src.Base != 0 {
-					vs = append(vs, i.Regs.Get(src.Base))
-				}
-				if src.Index != 0 {
-					v := variable.Mul(
-						i.Regs.Get(src.Index),
-						variable.Imm(uint64(src.Scale)),
-					)
-					vs = append(vs, v)
-				}
-				v := variable.Add(vs...)
+				v := i.MemArg(src)
 				v = variable.MemS(src.Segment, v)
 				i.Regs.Set(dst, v)
 			}
@@ -286,27 +312,46 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			}
 		}
 	}
+	if inst.Op == x86asm.AND {
+		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
+			if src, imm := inst.Args[1].(x86asm.Imm); imm {
+				if src == 3 { // todo other cases
+					i.Regs.Set(dst, variable.Crop(i.Regs.Get(dst), 2))
+				}
+			}
+		}
+	}
 	if inst.Op == x86asm.LEA {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, mem := inst.Args[1].(x86asm.Mem); mem {
-				vs := make([]variable.U64, 0, 3)
-				if src.Disp != 0 {
-					vs = append(vs, variable.Imm(uint64(src.Disp)))
-				}
-				if src.Base != 0 {
-					vs = append(vs, i.Regs.Get(src.Base))
-				}
-				if src.Index != 0 {
-					v := variable.Mul(
-						i.Regs.Get(src.Index),
-						variable.Imm(uint64(src.Scale)),
-					)
-					vs = append(vs, v)
-				}
-				v := variable.Add(vs...)
+				v := i.MemArg(src)
 				i.Regs.Set(dst, v)
 			}
 		}
 	}
 	return inst, nil
+}
+
+func (i *Interpreter) MemArg(src x86asm.Mem) variable.U64 {
+	vs := make([]variable.U64, 0, 3)
+	if src.Disp != 0 {
+		vs = append(vs, variable.Imm(uint64(src.Disp)))
+	}
+	if src.Base != 0 {
+		vs = append(vs, i.Regs.Get(src.Base))
+	}
+	if src.Index != 0 {
+		v := variable.Mul(
+			i.Regs.Get(src.Index),
+			variable.Imm(uint64(src.Scale)),
+		)
+		vs = append(vs, v)
+	}
+	v := variable.Add(vs...)
+	return v
+}
+
+type Block struct {
+	Address variable.U64
+	Code    []byte
 }

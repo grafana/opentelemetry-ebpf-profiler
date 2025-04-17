@@ -32,6 +32,8 @@ func (o op) Eval(other U64) bool {
 			return false
 		}
 		return o.operands.Eval(typed.operands)
+	case *Variable:
+		return typed.isAny
 	default:
 		return false
 	}

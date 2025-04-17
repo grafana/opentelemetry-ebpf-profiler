@@ -16,7 +16,7 @@ type U64 interface {
 	// Each implementation may have additional specific comparison logic.
 	Eval(v U64) bool
 	// String returns a string representation of the U64 value for debugging.
-	String() string
+	String() string // todo rename to DebugString and remvoe the comment above
 	maxValue() uint64
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/ebpf-profiler/asm/variable"
 	"golang.org/x/arch/x86/x86asm"
 )
@@ -36,10 +37,10 @@ func testPythonInterpreter(t testing.TB) {
 		0x10, 0x45, 0x0f, 0xb6, 0x5a, 0x01, 0x41, 0x0f, 0xb6, 0xc6, 0x48, 0x8b, 0x04,
 		0xc1, 0xff, 0xe0,
 	}
-	it := NewInterpreter(code)
+	it := NewInterpreterWithCode(code)
 	it.CodeAddress = variable.Imm(0x8AF05)
 
-	err := it.Loop()
+	_, err := it.Loop()
 	if err == nil || err != io.EOF {
 		t.Fatal(err)
 	}
@@ -58,10 +59,59 @@ func testPythonInterpreter(t testing.TB) {
 	}
 }
 
+func TestRecoverSwitchCase(t *testing.T) {
+	blocks := []Block{
+		{
+			Address: variable.Imm(0x3310E3),
+			Code:    []byte{0x48, 0x8b, 0x44, 0x24, 0x20, 0x48, 0x89, 0x18, 0x49, 0x83, 0xc2, 0x02, 0x44, 0x89, 0xe0, 0x83, 0xe0, 0x03, 0x31, 0xdb, 0x41, 0xf6, 0xc4, 0x04, 0x4c, 0x89, 0x74, 0x24, 0x10, 0x74, 0x08},
+		},
+		{
+			Address: variable.Imm(0x33110a),
+			Code: []byte{
+				0x4d, 0x89, 0xdc, 0x4d, 0x8d, 0x47, 0xf8, 0x4c, 0x89, 0x7c, 0x24, 0x60, 0x4d, 0x8b, 0x7f, 0xf8, 0x48, 0x8b, 0x0d, 0x87, 0x06, 0x17, 0x01, 0x89, 0xc0, 0x48, 0x8d, 0x15, 0x02, 0xe7, 0xc0, 0x00, 0x48, 0x63, 0x04, 0x82, 0x48, 0x01, 0xd0, 0x4c, 0x89, 0xd5, 0x4d, 0x89, 0xc5, 0xff, 0xe0,
+			},
+		},
+	}
+	t.Run("manual", func(t *testing.T) {
+		it := NewInterpreter()
+		initR12 := it.Regs.Get(x86asm.R12)
+		it.ResetCode(blocks[0].Code, blocks[0].Address)
+		_, err := it.Loop()
+		require.ErrorIs(t, err, io.EOF)
+
+		expected := variable.Crop(initR12, 2)
+		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
+		it.ResetCode(blocks[1].Code, blocks[1].Address)
+		_, err = it.Loop()
+		require.ErrorIs(t, err, io.EOF)
+		table := variable.Var("table")
+		expected = variable.Add(variable.Crop(initR12, 2), table)
+		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
+		require.EqualValues(t, 0xf3f82c, table.ExtractedValue)
+
+		t.Fail()
+		//  |   20 MOVSXD RAX, [RDX+4*RAX]
+	})
+	t.Run("loop blocks", func(t *testing.T) {
+		it := NewInterpreter()
+		initR12 := it.Regs.Get(x86asm.R12)
+		_, err := it.LoopBlocks(blocks)
+		require.ErrorIs(t, err, io.EOF)
+		table := variable.Var("table")
+		expected := variable.Add(variable.Crop(initR12, 2), table)
+		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
+	})
+}
+
+func TestSLow(t *testing.T) {
+	it := NewInterpreterWithCode([]byte("0\xf20\xd1\x01\xd1\x03\xd1\x01\xd13\xd1\x01\xd1\x01\xd1\x03\xd1\x01\xd12\xd10\xd12\xd10\xd10\xd10\xd10\xca\x03\xd10\xd1\x03\xd1\x01\xd1\x01\xd1\x03\x01\x00\xd12\xd10\xd12\xd10\xd1\x01\xd12\xd10\xd12\xd10\xd10\xd10\xd10\xca\x03\xd10\xd1\x03\xd1\x01\xd1\x01\xd1\x03\x01\x00\xd10\xd1\xd1\x010\xca0\xd10\xd10"))
+	_, _ = it.Loop()
+}
+
 func FuzzInterpreter(f *testing.F) {
 	f.Fuzz(func(_ *testing.T, code []byte) {
-		i := NewInterpreter(code)
-		_ = i.Loop()
+		i := NewInterpreterWithCode(code)
+		_, _ = i.Loop()
 	})
 }
 

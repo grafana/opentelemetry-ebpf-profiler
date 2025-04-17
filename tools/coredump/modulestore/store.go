@@ -20,13 +20,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
-
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/readatbuf"
 	zstpak "go.opentelemetry.io/ebpf-profiler/tools/zstpak/lib"
+	"golang.org/x/sys/unix"
 )
 
 const (

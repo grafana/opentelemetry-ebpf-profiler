@@ -19,8 +19,14 @@ func Xor(vs ...U64) U64 {
 	if v != 0 {
 		ops = append(ops, Imm(v))
 	}
-	if len(ops) == 2 && ops[0].Eval(ops[1]) {
+	//todo learn why does this cmp panics
+	//if len(ops) == 2 && (ops[0] == ops[1] || ops[0].Eval(ops[1])) {
+	// todo do not use eval here
+	if len(ops) == 2 && (ops[0].Eval(ops[1])) {
 		return Imm(0)
+	}
+	if len(ops) == 1 {
+		return ops[0]
 	}
 	return newOp(opXor, ops)
 }

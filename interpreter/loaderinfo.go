@@ -40,18 +40,27 @@ func (i *LoaderInfo) GetELF() (*pfelf.File, error) {
 
 // GetSymbolAsRanges returns the normalized virtual address ranges for the named symbol
 func (i *LoaderInfo) GetSymbolAsRanges(symbol libpf.SymbolName) ([]util.Range, error) {
+	if r, err := i.GetSymbolAsRange(symbol); err != nil {
+		return nil, err
+	} else {
+		return []util.Range{r}, nil
+	}
+}
+
+// GetSymbolAsRange returns the normalized virtual address range for the named symbol
+func (i *LoaderInfo) GetSymbolAsRange(symbol libpf.SymbolName) (util.Range, error) {
 	ef, err := i.GetELF()
 	if err != nil {
-		return nil, err
+		return util.Range{}, err
 	}
 	sym, err := ef.LookupSymbol(symbol)
 	if err != nil {
-		return nil, fmt.Errorf("symbol '%v' not found: %w", symbol, err)
+		return util.Range{}, fmt.Errorf("symbol '%v' not found: %w", symbol, err)
 	}
 	start := uint64(sym.Address)
-	return []util.Range{{
+	return util.Range{
 		Start: start,
-		End:   start + sym.Size},
+		End:   start + sym.Size,
 	}, nil
 }
 

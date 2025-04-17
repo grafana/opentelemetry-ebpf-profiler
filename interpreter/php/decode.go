@@ -14,7 +14,7 @@ import (
 )
 
 func retrieveZendVMKindAmd64(code []byte) (uint, error) {
-	it := amd.NewInterpreter(code)
+	it := amd.NewInterpreterWithCode(code)
 	err := it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.RET
 	})
@@ -31,7 +31,7 @@ func retrieveZendVMKindAmd64(code []byte) (uint, error) {
 
 func retrieveExecuteExJumpLabelAddressAmd64(code []byte, addrBase libpf.SymbolValue) (
 	libpf.SymbolValue, error) {
-	it := amd.NewInterpreter(code)
+	it := amd.NewInterpreterWithCode(code)
 	it.CodeAddress = variable.Imm(uint64(addrBase))
 	err := it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.JMP
@@ -50,7 +50,7 @@ func retrieveExecuteExJumpLabelAddressAmd64(code []byte, addrBase libpf.SymbolVa
 
 func retrieveJITBufferPtrAmd64(code []byte, addrBase libpf.SymbolValue) (
 	dasmBuf libpf.SymbolValue, dasmSize libpf.SymbolValue, err error) {
-	it := amd.NewInterpreter(code)
+	it := amd.NewInterpreterWithCode(code)
 	it.CodeAddress = variable.Imm(uint64(addrBase))
 	err = it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.CALL

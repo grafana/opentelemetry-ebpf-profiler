@@ -213,6 +213,26 @@ func TestVariable(t *testing.T) {
 			Crop(Var("v1"), 0),
 		)
 	})
+
+	t.Run("nested crop ", func(t *testing.T) {
+		v1 := Var("v1")
+		assertEqualRecursive(t,
+			Crop(v1, 8),
+			Crop(Crop(v1, 8), 8),
+		)
+	})
+
+	t.Run("xor crop ", func(t *testing.T) {
+		v1 := Var("v1")
+		assertEqualRecursive(t,
+			v1,
+			Xor(v1, Imm(0)),
+		)
+	})
+
+	t.Run("any matches ops", func(t *testing.T) {
+		assert.True(t, Add(Var("v1"), Var("2")).Eval(Any()))
+	})
 }
 
 func assertEqualRecursive(t *testing.T, a, b U64) {

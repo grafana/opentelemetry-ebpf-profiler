@@ -113,9 +113,9 @@ func decodeStubArgumentAMD64(
 ) (
 	libpf.SymbolValue, error,
 ) {
-	it := amd.NewInterpreter(code)
+	it := amd.NewInterpreterWithCode(code)
 	it.CodeAddress = variable.Imm(codeAddress)
-	err := it.LoopWithBreak(func(op x86asm.Inst) bool {
+	_, err := it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.JMP || op.Op == x86asm.CALL
 	})
 	if err != nil {
@@ -169,7 +169,7 @@ func decodeStubArgumentWrapper(
 	case "arm64":
 		return decodeStubArgumentARM64(code, memoryBase), nil
 	case "amd64":
-		return decodeStubArgumentAMD64(code, uint64(codeAddress))
+		return decodeStubArgumentAMD64(code, uint64(codeAddress), uint64(memoryBase))
 	default:
 		return libpf.SymbolValueInvalid, fmt.Errorf("unsupported arch %s", runtime.GOARCH)
 	}

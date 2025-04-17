@@ -380,11 +380,11 @@ func ExtractTSDInfoARM64(code []byte) (TSDInfo, error) {
 }
 
 func ExtractTSDInfoX64_64(code []byte) (TSDInfo, error) {
-	it := amd.NewInterpreter(code)
+	it := amd.NewInterpreterWithCode(code)
 	key := variable.Var("key")
 	key.SetMaxValue(0x1f)
 	it.Regs.Set(x86asm.RDI, key)
-	err := it.LoopWithBreak(func(op x86asm.Inst) bool {
+	_, err := it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.RET
 	})
 	if err != nil {

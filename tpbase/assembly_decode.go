@@ -110,7 +110,7 @@ func AnalyzeAoutDumpDebugregsAmd64(code []byte) (uint32, error) {
 	if len(code) == 0 {
 		return 0, errors.New("empty code blob passed to getFSBaseOffset")
 	}
-	it := amd.NewInterpreter(code)
+	it := amd.NewInterpreterWithCode(code)
 	for j := 0; j < 137; j++ {
 		op, err := it.Step()
 		if err != nil {
