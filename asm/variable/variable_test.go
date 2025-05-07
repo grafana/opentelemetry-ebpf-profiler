@@ -99,91 +99,63 @@ func TestVariable(t *testing.T) {
 		)
 	})
 
-	t.Run("xor 0", func(t *testing.T) {
-		assertEqualRecursive(t,
-			Imm(3),
-			Xor(Imm(1), Imm(2)),
-		)
-	})
-
-	t.Run("xor 3", func(t *testing.T) {
-		v1 := Var("v1")
-		v2 := Var("v2")
-		assertEqualRecursive(t,
-			Xor(v1, v2, Imm(3)),
-			Xor(v1, v2, Imm(2), Imm(1)),
-		)
-		assert.NotEqualValues(t,
-			Imm(3),
-			Xor(v1, v2, Imm(3)),
-		)
-	})
-
-	t.Run("xor eax, eax", func(t *testing.T) {
-		eax := Var("eax")
-		assertEqualRecursive(t,
-			Imm(0),
-			Xor(eax, eax),
-		)
-	})
-
-	t.Run("crop nested", func(t *testing.T) {
+	t.Run("extend nested", func(t *testing.T) {
 		v := Var("v")
 
 		assertEqualRecursive(t,
-			Crop(v, 7),
-			Crop(Crop(v, 7), 7),
+			ZeroExtend(v, 7),
+			ZeroExtend(ZeroExtend(v, 7), 7),
 		)
 	})
 
-	t.Run("crop nested smaller", func(t *testing.T) {
+	t.Run("extend nested smaller", func(t *testing.T) {
 		v := Var("v")
 
 		assertEqualRecursive(t,
-			Crop(v, 5),
-			Crop(Crop(v, 7), 5),
+			ZeroExtend(v, 5),
+			ZeroExtend(ZeroExtend(v, 7), 5),
 		)
 	})
-	t.Run("crop nested smaller", func(t *testing.T) {
+	t.Run("extend nested smaller", func(t *testing.T) {
 		v := Var("v")
 
 		assertEqualRecursive(t,
-			Crop(v, 5),
-			Crop(Crop(v, 5), 7),
+			ZeroExtend(v, 5),
+			ZeroExtend(ZeroExtend(v, 5), 7),
 		)
 	})
 
-	t.Run("crop max1", func(t *testing.T) {
+	t.Run("extend max1", func(t *testing.T) {
 		maxFF := Var("ff").SetMaxValue(0xff)
 		assertEqualRecursive(t,
 			maxFF,
-			Crop(maxFF, 11),
+			ZeroExtend(maxFF, 11),
 		)
 	})
 
-	t.Run("crop max value", func(t *testing.T) {
+	t.Run("extend max value", func(t *testing.T) {
 		maxFF := Var("ff").SetMaxValue(0xff)
 		assert.EqualValues(t,
 			0b1111111,
-			Crop(maxFF, 7).maxValue(),
+			ZeroExtend(maxFF, 7).maxValue(),
 		)
 	})
 
-	t.Run("crop max value", func(t *testing.T) {
+	t.Run("extend max value", func(t *testing.T) {
 		v := Var("v")
 
 		assert.EqualValues(t,
 			math.MaxUint32,
-			Crop(v, 32).maxValue(),
+			ZeroExtend(v, 32).maxValue(),
 		)
 	})
 
-	t.Run("crop max value", func(t *testing.T) {
+	t.Run("extend max value", func(t *testing.T) {
 		v := Var("v")
 
 		assert.EqualValues(t,
 			uint64(math.MaxUint64),
-			Crop(v, 64).maxValue(),
+			ZeroExtend(v, 64).maxValue(),
 		)
 	})
 
@@ -203,30 +175,22 @@ func TestVariable(t *testing.T) {
 		)
 	})
 
-	t.Run("crop 0", func(t *testing.T) {
+	t.Run("extend 0", func(t *testing.T) {
 		assert.EqualValues(t,
 			0,
-			Crop(Var("v1"), 0).maxValue(),
+			ZeroExtend(Var("v1"), 0).maxValue(),
 		)
 		assertEqualRecursive(t,
 			Imm(0),
-			Crop(Var("v1"), 0),
+			ZeroExtend(Var("v1"), 0),
 		)
 	})
 
-	t.Run("nested crop ", func(t *testing.T) {
+	t.Run("nested extend ", func(t *testing.T) {
 		v1 := Var("v1")
 		assertEqualRecursive(t,
-			Crop(v1, 8),
-			Crop(Crop(v1, 8), 8),
-		)
-	})
-
-	t.Run("xor crop ", func(t *testing.T) {
-		v1 := Var("v1")
-		assertEqualRecursive(t,
-			v1,
-			Xor(v1, Imm(0)),
+			ZeroExtend(v1, 8),
+			ZeroExtend(ZeroExtend(v1, 8), 8),
 		)
 	})
 
@@ -259,9 +223,9 @@ func equalRecursive(a, b U64) bool {
 		}
 		return false
 	}
-	if ima, aok := a.(crop); aok {
-		if imb, bok := b.(crop); bok {
-			return ima.sz == imb.sz && equalRecursive(ima.v, imb.v)
+	if ima, aok := a.(extend); aok {
+		if imb, bok := b.(extend); bok {
+			return ima.bitsSize == imb.bitsSize && equalRecursive(ima.v, imb.v)
 		}
 		return false
 	}

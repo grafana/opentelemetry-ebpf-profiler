@@ -48,11 +48,12 @@ func testPythonInterpreter(t testing.TB) {
 	expected := variable.Mem(
 		variable.Add(
 			variable.Mul(
-				variable.Crop(variable.Mem(variable.Any()), 8),
+				variable.ZeroExtend(variable.Mem(variable.Any(), 8), 8),
 				variable.Imm(8),
 			),
 			variable.Var("switch table"),
 		),
+		8,
 	)
 	if !actual.Eval(expected) {
 		t.Fatal()
@@ -79,17 +80,17 @@ func TestRecoverSwitchCase(t *testing.T) {
 		_, err := it.Loop()
 		require.ErrorIs(t, err, io.EOF)
 
-		expected := variable.Crop(initR12, 2)
-		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
+		expected := variable.ZeroExtend(initR12, 2)
+		assertEval(t, it.Regs.Get(x86asm.EAX), expected)
 		it.ResetCode(blocks[1].Code, blocks[1].Address)
 		_, err = it.Loop()
 		require.ErrorIs(t, err, io.EOF)
 		table := variable.Var("table")
-		expected = variable.Add(variable.Crop(initR12, 2), table)
-		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
+		expected = variable.Add(variable.ZeroExtend(initR12, 2), table)
+		assertEval(t, it.Regs.Get(x86asm.EAX), expected)
 		require.EqualValues(t, 0xf3f82c, table.ExtractedValue)
 
-		t.Fail()
+		//t.Fail()
 		//  |   20 MOVSXD RAX, [RDX+4*RAX]
 	})
 	t.Run("loop blocks", func(t *testing.T) {
@@ -98,9 +99,17 @@ func TestRecoverSwitchCase(t *testing.T) {
 		_, err := it.LoopBlocks(blocks)
 		require.ErrorIs(t, err, io.EOF)
 		table := variable.Var("table")
-		expected := variable.Add(variable.Crop(initR12, 2), table)
+		expected := variable.Add(variable.ZeroExtend(initR12, 2), table)
 		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
 	})
+}
+
+func assertEval(t *testing.T, left, right variable.U64) {
+	if !left.Eval(right) {
+		assert.Fail(t, "failed to eval %s to %s", left.String(), right.String())
+		t.Logf("left  %s", left.String())
+		t.Logf("right %s", right.String())
+	}
 }
 
 func TestSLow(t *testing.T) {
@@ -113,6 +122,16 @@ func FuzzInterpreter(f *testing.F) {
 		i := NewInterpreterWithCode(code)
 		_, _ = i.Loop()
 	})
+}
+
+func TestMoveSignExtend(t *testing.T) {
+	i := NewInterpreterWithCode([]byte{
+		0xB8, 0x01, 0x00, 0x00, 0x00, 0x8B, 0x40, 0x04,
+		0xB8, 0x02, 0x00, 0x00, 0x00, 0x48, 0x0F, 0xB6,
+		0x40, 0x04, 0xB8, 0x03, 0x00, 0x00, 0x00, 0x48,
+		0x0F, 0xBF, 0x40, 0x04,
+	})
+	i.Loop()
 }
 
 func TestDebugPrinting(t *testing.T) {

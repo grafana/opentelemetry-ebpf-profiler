@@ -402,7 +402,7 @@ func ExtractTSDInfoX64_64(code []byte) (TSDInfo, error) {
 				),
 			),
 			variable.Mul(
-				variable.Crop(key, 32),
+				variable.ZeroExtend(key, 32),
 				mul),
 		),
 	)
@@ -417,7 +417,7 @@ func ExtractTSDInfoX64_64(code []byte) (TSDInfo, error) {
 	expected = variable.Mem(
 		variable.Add(
 			variable.MemS(x86asm.FS, variable.Imm(0x10)),
-			variable.Mul(variable.Crop(key, 32), mul),
+			variable.Mul(variable.ZeroExtend(key, 32), mul),
 			offset,
 		),
 	)

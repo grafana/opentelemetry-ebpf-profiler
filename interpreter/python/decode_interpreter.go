@@ -114,7 +114,7 @@ func recoverIndirectJumpsFromBlocks(ef *pfelf.File, d *dfs.DFS, termBB *dfs.Basi
 		actual := interp.Regs.Get(typed)
 		expected := variable.Mem(variable.Add(
 			variable.Mul(
-				variable.Crop(variable.Mem(variable.Any()), 8),
+				variable.ZeroExtend(variable.Mem(variable.Any()), 8),
 				variable.Imm(8),
 			),
 			switchTable,
@@ -130,7 +130,7 @@ func recoverIndirectJumpsFromBlocks(ef *pfelf.File, d *dfs.DFS, termBB *dfs.Basi
 
 		//expected := variable.Mem(variable.Add(
 		//	variable.Mul(
-		//		variable.Crop(variable.Any()), 2),
+		//		variable.ZeroExtend(variable.Any()), 2),
 		//		variable.Imm(8),
 		//	),
 		//	switchTable,
@@ -143,7 +143,7 @@ func recoverIndirectJumpsFromBlocks(ef *pfelf.File, d *dfs.DFS, termBB *dfs.Basi
 		actual := interp.MemArg(typed)
 		expected := variable.Add(
 			variable.Mul(
-				variable.Crop(variable.Mem(variable.Any()), 8),
+				variable.ZeroExtend(variable.Mem(variable.Any()), 8),
 				variable.Imm(8),
 			),
 			switchTable,

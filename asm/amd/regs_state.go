@@ -20,7 +20,7 @@ const (
 	size08 = 8
 )
 
-const debugPrinting = false
+const debugPrinting = true
 
 type regIndexTableEntry struct {
 	idx int
@@ -119,10 +119,10 @@ type RegsState struct {
 }
 
 func (r *RegsState) Set(reg x86asm.Reg, v variable.U64) {
-	idx, sz := regIndexWithSize(reg)
-	if sz != size64 {
-		v = variable.Crop(v, sz)
-	}
+	idx, _ := regIndexWithSize(reg)
+	//if sz != size64 {
+	//	v = variable.ZeroExtend(v, sz)
+	//}
 	if debugPrinting {
 		if reg != x86asm.RIP {
 			fmt.Printf("                               -> | %6s = %s\n", reg, v.String())
@@ -135,7 +135,7 @@ func (r *RegsState) Get(reg x86asm.Reg) variable.U64 {
 	idx, sz := regIndexWithSize(reg)
 	res := r.regs[idx]
 	if sz != size64 {
-		res = variable.Crop(res, sz)
+		res = variable.ZeroExtend(res, sz)
 	}
 	return res
 }
@@ -258,7 +258,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			i.pc, err)
 	}
 	if debugPrinting {
-		fmt.Printf(" | %4x %s\n", i.pc, inst.String())
+		fmt.Printf(" | %4x %s\n", i.pc, x86asm.IntelSyntax(inst, uint64(i.pc), nil))
 	}
 	i.pc += inst.Len
 	i.Regs.Set(x86asm.RIP, variable.Add(i.CodeAddress, variable.Imm(uint64(i.pc))))
@@ -275,7 +275,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 				i.Regs.Set(dst, variable.Add(i.Regs.Get(dst), i.Regs.Get(src)))
 			case x86asm.Mem:
 				v := i.MemArg(src)
-				v = variable.MemS(src.Segment, v)
+				v = variable.MemS(src.Segment, v, inst.MemBytes)
 				i.Regs.Set(dst, variable.Add(i.Regs.Get(dst), v))
 			}
 		}
@@ -291,7 +291,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			}
 		}
 	}
-	if inst.Op == x86asm.MOV || inst.Op == x86asm.MOVZX {
+	if inst.Op == x86asm.MOV || inst.Op == x86asm.MOVZX || inst.Op == x86asm.MOVSXD || inst.Op == x86asm.MOVSX {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			switch src := inst.Args[1].(type) {
 			case x86asm.Imm:
@@ -299,8 +299,20 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Reg:
 				i.Regs.Set(dst, i.Regs.Get(src))
 			case x86asm.Mem:
+				if inst.Op == x86asm.MOVSXD {
+					print("asd")
+				}
 				v := i.MemArg(src)
-				v = variable.MemS(src.Segment, v)
+				v = variable.MemS(src.Segment, v, inst.MemBytes)
+				fmt.Printf("inst.MemBytes %d\n", inst.MemBytes)
+				fmt.Printf("inst.AddrSize %d\n", inst.AddrSize)
+				fmt.Printf("inst.DataSize %d\n", inst.DataSize)
+				//v = variable.ZeroExtend(v, inst.MemBytes*8)
+				if inst.Op == x86asm.MOVSXD || inst.Op == x86asm.MOVSX {
+					v = variable.SignExtend(v, inst.DataSize)
+				} else {
+					v = variable.ZeroExtend(v, inst.DataSize)
+				}
 				i.Regs.Set(dst, v)
 			}
 		}
@@ -308,7 +320,9 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 	if inst.Op == x86asm.XOR {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, reg := inst.Args[1].(x86asm.Reg); reg {
-				i.Regs.Set(dst, variable.Xor(i.Regs.Get(dst), i.Regs.Get(src)))
+				if src == dst {
+					i.Regs.Set(dst, variable.Imm(0))
+				}
 			}
 		}
 	}
@@ -316,7 +330,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, imm := inst.Args[1].(x86asm.Imm); imm {
 				if src == 3 { // todo other cases
-					i.Regs.Set(dst, variable.Crop(i.Regs.Get(dst), 2))
+					i.Regs.Set(dst, variable.ZeroExtend(i.Regs.Get(dst), 2))
 				}
 			}
 		}

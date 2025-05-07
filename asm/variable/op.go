@@ -13,7 +13,6 @@ type opType int
 
 const opAdd = opType(1)
 const opMul = opType(2)
-const opXor = opType(3)
 
 type op struct {
 	typ      opType
@@ -50,8 +49,6 @@ func (o op) String() string {
 		sep = "+"
 	case opMul:
 		sep = "*"
-	case opXor:
-		sep = "^"
 	}
 	return fmt.Sprintf("( %s )", strings.Join(ss, sep))
 }

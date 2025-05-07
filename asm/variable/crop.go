@@ -7,30 +7,35 @@ import (
 	"math"
 )
 
-var _ U64 = crop{}
+var _ U64 = extend{}
 
-func Crop(v U64, sz int) U64 {
-	if sz >= 64 {
-		sz = 64
+func SignExtend(v U64, bitsSize int) U64 {
+	return extend{v, bitsSize, true}
+}
+func ZeroExtend(v U64, bitsSize int) U64 {
+	if bitsSize >= 64 {
+		bitsSize = 64
 	}
-	c := crop{
-		v:  v,
-		sz: sz,
+	c := extend{
+		v:        v,
+		bitsSize: bitsSize,
 	}
-	if c.sz == 0 {
+	if c.bitsSize == 0 {
 		return Imm(0)
 	}
-	if c.sz == 64 {
+	if c.bitsSize == 64 {
 		return c.v
 	}
 	switch typed := c.v.(type) {
 	case immediate:
 		return Imm(typed.Value & c.maxValue())
-	case crop:
-		if typed.sz <= c.sz {
+	case extend:
+		//todo sign check
+		//todo add tests
+		if typed.bitsSize <= c.bitsSize {
 			return typed
 		}
-		return crop{typed.v, c.sz}
+		return extend{typed.v, c.bitsSize, false}
 	default:
 		myMax := c.maxValue()
 		vMax := c.v.maxValue()
@@ -41,27 +46,32 @@ func Crop(v U64, sz int) U64 {
 	return c
 }
 
-type crop struct {
-	v  U64
-	sz int
+type extend struct {
+	v        U64
+	bitsSize int
+	sign     bool
 }
 
-func (c crop) maxValue() uint64 {
-	if c.sz >= 64 {
+func (c extend) maxValue() uint64 {
+	if c.bitsSize >= 64 {
 		return math.MaxUint64
 	}
-	return 1<<c.sz - 1
+	return 1<<c.bitsSize - 1
 }
 
-func (c crop) Eval(v U64) bool {
+func (c extend) Eval(v U64) bool {
 	switch typed := v.(type) {
-	case crop:
-		return typed.sz == c.sz && c.v.Eval(typed.v)
+	case extend:
+		return typed.bitsSize == c.bitsSize && c.v.Eval(typed.v)
 	default:
 		return false
 	}
 }
 
-func (c crop) String() string {
-	return fmt.Sprintf("crop(%s, %d)", c.v, c.sz)
+func (c extend) String() string {
+	s := "zero"
+	if c.sign {
+		s = "sign"
+	}
+	return fmt.Sprintf("%s-extend(%s, %d)", s, c.v, c.bitsSize)
 }

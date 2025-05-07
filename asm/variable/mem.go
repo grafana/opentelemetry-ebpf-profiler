@@ -12,31 +12,29 @@ import (
 
 var _ U64 = mem{}
 
-func MemS(segment x86asm.Reg, at U64) U64 {
-	return mem{at: at, segment: segment}
+func MemS(segment x86asm.Reg, at U64, sizeBytes int) U64 {
+	return mem{at: at, segment: segment, sizeBytes: sizeBytes}
 }
-func Mem(at U64) U64 {
-	return mem{at: at, segment: 0}
+
+func Mem(at U64, sizeBytes int) U64 {
+	return mem{at: at, segment: 0, sizeBytes: sizeBytes}
 }
 
 type mem struct {
-	segment x86asm.Reg
-	at      U64
+	segment   x86asm.Reg
+	at        U64
+	sizeBytes int
 }
 
 func (v mem) maxValue() uint64 {
 	return math.MaxUint64
 }
 
-func (v mem) Simplify() U64 {
-	return v
-}
-
 func (v mem) String() string {
 	if v.segment == 0 {
-		return fmt.Sprintf("[ %s ]", v.at.String())
+		return fmt.Sprintf("[%s:%d]", v.at.String(), v.sizeBytes)
 	}
-	return fmt.Sprintf("[ %s:%s ]", v.segment, v.at.String())
+	return fmt.Sprintf("[%s:%s:%d]", v.segment, v.at.String(), v.sizeBytes)
 }
 
 func (v mem) Eval(other U64) bool {
