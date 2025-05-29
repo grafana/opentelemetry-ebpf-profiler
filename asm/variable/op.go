@@ -20,13 +20,13 @@ type op struct {
 }
 
 func newOp(typ opType, operands operands) U64 {
-	res := op{typ: typ, operands: operands}
+	res := &op{typ: typ, operands: operands}
 	return res
 }
 
-func (o op) Eval(other U64) bool {
+func (o *op) Eval(other U64) bool {
 	switch typed := other.(type) {
-	case op:
+	case *op:
 		if o.typ != typed.typ || len(o.operands) != len(typed.operands) {
 			return false
 		}
@@ -38,7 +38,7 @@ func (o op) Eval(other U64) bool {
 	}
 }
 
-func (o op) String() string {
+func (o *op) String() string {
 	ss := make([]string, len(o.operands))
 	for i := range o.operands {
 		ss[i] = o.operands[i].String()
@@ -53,7 +53,7 @@ func (o op) String() string {
 	return fmt.Sprintf("( %s )", strings.Join(ss, sep))
 }
 
-func (o op) maxValue() uint64 {
+func (o *op) maxValue() uint64 {
 	switch o.typ {
 	case opAdd:
 		return o.maxAddValue()

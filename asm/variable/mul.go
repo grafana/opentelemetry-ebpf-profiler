@@ -30,7 +30,7 @@ func Mul(vs ...U64) U64 {
 	}
 
 	if len(oss) == 2 {
-		if a, ok := oss[0].(op); ok && a.typ == opAdd {
+		if a, ok := oss[0].(*op); ok && a.typ == opAdd {
 			var res []U64
 			for _, ait := range a.operands {
 				res = append(res, Mul(ait, oss[1]))

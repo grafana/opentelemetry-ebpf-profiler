@@ -11,7 +11,7 @@ func Add(vs ...U64) U64 {
 	oss := make(operands, 0, len(vs)+1)
 	v := uint64(0)
 	for _, it := range vs {
-		if o, ok := it.(op); ok && o.typ == opAdd {
+		if o, ok := it.(*op); ok && o.typ == opAdd {
 			for _, jit := range o.operands {
 				if imm, immOk := jit.(immediate); immOk {
 					v += imm.Value

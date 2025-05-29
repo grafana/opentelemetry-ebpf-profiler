@@ -32,9 +32,9 @@ func (v mem) maxValue() uint64 {
 
 func (v mem) String() string {
 	if v.segment == 0 {
-		return fmt.Sprintf("[%s:%d]", v.at.String(), v.sizeBytes)
+		return fmt.Sprintf("[%s : %d bits]", v.at.String(), v.sizeBytes*8)
 	}
-	return fmt.Sprintf("[%s:%s:%d]", v.segment, v.at.String(), v.sizeBytes)
+	return fmt.Sprintf("[%s : %s : %d bits]", v.segment, v.at.String(), v.sizeBytes*8)
 }
 
 func (v mem) Eval(other U64) bool {

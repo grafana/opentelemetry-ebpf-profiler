@@ -72,7 +72,7 @@ func cmpOrder(u U64) int {
 	switch u.(type) {
 	case mem:
 		return 1
-	case op:
+	case *op:
 		return 2
 	case immediate:
 		return 4

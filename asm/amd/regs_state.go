@@ -20,7 +20,7 @@ const (
 	size08 = 8
 )
 
-const debugPrinting = false
+var DebugPrinting = false
 
 type regIndexTableEntry struct {
 	idx int
@@ -30,6 +30,8 @@ type regIndexTableEntry struct {
 var regIndexTable [128]regIndexTableEntry
 
 func init() {
+	//todo size8, size16 does not zeroout msb, should we support this?
+	//(this would require to make Var of variable size and support concat/crop ?)
 	regIndexTable[x86asm.AL] = regIndexTableEntry{idx: 1, sz: size08}
 	regIndexTable[x86asm.CL] = regIndexTableEntry{idx: 2, sz: size08}
 	regIndexTable[x86asm.DL] = regIndexTableEntry{idx: 3, sz: size08}
@@ -123,9 +125,9 @@ func (r *RegsState) Set(reg x86asm.Reg, v variable.U64) {
 	//if sz != size64 {
 	//	v = variable.ZeroExtend(v, sz)
 	//}
-	if debugPrinting {
+	if DebugPrinting {
 		if reg != x86asm.RIP {
-			fmt.Printf("                               -> | %6s = %s\n", reg, v.String())
+			fmt.Printf("    [REG-W] %6s = %s\n", reg, v.String())
 		}
 	}
 	r.regs[idx] = v
@@ -167,18 +169,47 @@ type Interpreter struct {
 	code        []byte
 	CodeAddress variable.U64
 	pc          int
+
+	mem map[variable.U64]variable.U64
 }
 
-func NewInterpreter() Interpreter {
-	it := Interpreter{}
+func NewInterpreter() *Interpreter {
+	it := &Interpreter{}
 	it.initRegs()
 	return it
 }
 
-func NewInterpreterWithCode(code []byte) Interpreter {
-	it := Interpreter{code: code, CodeAddress: variable.Var("code address")}
+func NewInterpreterWithCode(code []byte) *Interpreter {
+	it := &Interpreter{code: code, CodeAddress: variable.Var("code address")}
 	it.initRegs()
 	return it
+}
+
+func (i *Interpreter) WithMemory() *Interpreter {
+	i.mem = make(map[variable.U64]variable.U64)
+	return i
+}
+
+func (i *Interpreter) WriteMem(at, v variable.U64) {
+	if i.mem != nil {
+		if DebugPrinting {
+			fmt.Printf("    [W] %s = %s\n", at, v)
+		}
+		i.mem[at] = v
+	}
+}
+
+func (i *Interpreter) ReadMem(at variable.U64, debug bool) (variable.U64, bool) {
+	if DebugPrinting && debug {
+		//fmt.Printf("    [R] %s\n", at.String())
+	}
+	for a, v := range i.mem {
+		//fmt.Printf("    |- [R] test %s\n", a.String())
+		if a.Eval(at) {
+			return v, true
+		}
+	}
+	return variable.Imm(0), false
 }
 
 func (i *Interpreter) ResetCode(code []byte, address variable.U64) {
@@ -208,7 +239,7 @@ func (i *Interpreter) initRegs() {
 	i.Regs.regs[regIndex(x86asm.RIP)] = variable.Var("initial RIP")
 }
 
-func (i *Interpreter) LoopBlocks(blocks []Block) (x86asm.Inst, error) {
+func (i *Interpreter) LoopBlocks(blocks []BasicBlockCode) (x86asm.Inst, error) {
 	var insn x86asm.Inst
 	var err error
 	for j := range blocks {
@@ -260,8 +291,13 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 
 	i.pc += inst.Len
 	i.Regs.Set(x86asm.RIP, variable.Add(i.CodeAddress, variable.Imm(uint64(i.pc))))
-	if debugPrinting {
-		fmt.Printf(" | %6s %s\n", variable.Add(i.CodeAddress, variable.Imm(uint64(i.pc-inst.Len))).String(), x86asm.IntelSyntax(inst, uint64(i.pc), nil))
+	bp := false
+	if DebugPrinting {
+		isnAddr := variable.Add(i.CodeAddress, variable.Imm(uint64(i.pc-inst.Len)))
+		fmt.Printf("| %6s %s\n", isnAddr.String(), x86asm.IntelSyntax(inst, uint64(i.pc), nil))
+		if "0x1bee05" == isnAddr.String() {
+			bp = true
+		}
 	}
 	if inst.Op == x86asm.RET {
 		return inst, nil
@@ -300,15 +336,37 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 				i.Regs.Set(dst, i.Regs.Get(src))
 			case x86asm.Mem:
 				v := i.MemArg(src)
-				v = variable.MemS(src.Segment, v, inst.MemBytes)
-				if inst.Op == x86asm.MOVSXD || inst.Op == x86asm.MOVSX {
-					v = variable.SignExtend(v, inst.DataSize)
+
+				dataSizeBits := inst.DataSize
+
+				if dataSizeBits == 64 {
+					if m, memOk := i.ReadMem(v, bp); memOk {
+						v = m
+					} else {
+						v = variable.MemS(src.Segment, v, inst.MemBytes)
+					}
 				} else {
-					v = variable.ZeroExtend(v, inst.DataSize)
+					v = variable.MemS(src.Segment, v, inst.MemBytes)
+				}
+				if inst.Op == x86asm.MOVSXD || inst.Op == x86asm.MOVSX {
+					v = variable.SignExtend(v, dataSizeBits)
+				} else {
+					v = variable.ZeroExtend(v, dataSizeBits)
 				}
 				i.Regs.Set(dst, v)
 			}
 		}
+
+		if dst, ok := inst.Args[0].(x86asm.Mem); ok {
+			dsta := i.MemArg(dst)
+			switch src := inst.Args[1].(type) {
+			case x86asm.Imm:
+				i.WriteMem(dsta, variable.Imm(uint64(src)))
+			case x86asm.Reg:
+				i.WriteMem(dsta, i.Regs.Get(src))
+			}
+		}
+
 	}
 	if inst.Op == x86asm.XOR {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
@@ -358,7 +416,7 @@ func (i *Interpreter) MemArg(src x86asm.Mem) variable.U64 {
 	return v
 }
 
-type Block struct {
+type BasicBlockCode struct {
 	Address variable.U64
 	Code    []byte
 }

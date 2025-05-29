@@ -4,13 +4,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 
 	"go.opentelemetry.io/ebpf-profiler/asm/dfs"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"golang.org/x/arch/x86/x86asm"
 )
 
-func Explore(ef *pfelf.File, d *dfs.DFS, indirectJumps map[uint64]struct{}) error {
+// todo add a trivial unittest with couple of handwritten BB and an indirect jump
+func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) error {
 	for {
 		it := d.PeekUnexplored()
 
@@ -28,6 +29,7 @@ func Explore(ef *pfelf.File, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 			if explored {
 				break
 			}
+
 			et := dfs.EdgeTypeFlags(0)
 			if _, err := ef.ReadAt(codeBuf[:], int64(pos)); err != nil {
 				return err
@@ -43,8 +45,10 @@ func Explore(ef *pfelf.File, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 				return err
 			}
 			rip := pos
+			//fmt.Printf("[amd.dfs]  %6x %s\n", rip, x86asm.IntelSyntax(insn, rip, nil))
 			jump := IsJump(insn.Op)
 			conditionalJump := !(insn.Op == x86asm.JMP || insn.Op == x86asm.RET)
+			ud := insn.Op == x86asm.UD0 || insn.Op == x86asm.UD1 || insn.Op == x86asm.UD2
 			mayFallThrough := !jump || conditionalJump
 			if mayFallThrough {
 				et |= dfs.EdgeTypeFallThrough
@@ -52,7 +56,7 @@ func Explore(ef *pfelf.File, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 			if err = d.AddInstruction(it, insn.Len, et); err != nil {
 				return err
 			}
-
+			prevRIP := rip
 			rip += uint64(insn.Len)
 
 			if jump {
@@ -66,18 +70,19 @@ func Explore(ef *pfelf.File, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 					case x86asm.Rel:
 						dst := uint64(int64(rip) + int64(typed))
 						to := d.AddBasicBlock(dst)
-						if dst == 0x2ffb13 {
-							fmt.Printf("bp %s\n", it.String())
-						}
 						d.AddEdge(it, to, dfs.EdgeTypeJump)
 					case x86asm.Reg, x86asm.Mem:
 						if indirectJumps != nil {
-							indirectJumps[pos] = struct{}{}
+							indirectJumps[prevRIP] = struct{}{}
 						}
 					default:
 						return fmt.Errorf("unhandled jump: %s %s \n", hex.EncodeToString(codeBuf[:]), insn.String())
 					}
 				}
+				break
+			}
+			if ud {
+				it.Explored()
 				break
 			}
 		}

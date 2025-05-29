@@ -854,9 +854,11 @@ func findInterpreterRanges(ef *pfelf.File, info *interpreter.LoaderInfo) ([]util
 		}
 		return []util.Range{interpRange}, nil
 	}
-	ranges, err := decodeInterpreterRanges(ef, interpRange.Start)
+	ranges, err := decodeInterpreterRanges(ef, interpRange) // todo cache this
 	if err != nil {
-		return nil, err
+		log.Warnf("failed to decode interpreter ranges %s", err)
+		return []util.Range{interpRange}, nil
+
 	}
 	return ranges, nil
 }

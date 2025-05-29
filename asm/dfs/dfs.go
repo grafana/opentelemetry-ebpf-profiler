@@ -78,28 +78,25 @@ func (d *DFS) String() string {
 	return fmt.Sprintf("DFS %s", strings.Join(ss, ", "))
 }
 
-func (d *DFS) FindBasicBlock(start uint64) *BasicBlock {
+func (d *DFS) FindBasicBlock(at uint64) *BasicBlock {
 	i := sort.Search(len(d.blocks), func(j int) bool {
-		return d.blocks[j].start > start
+		return d.blocks[j].start > at
 	})
 	i--
 	if i < 0 {
 		return nil
 	}
 	l := d.blocks[i]
-	if l.start == start {
+	if l.start == at {
 		return l
 	}
-	if start > l.start && start < l.end {
+	if at > l.start && at < l.end {
 		return l
 	}
 	return nil
 }
 
 func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
-	if start == 0x2ffb13 {
-		fmt.Printf("bp\n")
-	}
 	i := sort.Search(len(d.blocks), func(j int) bool {
 		return d.blocks[j].start > start
 	})
@@ -124,10 +121,11 @@ func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
 			start:    start,
 			end:      l.end,
 			explored: l.explored,
+			edges:    l.edges,
 		}
 		l.explored = true
 		l.end = start
-		l.edges = append(l.edges, Edge{EdgeTypeFallThrough, r})
+		l.edges = []Edge{{EdgeTypeFallThrough, r}}
 	} else {
 		r = &BasicBlock{
 			start:    start,
@@ -147,6 +145,7 @@ const (
 	EdgeTypeJump        = EdgeTypeFlags(2)
 )
 
+// todo add two testcases wheen we add an edge from block A block B and then one of them is split
 func (d *DFS) AddEdge(from *BasicBlock, to *BasicBlock, et EdgeTypeFlags) {
 
 	from.explored = true
@@ -186,8 +185,8 @@ func (d *DFS) reassignIndexes() {
 	}
 }
 
-// todo add test
 func (d *DFS) Ranges() []util.Range {
+	// consider excluding blocks that contain ud or falls-through into a block with ud
 	if len(d.blocks) == 0 {
 		return nil
 	}
@@ -212,12 +211,27 @@ func (d *DFS) Ranges() []util.Range {
 	return res
 }
 
-func (d *DFS) EdgesTo(block *BasicBlock) []*BasicBlock {
-	var res []*BasicBlock
-	for _, bb := range d.blocks {
-		if bb.findEdge(block) != nil {
-			res = append(res, bb)
+// todo test
+func (d *DFS) FallThroughBlocksTo(block *BasicBlock, n int) []*BasicBlock {
+	it := block
+	var res []*BasicBlock = make([]*BasicBlock, 0, n)
+	res = append(res, block)
+	n--
+	for n > 0 {
+		prevIndex := it.index - 1
+		if prevIndex <= 0 {
+			break
+		}
+		prev := d.blocks[prevIndex]
+		edge := prev.findEdge(it)
+		if edge != nil && (edge.typ&EdgeTypeFallThrough == EdgeTypeFallThrough) {
+			res = append(res, prev)
+			it = prev
+			n--
+		} else {
+			break
 		}
 	}
+	slices.Reverse(res)
 	return res
 }

@@ -112,3 +112,41 @@ func TestRanges(t *testing.T) {
 	ranges := d.Ranges()
 	require.EqualValues(t, []util.Range{{0x10C59D, 0x10C5A8 + 3}}, ranges)
 }
+
+func TestAddBBSplitEdges(t *testing.T) {
+	d := DFS{}
+	b1 := d.AddBasicBlock(0)
+	b2 := d.AddBasicBlock(100)
+	b3 := d.AddBasicBlock(200)
+	err := d.AddInstruction(b1, 100, EdgeTypeFallThrough)
+	d.AddEdge(b1, b3, EdgeTypeJump)
+	require.NoError(t, err)
+
+	e1 := b1.findEdge(b2)
+	require.NotNil(t, e1)
+	require.Equal(t, e1.typ, EdgeTypeFallThrough)
+
+	e2 := b1.findEdge(b3)
+	require.NotNil(t, e2)
+	require.Equal(t, e2.typ, EdgeTypeJump)
+
+	b1mid := d.AddBasicBlock(50)
+
+	e1 = b1mid.findEdge(b2)
+	require.NotNil(t, e1)
+	require.Equal(t, e1.typ, EdgeTypeFallThrough)
+
+	e2 = b1mid.findEdge(b3)
+	require.NotNil(t, e2)
+	require.Equal(t, e2.typ, EdgeTypeJump)
+
+	e1 = b1.findEdge(b2)
+	require.Nil(t, e1)
+
+	e2 = b1.findEdge(b3)
+	require.Nil(t, e2)
+
+	e3 := b1.findEdge(b1mid)
+	require.NotNil(t, e3)
+	require.Equal(t, e3.typ, EdgeTypeFallThrough)
+}

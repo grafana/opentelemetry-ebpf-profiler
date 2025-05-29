@@ -76,5 +76,5 @@ func (c extend) String() string {
 	if c.sign {
 		s = "sign"
 	}
-	return fmt.Sprintf("%s-extend(%s, %d)", s, c.v, c.bitsSize)
+	return fmt.Sprintf("%s-extend(%s, %d bits)", s, c.v, c.bitsSize)
 }
