@@ -30,6 +30,9 @@ func ZeroExtend(v U64, bitsSize int) U64 {
 	case immediate:
 		return Imm(typed.Value & c.maxValue())
 	case extend:
+		if typed.sign {
+			return c
+		}
 		//todo sign check
 		//todo add tests
 		if typed.bitsSize <= c.bitsSize {
@@ -42,8 +45,8 @@ func ZeroExtend(v U64, bitsSize int) U64 {
 		if vMax <= myMax {
 			return c.v
 		}
+		return c
 	}
-	return c
 }
 
 type extend struct {
@@ -62,7 +65,7 @@ func (c extend) maxValue() uint64 {
 func (c extend) Eval(v U64) bool {
 	switch typed := v.(type) {
 	case extend:
-		return typed.bitsSize == c.bitsSize && c.v.Eval(typed.v)
+		return typed.bitsSize == c.bitsSize && typed.sign == c.sign && c.v.Eval(typed.v)
 	default:
 		return false
 	}

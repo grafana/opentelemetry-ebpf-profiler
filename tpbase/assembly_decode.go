@@ -123,9 +123,10 @@ func AnalyzeAoutDumpDebugregsAmd64(code []byte) (uint32, error) {
 				offset := variable.Var("offset")
 				expected := variable.Mem(
 					variable.Add(
-						variable.MemS(x86asm.GS, variable.Any()),
+						variable.MemS(x86asm.GS, variable.Any(), 8),
 						offset,
 					),
+					8,
 				)
 				if actual.Eval(expected) {
 					res := int64(offset.ExtractedValue) - 2*8

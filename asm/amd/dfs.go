@@ -66,6 +66,9 @@ func Explore(ef *pfelf.File, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 					case x86asm.Rel:
 						dst := uint64(int64(rip) + int64(typed))
 						to := d.AddBasicBlock(dst)
+						if dst == 0x2ffb13 {
+							fmt.Printf("bp %s\n", it.String())
+						}
 						d.AddEdge(it, to, dfs.EdgeTypeJump)
 					case x86asm.Reg, x86asm.Mem:
 						if indirectJumps != nil {

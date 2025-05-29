@@ -60,8 +60,8 @@ func retrieveJITBufferPtrAmd64(code []byte, addrBase libpf.SymbolValue) (
 	}
 	rdi := variable.Var("rdi")
 	rsi := variable.Var("rsi")
-	if it.Regs.Get(x86asm.RDI).Eval(variable.Mem(rdi)) &&
-		it.Regs.Get(x86asm.RSI).Eval(variable.Mem(rsi)) {
+	if it.Regs.Get(x86asm.RDI).Eval(variable.Mem(rdi, 8)) &&
+		it.Regs.Get(x86asm.RSI).Eval(variable.Mem(rsi, 8)) {
 		rdiValue := libpf.SymbolValue(rdi.ExtractedValue)
 		rsiValue := libpf.SymbolValue(rsi.ExtractedValue)
 		return rdiValue, rsiValue, nil

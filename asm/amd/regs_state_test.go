@@ -81,17 +81,31 @@ func TestRecoverSwitchCase(t *testing.T) {
 		require.ErrorIs(t, err, io.EOF)
 
 		expected := variable.ZeroExtend(initR12, 2)
-		assertEval(t, it.Regs.Get(x86asm.EAX), expected)
+		assertEval(t, it.Regs.Get(x86asm.RAX), expected)
 		it.ResetCode(blocks[1].Code, blocks[1].Address)
 		_, err = it.Loop()
 		require.ErrorIs(t, err, io.EOF)
 		table := variable.Var("table")
-		expected = variable.Add(variable.ZeroExtend(initR12, 2), table)
-		assertEval(t, it.Regs.Get(x86asm.EAX), expected)
-		require.EqualValues(t, 0xf3f82c, table.ExtractedValue)
-
-		//t.Fail()
-		//  |   20 MOVSXD RAX, [RDX+4*RAX]
+		base := variable.Var("base")
+		expected = variable.Add(
+			variable.SignExtend(
+				variable.Mem(
+					variable.Add(
+						variable.Mul(
+							variable.ZeroExtend(initR12, 2),
+							variable.Imm(4),
+						),
+						table,
+					),
+					4,
+				),
+				64,
+			),
+			base,
+		)
+		assertEval(t, it.Regs.Get(x86asm.RAX), expected)
+		assert.EqualValues(t, 0xf3f82c, table.ExtractedValue)
+		assert.EqualValues(t, 0xf3f82c, base.ExtractedValue)
 	})
 	t.Run("loop blocks", func(t *testing.T) {
 		it := NewInterpreter()
@@ -99,8 +113,26 @@ func TestRecoverSwitchCase(t *testing.T) {
 		_, err := it.LoopBlocks(blocks)
 		require.ErrorIs(t, err, io.EOF)
 		table := variable.Var("table")
-		expected := variable.Add(variable.ZeroExtend(initR12, 2), table)
-		assert.True(t, it.Regs.Get(x86asm.EAX).Eval(expected))
+		base := variable.Var("base")
+		expected := variable.Add(
+			variable.SignExtend(
+				variable.Mem(
+					variable.Add(
+						variable.Mul(
+							variable.ZeroExtend(initR12, 2),
+							variable.Imm(4),
+						),
+						table,
+					),
+					4,
+				),
+				64,
+			),
+			base,
+		)
+		assertEval(t, it.Regs.Get(x86asm.RAX), expected)
+		assert.EqualValues(t, 0xf3f82c, table.ExtractedValue)
+		assert.EqualValues(t, 0xf3f82c, base.ExtractedValue)
 	})
 }
 

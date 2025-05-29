@@ -2,8 +2,6 @@ package python
 
 import (
 	"bytes"
-	"encoding/hex"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,8 +27,13 @@ func TestDecodeInterpreter(t *testing.T) {
 		{
 			id: "11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce",
 			expected: []util.Range{
-				{Start: 559770, End: 616313},
-				{Start: 1513344, End: 1513706},
+				{Start: 0x325C10, End: 0x331E54},
+			},
+		},
+		{
+			id: "1a2eb220c22ae7ba8aaf8b243e57dbc25542f8c9c269ed6100c7ad5aea7c3ada",
+			expected: []util.Range{
+				{Start: 0x325C10, End: 0x331E54},
 			},
 		},
 	}
@@ -48,6 +51,8 @@ func TestDecodeInterpreter(t *testing.T) {
 		})
 	}
 }
+
+//todo docker test
 
 func BenchmarkDecodeInterpreter(b *testing.B) {
 	libPython, err := openStoreElf("497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8")
@@ -88,21 +93,4 @@ func openStoreElf(id string) (*pfelf.File, error) {
 		return nil, err
 	}
 	return file, nil
-}
-
-func TestName(t *testing.T) {
-	b1 := util.Range{0x33110a, 0x331139}
-	b2 := util.Range{0x3310E3, 0x331102}
-
-	elf, err := openStoreElf("11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce")
-	require.NoError(t, err)
-
-	code1 := make([]byte, b1.End-b1.Start)
-	code2 := make([]byte, b2.End-b2.Start)
-	elf.ReadAt(code1, int64(b1.Start))
-	elf.ReadAt(code2, int64(b2.Start))
-
-	fmt.Println(hex.EncodeToString(code1))
-	fmt.Println(hex.EncodeToString(code2))
-
 }

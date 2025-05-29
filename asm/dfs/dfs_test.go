@@ -1,9 +1,11 @@
 package dfs
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 func TestDFSAddInstructionReachNextBB(t *testing.T) {
@@ -99,4 +101,14 @@ func TestDFSAddBBSplitUnexplored(t *testing.T) {
 	assert.EqualValues(t, 10, b2.end)
 	assert.NotNil(t, b1.findEdge(b2))
 	assert.Len(t, d.blocks, 2)
+}
+
+func TestRanges(t *testing.T) {
+	d := DFS{}
+	b1 := d.AddBasicBlock(0x10C59D)
+	_ = d.AddInstruction(b1, 5, EdgeTypeJump)
+	b2 := d.AddBasicBlock(0x10C5A8)
+	_ = d.AddInstruction(b2, 3, EdgeTypeFallThrough)
+	ranges := d.Ranges()
+	require.EqualValues(t, []util.Range{{0x10C59D, 0x10C5A8 + 3}}, ranges)
 }

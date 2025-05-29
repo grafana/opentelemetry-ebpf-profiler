@@ -97,6 +97,9 @@ func (d *DFS) FindBasicBlock(start uint64) *BasicBlock {
 }
 
 func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
+	if start == 0x2ffb13 {
+		fmt.Printf("bp\n")
+	}
 	i := sort.Search(len(d.blocks), func(j int) bool {
 		return d.blocks[j].start > start
 	})
@@ -183,18 +186,19 @@ func (d *DFS) reassignIndexes() {
 	}
 }
 
+// todo add test
 func (d *DFS) Ranges() []util.Range {
 	if len(d.blocks) == 0 {
 		return nil
 	}
-	res := make([]util.Range, 0, 3)
+	res := make([]util.Range, 0, 4)
 	it := util.Range{
 		Start: d.blocks[0].start,
 		End:   d.blocks[0].end,
 	}
 	for j := 1; j < len(d.blocks); j++ {
 		jit := d.blocks[j]
-		if jit.start == it.End || jit.start == ((it.End+0x10)/0x10)*0x10 {
+		if jit.start == it.End || jit.start-it.End < 16 {
 			it.End = jit.end
 		} else {
 			res = append(res, it)
@@ -209,7 +213,7 @@ func (d *DFS) Ranges() []util.Range {
 }
 
 func (d *DFS) EdgesTo(block *BasicBlock) []*BasicBlock {
-	res := []*BasicBlock{}
+	var res []*BasicBlock
 	for _, bb := range d.blocks {
 		if bb.findEdge(block) != nil {
 			res = append(res, bb)

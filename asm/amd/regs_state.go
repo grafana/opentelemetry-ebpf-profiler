@@ -20,7 +20,7 @@ const (
 	size08 = 8
 )
 
-const debugPrinting = true
+const debugPrinting = false
 
 type regIndexTableEntry struct {
 	idx int
@@ -242,7 +242,7 @@ func (i *Interpreter) LoopWithBreak(breakLoop func(op x86asm.Inst) bool) (x86asm
 
 func (i *Interpreter) Step() (x86asm.Inst, error) {
 	if len(i.code) == 0 {
-		return x86asm.Inst{}, errors.New("no code")
+		return x86asm.Inst{}, io.EOF
 	}
 	rem := i.code[i.pc:]
 	if len(rem) == 0 {
@@ -257,12 +257,12 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 		return x86asm.Inst{}, fmt.Errorf("failed to decode instruction at 0x%x : %w",
 			i.pc, err)
 	}
-	if debugPrinting {
-		fmt.Printf(" | %4x %s\n", i.pc, x86asm.IntelSyntax(inst, uint64(i.pc), nil))
-	}
+
 	i.pc += inst.Len
 	i.Regs.Set(x86asm.RIP, variable.Add(i.CodeAddress, variable.Imm(uint64(i.pc))))
-
+	if debugPrinting {
+		fmt.Printf(" | %6s %s\n", variable.Add(i.CodeAddress, variable.Imm(uint64(i.pc-inst.Len))).String(), x86asm.IntelSyntax(inst, uint64(i.pc), nil))
+	}
 	if inst.Op == x86asm.RET {
 		return inst, nil
 	}
@@ -299,15 +299,8 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Reg:
 				i.Regs.Set(dst, i.Regs.Get(src))
 			case x86asm.Mem:
-				if inst.Op == x86asm.MOVSXD {
-					print("asd")
-				}
 				v := i.MemArg(src)
 				v = variable.MemS(src.Segment, v, inst.MemBytes)
-				fmt.Printf("inst.MemBytes %d\n", inst.MemBytes)
-				fmt.Printf("inst.AddrSize %d\n", inst.AddrSize)
-				fmt.Printf("inst.DataSize %d\n", inst.DataSize)
-				//v = variable.ZeroExtend(v, inst.MemBytes*8)
 				if inst.Op == x86asm.MOVSXD || inst.Op == x86asm.MOVSX {
 					v = variable.SignExtend(v, inst.DataSize)
 				} else {

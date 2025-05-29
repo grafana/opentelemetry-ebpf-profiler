@@ -130,12 +130,12 @@ func decodeStubArgumentAMD64(
 
 func evaluateStubAnswerAMD64(res variable.U64, memBase uint64) (uint64, error) {
 	answer := variable.Var("answer")
-	if res.Eval(variable.ZeroExtend(variable.Mem(answer), 32)) {
+	if res.Eval(variable.ZeroExtend(variable.Mem(answer, 8), 32)) {
 		return answer.ExtractedValue, nil
 	}
 	if res.Eval(
 		variable.Add(
-			variable.Mem(variable.Var("mem")),
+			variable.Mem(variable.Var("mem"), 8),
 			answer,
 		),
 	) {
@@ -145,9 +145,10 @@ func evaluateStubAnswerAMD64(res variable.U64, memBase uint64) (uint64, error) {
 		variable.ZeroExtend(
 			variable.Mem(
 				variable.Add(
-					variable.Mem(variable.Var("mem")),
+					variable.Mem(variable.Var("mem"), 8),
 					answer,
 				),
+				8,
 			),
 			32,
 		),

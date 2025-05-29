@@ -36,10 +36,6 @@ func (v *Variable) maxValue() uint64 {
 	return v.maxValueConstraint
 }
 
-func (v *Variable) Simplify() U64 {
-	return v
-}
-
 func (v *Variable) String() string {
 	return fmt.Sprintf("{ @%s }", v.name)
 }
