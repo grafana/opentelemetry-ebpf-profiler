@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -263,4 +266,116 @@ func TestMergeRecoveredRages(t *testing.T) {
 		})
 	}
 
+}
+
+func TestDecodeInterpreterFromDockerImages(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("only amd64 needed")
+	}
+	type testcase struct {
+		name       string
+		dockerfile string
+		elfs       func(es []os.DirEntry) (elf string, debugElf string)
+	}
+	alpineTestcase := func(base string) testcase {
+		dockerfile := fmt.Sprintf(`
+FROM %s as builder
+RUN apk add python3 python3-dbg
+RUN mkdir /out
+RUN cp /usr/lib/debug/usr/lib/libpython* /out
+RUN cp /usr/lib/libpython* /out
+FROM scratch
+COPY --from=builder /out /
+`, base)
+		return testcase{
+			name:       base,
+			dockerfile: dockerfile,
+			elfs: func(es []os.DirEntry) (elf string, debugElf string) {
+				for _, e := range es {
+					n := e.Name()
+					if strings.Contains(n, "libpython") &&
+						strings.Contains(n, "1.0") {
+						if strings.Contains(n, ".debug") {
+							debugElf = n
+						} else {
+							elf = n
+						}
+					}
+				}
+				return
+			},
+		}
+	}
+
+	testdata := []testcase{
+		alpineTestcase("alpine:latest"),
+		alpineTestcase("alpine:3.22.0"),
+		alpineTestcase("alpine:3.21.3"),
+		alpineTestcase("alpine:3.21.2"),
+		alpineTestcase("alpine:3.21.1"),
+		alpineTestcase("alpine:3.21.0"),
+		alpineTestcase("alpine:3.20.6"),
+		alpineTestcase("alpine:3.20.5"),
+		alpineTestcase("alpine:3.20.4"),
+		alpineTestcase("alpine:3.20.3"),
+		alpineTestcase("alpine:3.20.2"),
+		alpineTestcase("alpine:3.20.1"),
+		alpineTestcase("alpine:3.20.0"),
+		alpineTestcase("alpine:3.19.7"),
+		alpineTestcase("alpine:3.19.6"),
+		alpineTestcase("alpine:3.19.5"),
+		alpineTestcase("alpine:3.19.4"),
+		alpineTestcase("alpine:3.19.3"),
+		alpineTestcase("alpine:3.19.2"),
+		alpineTestcase("alpine:3.19.1"),
+		alpineTestcase("alpine:3.19.0"),
+	}
+	for _, td := range testdata {
+		t.Run(td.name, func(t *testing.T) {
+			t.Parallel()
+			d, _ := os.MkdirTemp("", "")
+			t.Logf(d)
+			//d := t.TempDir()
+			err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(td.dockerfile), 0666)
+			require.NoError(t, err)
+			c := exec.Command("docker", "build",
+				"-t", "test-"+td.name,
+				"--output=.",
+				"--pull",
+				".")
+			c.Dir = d
+			err = c.Run()
+			require.NoError(t, err)
+
+			es, err := os.ReadDir(d)
+			require.NoError(t, err)
+			elfPath, debugElfPath := td.elfs(es)
+			t.Logf("%s %s", elfPath, debugElfPath)
+
+			elf, err := pfelf.Open(filepath.Join(d, elfPath))
+			require.NoError(t, err)
+			debugElf, err := pfelf.Open(filepath.Join(d, debugElfPath))
+			require.NoError(t, err)
+			debugSymbols, err := debugElf.ReadSymbols()
+			require.NoError(t, err)
+			cold, err := debugSymbols.LookupSymbol("_PyEval_EvalFrameDefault.cold")
+			require.NoError(t, err)
+			t.Logf("addr %x-%x", cold.Address, cold.Size)
+
+			hot, err := elf.LookupSymbol("_PyEval_EvalFrameDefault")
+			require.NoError(t, err)
+
+			ranges, err := decodeInterpreterRanges(elf, hot.AsRange())
+			require.NoError(t, err)
+			t.Logf("%+v", ranges)
+			require.Contains(t, ranges, hot.AsRange())
+			if cold.Size > 2 {
+				require.Len(t, ranges, 2)
+				require.Contains(t, ranges, cold.AsRange())
+			} else {
+				// likely a small range with just ud2 instruction which we don't
+				// care about
+			}
+		})
+	}
 }
