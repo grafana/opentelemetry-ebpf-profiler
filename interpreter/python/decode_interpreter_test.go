@@ -117,7 +117,7 @@ func openStoreElf(id string) (*pfelf.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = s.UnpackModuleToPath(parsedID, filepath.Join(os.Getenv("HOME"), "__inspect__"+id))
+	_ = s.UnpackModuleToPath(parsedID, filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+id))
 	file, err := pfelf.NewFile(bytes.NewReader(buf.Bytes()), 0, false)
 	if err != nil {
 		return nil, err

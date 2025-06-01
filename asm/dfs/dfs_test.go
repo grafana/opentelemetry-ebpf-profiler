@@ -15,7 +15,7 @@ func TestDFSAddInstructionReachNextBB(t *testing.T) {
 	require.Len(t, d.blocks, 2)
 	assert.EqualValues(t, 1, b1.index)
 	assert.EqualValues(t, 0, b2.index)
-	err := d.AddInstruction(b2, 10, EdgeTypeFallThrough)
+	err := d.AddInstruction(b2, 10, true)
 	require.NoError(t, err)
 	assert.True(t, b2.explored)
 	assert.NotNil(t, b2.findEdge(b1))
@@ -28,7 +28,7 @@ func TestDFSAddInstructionReachNextBBOverlaps(t *testing.T) {
 	require.Len(t, d.blocks, 2)
 	assert.EqualValues(t, 1, b1.index)
 	assert.EqualValues(t, 0, b2.index)
-	err := d.AddInstruction(b2, 11, EdgeTypeFallThrough)
+	err := d.AddInstruction(b2, 11, true)
 	require.Error(t, err)
 }
 
@@ -51,7 +51,7 @@ func TestDFSAddBBNoMatchInsert(t *testing.T) {
 func TestDFSAddBBSplitExplored(t *testing.T) {
 	d := DFS{}
 	b1 := d.AddBasicBlock(0)
-	err := d.AddInstruction(b1, 10, EdgeTypeFallThrough)
+	err := d.AddInstruction(b1, 10, true)
 	require.NoError(t, err)
 	b1.Explored()
 	b2 := d.AddBasicBlock(5)
@@ -71,7 +71,7 @@ func TestDFSAddBBSplitExploredNonLast(t *testing.T) {
 	d := DFS{}
 	b1 := d.AddBasicBlock(0)
 	_ = d.AddBasicBlock(100)
-	err := d.AddInstruction(b1, 10, EdgeTypeFallThrough)
+	err := d.AddInstruction(b1, 10, true)
 	require.NoError(t, err)
 	b1.Explored()
 	b2 := d.AddBasicBlock(5)
@@ -89,7 +89,7 @@ func TestDFSAddBBSplitExploredNonLast(t *testing.T) {
 func TestDFSAddBBSplitUnexplored(t *testing.T) {
 	d := DFS{}
 	b1 := d.AddBasicBlock(0)
-	err := d.AddInstruction(b1, 10, EdgeTypeFallThrough)
+	err := d.AddInstruction(b1, 10, true)
 	require.NoError(t, err)
 	b2 := d.AddBasicBlock(5)
 	assert.False(t, b2.explored)
@@ -106,9 +106,9 @@ func TestDFSAddBBSplitUnexplored(t *testing.T) {
 func TestRanges(t *testing.T) {
 	d := DFS{}
 	b1 := d.AddBasicBlock(0x10C59D)
-	_ = d.AddInstruction(b1, 5, EdgeTypeJump)
+	_ = d.AddInstruction(b1, 5, false)
 	b2 := d.AddBasicBlock(0x10C5A8)
-	_ = d.AddInstruction(b2, 3, EdgeTypeFallThrough)
+	_ = d.AddInstruction(b2, 3, true)
 	ranges := d.Ranges()
 	require.EqualValues(t, []util.Range{{0x10C59D, 0x10C5A8 + 3}}, ranges)
 }
@@ -118,7 +118,7 @@ func TestAddBBSplitEdges(t *testing.T) {
 	b1 := d.AddBasicBlock(0)
 	b2 := d.AddBasicBlock(100)
 	b3 := d.AddBasicBlock(200)
-	err := d.AddInstruction(b1, 100, EdgeTypeFallThrough)
+	err := d.AddInstruction(b1, 100, true)
 	d.AddEdge(b1, b3, EdgeTypeJump)
 	require.NoError(t, err)
 

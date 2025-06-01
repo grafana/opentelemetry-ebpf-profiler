@@ -16,12 +16,10 @@ import (
 	"golang.org/x/arch/x86/x86asm"
 )
 
-// investigate 1a2eb220c22ae7ba8aaf8b243e57dbc25542f8c9c269ed6100c7ad5aea7c3ada 1 extra ranges - prune ud?
-// fix coredump tests
 // PeekUnexplored and reassignIndexes are too hot in benchmarks
+// craft
 // add alpine and debian docker, ubuntu tests
 // fuzz for timeouts
-// todo accept Symbol and makesure it is included and merged in the res
 // todo if the result has more than 2 ranges - return the start and the biggest non intersected one
 func decodeInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, error) {
 	var err error

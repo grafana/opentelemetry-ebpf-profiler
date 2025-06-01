@@ -30,12 +30,11 @@ func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 				break
 			}
 
-			et := dfs.EdgeTypeFlags(0)
 			if _, err := ef.ReadAt(codeBuf[:], int64(pos)); err != nil {
 				return err
 			}
 			if ok, sz := DecodeSkippable(codeBuf[:]); ok {
-				if err := d.AddInstruction(it, sz, et); err != nil {
+				if err := d.AddInstruction(it, sz, true); err != nil {
 					return err
 				}
 				continue
@@ -50,10 +49,7 @@ func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 			conditionalJump := !(insn.Op == x86asm.JMP || insn.Op == x86asm.RET)
 			ud := insn.Op == x86asm.UD0 || insn.Op == x86asm.UD1 || insn.Op == x86asm.UD2
 			mayFallThrough := !jump || conditionalJump
-			if mayFallThrough {
-				et |= dfs.EdgeTypeFallThrough
-			}
-			if err = d.AddInstruction(it, insn.Len, et); err != nil {
+			if err = d.AddInstruction(it, insn.Len, mayFallThrough); err != nil {
 				return err
 			}
 			prevRIP := rip

@@ -29,7 +29,7 @@ func (b *BasicBlock) findEdge(to *BasicBlock) *Edge {
 }
 
 type Edge struct {
-	typ  EdgeTypeFlags
+	typ  EdgeType
 	edge *BasicBlock
 }
 
@@ -138,15 +138,15 @@ func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
 	return r
 }
 
-type EdgeTypeFlags int
+type EdgeType int
 
 const (
-	EdgeTypeFallThrough = EdgeTypeFlags(1)
-	EdgeTypeJump        = EdgeTypeFlags(2)
+	EdgeTypeFallThrough = EdgeType(1)
+	EdgeTypeJump        = EdgeType(2)
 )
 
 // todo add two testcases wheen we add an edge from block A block B and then one of them is split
-func (d *DFS) AddEdge(from *BasicBlock, to *BasicBlock, et EdgeTypeFlags) {
+func (d *DFS) AddEdge(from *BasicBlock, to *BasicBlock, et EdgeType) {
 
 	from.explored = true
 	if from.findEdge(to) != nil {
@@ -155,7 +155,7 @@ func (d *DFS) AddEdge(from *BasicBlock, to *BasicBlock, et EdgeTypeFlags) {
 	from.edges = append(from.edges, Edge{et, to})
 }
 
-func (d *DFS) AddInstruction(r *BasicBlock, l int, et EdgeTypeFlags) error {
+func (d *DFS) AddInstruction(r *BasicBlock, l int, mayFallThrough bool) error {
 	if r.explored {
 		return errors.New("explored")
 	}
@@ -171,7 +171,7 @@ func (d *DFS) AddInstruction(r *BasicBlock, l int, et EdgeTypeFlags) error {
 	}
 	if end == next.start {
 		r.explored = true
-		if (et & EdgeTypeFallThrough) != 0 {
+		if mayFallThrough {
 			d.AddEdge(r, next, EdgeTypeFallThrough)
 		}
 		return nil
@@ -224,7 +224,7 @@ func (d *DFS) FallThroughBlocksTo(block *BasicBlock, n int) []*BasicBlock {
 		}
 		prev := d.blocks[prevIndex]
 		edge := prev.findEdge(it)
-		if edge != nil && (edge.typ&EdgeTypeFallThrough == EdgeTypeFallThrough) {
+		if edge != nil && edge.typ == EdgeTypeFallThrough {
 			res = append(res, prev)
 			it = prev
 			n--
