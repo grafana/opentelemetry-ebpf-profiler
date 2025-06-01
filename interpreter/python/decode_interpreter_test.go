@@ -23,54 +23,102 @@ import (
 
 const moduleStoreCachePath = "../../tools/coredump/modulecache"
 
-func TestDecodeInterpreter(t *testing.T) {
+func TestDecodeInterpreterKnown(t *testing.T) {
+	type elf struct {
+		id      string
+		extract func(t *testing.T) (*pfelf.File, error)
+	}
+	storeElf := func(id string) elf {
+		return elf{
+			id: "store/" + id,
+			extract: func(t *testing.T) (*pfelf.File, error) {
+				return openStoreElf(id)
+			},
+		}
+	}
+	//todo create extractor for store  - unify
+	dockerelf := func(e dockerPythonExtractor) elf {
+		return elf{
+			id: e.name,
+			extract: func(t *testing.T) (*pfelf.File, error) {
+				res, _ := e.extract(t)
+				return res, nil
+			},
+		}
+	}
+
+	localElf := func(f string) elf {
+		return elf{
+			id: strings.ReplaceAll(f, "/", "_"),
+			extract: func(t *testing.T) (*pfelf.File, error) {
+				return pfelf.Open(f)
+			},
+		}
+	}
 	testdata := []struct {
-		id       string
+		elf      elf
 		expected []util.Range
 	}{
 		{
-			id: "497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8",
+			elf: storeElf("497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8"),
 			expected: []util.Range{
 				{Start: 559770, End: 616313},
 				{Start: 1513344, End: 1513706},
 			},
 		},
 		{
-			id: "11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce",
+			elf: storeElf("11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce"),
 			expected: []util.Range{
 				{Start: 0x325C10, End: 0x331E54},
 			},
 		},
 		{
-			id: "1a2eb220c22ae7ba8aaf8b243e57dbc25542f8c9c269ed6100c7ad5aea7c3ada",
+			elf: storeElf("1a2eb220c22ae7ba8aaf8b243e57dbc25542f8c9c269ed6100c7ad5aea7c3ada"),
 			expected: []util.Range{
 				{Start: 0x10BABF, End: 0x10BAD9}, // unreachable ud2 TODO exclude?
 				{Start: 0x10C0E0, End: 0x11867a},
 			},
 		},
 		{
-			id: "abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386",
+			elf: storeElf("abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386"),
 			expected: []util.Range{
 				{Start: 0x7a796, End: 0x7df87},
 				{Start: 0x1726e0, End: 0x17b3de},
 			},
 		},
 		{
-			id: "67997ac257675599247dc0445f4d2705f67e203678fb9920162bc2cd7f9d0009",
+			elf: storeElf("67997ac257675599247dc0445f4d2705f67e203678fb9920162bc2cd7f9d0009"),
 			expected: []util.Range{
 				{Start: 0x1f47a0, End: 0x2013ff},
 			},
-		}, {
-			id: "b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a",
+		},
+		{
+			elf: storeElf("b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a"),
 			expected: []util.Range{
 				{Start: 0xFA0AC, End: 0xFA0AC + 0x000024F7},
 				{Start: 0x1bed10, End: 0x1c922b},
 			},
 		},
+		{
+			elf: dockerelf(debianExtractor("debian@sha256:1bcac6cbf17ce95f085a578bcab3d5bee7725fb23d808c190d86d541c757c9f6")),
+			expected: []util.Range{
+				{Start: 0x430f05, End: 0x430f05 + 0x3659},
+				{Start: 0x52b0f0, End: 0x538a4c},
+			},
+		}, {
+			elf:      dockerelf(debianExtractor("debian@sha256:4bd77968a8c82a605404beb6b3a915c4812e6b0901dd7e525ce2418fc8fa8506")),
+			expected: []util.Range{},
+		},
+		{
+			elf:      localElf("/home/korniltsev/Desktop/571d98e01096d5c1c32420d229a6731a0a50d2a0"),
+			expected: []util.Range{},
+		},
 	}
 	for _, td := range testdata {
-		t.Run(td.id, func(t *testing.T) {
-			python, err := openStoreElf(td.id)
+		t.Run(td.elf.id, func(t *testing.T) {
+			t.Parallel()
+			//python, err := openStoreElf(td.id)
+			python, err := td.elf.extract(t)
 			require.NoError(t, err)
 			defer python.Close()
 			sym, err := python.LookupSymbol("_PyEval_EvalFrameDefault")
@@ -268,99 +316,135 @@ func TestMergeRecoveredRages(t *testing.T) {
 
 }
 
-func TestDecodeInterpreterFromDockerImages(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("only amd64 needed")
+type dockerPythonExtractor struct {
+	name       string
+	dockerfile string
+}
+
+func (e *dockerPythonExtractor) extract(t *testing.T) (elf, debugElf *pfelf.File) {
+	d, _ := os.MkdirTemp("", "")
+	t.Logf("%s %s", e.name, d)
+	//d := t.TempDir()
+	err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
+	require.NoError(t, err)
+	c := exec.Command("docker", "build",
+		"-t", "test-"+e.name,
+		"--output=.",
+		"--pull",
+		".")
+	c.Dir = d
+	err = c.Run()
+	require.NoError(t, err)
+
+	es, err := os.ReadDir(d)
+	require.NoError(t, err)
+	require.Len(t, es, 3)
+	elfPath, debugElfPath := "", ""
+	for _, e := range es {
+		n := e.Name()
+		if n == "Dockerfile" {
+			continue
+		}
+		if strings.Contains(n, ".debug") {
+			debugElfPath = n
+		} else {
+			elfPath = n
+		}
 	}
-	type testcase struct {
-		name       string
-		dockerfile string
-		elfs       func(es []os.DirEntry) (elf string, debugElf string)
-	}
-	alpineTestcase := func(base string) testcase {
-		dockerfile := fmt.Sprintf(`
+	t.Logf("%s %s", elfPath, debugElfPath)
+
+	elf, err = pfelf.Open(filepath.Join(d, elfPath))
+	require.NoError(t, err)
+	debugElf, err = pfelf.Open(filepath.Join(d, debugElfPath))
+	require.NoError(t, err)
+
+	return
+}
+
+func alpineExtractor(base string) dockerPythonExtractor {
+	dockerfile := fmt.Sprintf(`
 FROM %s as builder
 RUN apk add python3 python3-dbg
 RUN mkdir /out
-RUN cp /usr/lib/debug/usr/lib/libpython* /out
-RUN cp /usr/lib/libpython* /out
+RUN cp /usr/lib/debug/usr/lib/libpython*1.0.debug /out
+RUN cp /usr/lib/libpython*1.0 /out
 FROM scratch
 COPY --from=builder /out /
 `, base)
-		return testcase{
-			name:       base,
-			dockerfile: dockerfile,
-			elfs: func(es []os.DirEntry) (elf string, debugElf string) {
-				for _, e := range es {
-					n := e.Name()
-					if strings.Contains(n, "libpython") &&
-						strings.Contains(n, "1.0") {
-						if strings.Contains(n, ".debug") {
-							debugElf = n
-						} else {
-							elf = n
-						}
-					}
-				}
-				return
-			},
-		}
+	return dockerPythonExtractor{
+		name:       base,
+		dockerfile: dockerfile,
+	}
+}
+
+func debianExtractor(base string) dockerPythonExtractor {
+	dockerfile := fmt.Sprintf(`
+FROM %s as builder
+RUN apt-get update && apt-get -y install  python3 python3-dbg binutils original-awk grep
+RUN <<EOF
+set -ex
+mkdir /out
+cp /usr/bin/$(readlink /usr/bin/python3) /out
+build_id=$(readelf -n /usr/bin/$(readlink /usr/bin/python3) | grep "Build ID" | awk '{print $3}')
+dir_name=$(echo "$build_id" | cut -c1-2)
+file_name=$(echo "$build_id" | cut -c3-).debug
+debug_file_path="/usr/lib/debug/.build-id/$dir_name/$file_name"
+cp $debug_file_path /out/$(readlink /usr/bin/python3).debug
+EOF
+FROM scratch
+COPY --from=builder /out /
+`, base)
+	return dockerPythonExtractor{
+		name:       base,
+		dockerfile: dockerfile,
+	}
+}
+
+func TestDecodeInterpreterCompareDebug(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("only amd64 needed")
 	}
 
-	testdata := []testcase{
-		alpineTestcase("alpine:latest"),
-		alpineTestcase("alpine:3.22.0"),
-		alpineTestcase("alpine:3.21.3"),
-		alpineTestcase("alpine:3.21.2"),
-		alpineTestcase("alpine:3.21.1"),
-		alpineTestcase("alpine:3.21.0"),
-		alpineTestcase("alpine:3.20.6"),
-		alpineTestcase("alpine:3.20.5"),
-		alpineTestcase("alpine:3.20.4"),
-		alpineTestcase("alpine:3.20.3"),
-		alpineTestcase("alpine:3.20.2"),
-		alpineTestcase("alpine:3.20.1"),
-		alpineTestcase("alpine:3.20.0"),
-		alpineTestcase("alpine:3.19.7"),
-		alpineTestcase("alpine:3.19.6"),
-		alpineTestcase("alpine:3.19.5"),
-		alpineTestcase("alpine:3.19.4"),
-		alpineTestcase("alpine:3.19.3"),
-		alpineTestcase("alpine:3.19.2"),
-		alpineTestcase("alpine:3.19.1"),
-		alpineTestcase("alpine:3.19.0"),
+	testdata := []dockerPythonExtractor{
+		//alpineExtractor("alpine:latest"),
+		//alpineTestcase("alpine:3.22.0"),
+		//alpineTestcase("alpine:3.21.3"),
+		//alpineTestcase("alpine:3.21.2"),
+		//alpineTestcase("alpine:3.21.1"),
+		//alpineTestcase("alpine:3.21.0"),
+		//alpineTestcase("alpine:3.20.6"),
+		//alpineTestcase("alpine:3.20.5"),
+		//alpineTestcase("alpine:3.20.4"),
+		//alpineTestcase("alpine:3.20.3"),
+		//alpineTestcase("alpine:3.20.2"),
+		//alpineTestcase("alpine:3.20.1"),
+		//alpineTestcase("alpine:3.20.0"),
+		//alpineTestcase("alpine:3.19.7"),
+		//alpineTestcase("alpine:3.19.6"),
+		//alpineTestcase("alpine:3.19.5"),
+		//alpineTestcase("alpine:3.19.4"),
+		//alpineTestcase("alpine:3.19.3"),
+		//alpineTestcase("alpine:3.19.2"),
+		//alpineTestcase("alpine:3.19.1"),
+		//alpineTestcase("alpine:3.19.0"),
+		debianExtractor("debian:testing"),
+		debianExtractor("debian:testing-slim"),
+		debianExtractor("debian:12.11"),
+		debianExtractor("debian:12.11-slim"),
+		debianExtractor("debian:11.11"),
+		debianExtractor("debian:11.11-slim"),
 	}
 	for _, td := range testdata {
 		t.Run(td.name, func(t *testing.T) {
+
 			t.Parallel()
-			d, _ := os.MkdirTemp("", "")
-			t.Logf(d)
-			//d := t.TempDir()
-			err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(td.dockerfile), 0666)
-			require.NoError(t, err)
-			c := exec.Command("docker", "build",
-				"-t", "test-"+td.name,
-				"--output=.",
-				"--pull",
-				".")
-			c.Dir = d
-			err = c.Run()
-			require.NoError(t, err)
+			elf, debugElf := td.extract(t)
 
-			es, err := os.ReadDir(d)
-			require.NoError(t, err)
-			elfPath, debugElfPath := td.elfs(es)
-			t.Logf("%s %s", elfPath, debugElfPath)
-
-			elf, err := pfelf.Open(filepath.Join(d, elfPath))
-			require.NoError(t, err)
-			debugElf, err := pfelf.Open(filepath.Join(d, debugElfPath))
-			require.NoError(t, err)
 			debugSymbols, err := debugElf.ReadSymbols()
 			require.NoError(t, err)
 			cold, err := debugSymbols.LookupSymbol("_PyEval_EvalFrameDefault.cold")
 			require.NoError(t, err)
-			t.Logf("addr %x-%x", cold.Address, cold.Size)
+			t.Logf("cold %x : %x", cold.Address, cold.Size)
 
 			hot, err := elf.LookupSymbol("_PyEval_EvalFrameDefault")
 			require.NoError(t, err)

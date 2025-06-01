@@ -97,6 +97,9 @@ func (d *DFS) FindBasicBlock(at uint64) *BasicBlock {
 }
 
 func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
+	//if start == 0 {
+	//	return &BasicBlock{}
+	//}
 	i := sort.Search(len(d.blocks), func(j int) bool {
 		return d.blocks[j].start > start
 	})

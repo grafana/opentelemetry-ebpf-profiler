@@ -44,6 +44,8 @@ func (v mem) Eval(other U64) bool {
 			return false
 		}
 		return v.at.Eval(typed.at)
+	case *Variable:
+		return typed.isAny
 	default:
 		return false
 	}

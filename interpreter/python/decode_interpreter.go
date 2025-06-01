@@ -63,6 +63,9 @@ func (r *rangesRecoverer) recoverIndirectJumps(indirectJumpsSource map[uint64]st
 			return recovered, err
 		}
 		for _, dst := range r.indirectJumpDestination {
+			if dst == 0 {
+				continue
+			}
 			b := r.d.AddBasicBlock(dst)
 			r.d.AddEdge(src, b, dfs.EdgeTypeJump)
 			recovered++
@@ -114,7 +117,8 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 	jmp256Table := variable.Var("jmp256Table")
 	jmp256Pattern := variable.Add(
 		variable.Mul(
-			variable.ZeroExtend(variable.Mem(variable.Any(), 8), 8),
+			variable.ZeroExtend(variable.Any(), 8), //todo comment out and add a testcase for recover jumtable test debian 12.11
+			// todo we need to have a constraint for the cases when the table is only 166 size
 			variable.Imm(8),
 		),
 		jmp256Table,
@@ -142,7 +146,8 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 	case x86asm.Reg:
 		actual := interp.Regs.Get(typed)
 		if r.opcodeTableAddress == 0 {
-			if actual.Eval(variable.Mem(jmp256Pattern, 8)) {
+			//fmt.Println(actual.String())
+			if actual.Eval(variable.Mem(jmp256Pattern, 8)) { // todo we need to have
 				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
 			}
 		}
