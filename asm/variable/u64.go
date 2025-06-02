@@ -70,11 +70,11 @@ func (s sortedOperands) Swap(i, j int) {
 
 func cmpOrder(u U64) int {
 	switch u.(type) {
-	case mem:
+	case *mem:
 		return 1
 	case *op:
 		return 2
-	case immediate:
+	case *immediate:
 		return 4
 	case *Variable:
 		return 3

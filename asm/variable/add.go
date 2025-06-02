@@ -13,14 +13,14 @@ func Add(vs ...U64) U64 {
 	for _, it := range vs {
 		if o, ok := it.(*op); ok && o.typ == opAdd {
 			for _, jit := range o.operands {
-				if imm, immOk := jit.(immediate); immOk {
+				if imm, immOk := jit.(*immediate); immOk {
 					v += imm.Value
 				} else {
 					oss = append(oss, jit)
 				}
 			}
 		} else {
-			if imm, immOk := it.(immediate); immOk {
+			if imm, immOk := it.(*immediate); immOk {
 				v += imm.Value
 			} else {
 				oss = append(oss, it)
@@ -39,7 +39,7 @@ func Add(vs ...U64) U64 {
 	return newOp(opAdd, oss)
 }
 
-func (o op) maxAddValue() uint64 {
+func (o *op) maxAddValue() uint64 {
 	v := uint64(0)
 	c := uint64(0)
 	for i := range o.operands {

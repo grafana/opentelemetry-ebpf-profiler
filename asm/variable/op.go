@@ -32,7 +32,11 @@ func (o *op) Eval(other U64) bool {
 		}
 		return o.operands.Eval(typed.operands)
 	case *Variable:
-		return typed.isAny
+		if typed.isAny {
+			typed.extracted = o
+			return true
+		}
+		return false
 	default:
 		return false
 	}

@@ -131,7 +131,7 @@ func decodeStubArgumentAMD64(
 func evaluateStubAnswerAMD64(res variable.U64, memBase uint64) (uint64, error) {
 	answer := variable.Var("answer")
 	if res.Eval(variable.ZeroExtend(variable.Mem(answer, 8), 32)) {
-		return answer.ExtractedValue, nil
+		return answer.ExtractedValueImm(), nil
 	}
 	if res.Eval(
 		variable.Add(
@@ -139,7 +139,7 @@ func evaluateStubAnswerAMD64(res variable.U64, memBase uint64) (uint64, error) {
 			answer,
 		),
 	) {
-		return memBase + answer.ExtractedValue, nil
+		return memBase + answer.ExtractedValueImm(), nil
 	}
 	if res.Eval(
 		variable.ZeroExtend(
@@ -153,10 +153,10 @@ func evaluateStubAnswerAMD64(res variable.U64, memBase uint64) (uint64, error) {
 			32,
 		),
 	) {
-		return memBase + answer.ExtractedValue, nil
+		return memBase + answer.ExtractedValueImm(), nil
 	}
 	if res.Eval(answer) {
-		return answer.ExtractedValue, nil
+		return answer.ExtractedValueImm(), nil
 	}
 	return 0, fmt.Errorf("not found %s", res.String())
 }

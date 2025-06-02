@@ -57,8 +57,8 @@ func TestVariable(t *testing.T) {
 	t.Run("mul immediate", func(t *testing.T) {
 		v := Var("v")
 		assertEqualRecursive(t,
-			Mul(v, Imm(27)),
-			Mul(Imm(1), Imm(3), Imm(1), v, Imm(9)),
+			Multiply(v, Imm(27)),
+			Multiply(Imm(1), Imm(3), Imm(1), v, Imm(9)),
 		)
 	})
 
@@ -67,7 +67,7 @@ func TestVariable(t *testing.T) {
 
 		assertEqualRecursive(t,
 			v,
-			Mul(Imm(1), v),
+			Multiply(Imm(1), v),
 		)
 	})
 
@@ -76,8 +76,8 @@ func TestVariable(t *testing.T) {
 		v2 := Var("v2")
 		v3 := Var("v3")
 		assertEqualRecursive(t,
-			Add(Mul(v1, v3), Mul(v2, v3)),
-			Mul(Add(v1, v2), v3),
+			Add(Multiply(v1, v3), Multiply(v2, v3)),
+			Multiply(Add(v1, v2), v3),
 		)
 	})
 
@@ -85,8 +85,8 @@ func TestVariable(t *testing.T) {
 		v := Var("v")
 
 		assertEqualRecursive(t,
-			op{opMul, []U64{v, Imm(239)}},
-			Mul(Imm(239), v),
+			&op{opMul, []U64{v, Imm(239)}},
+			Multiply(Imm(239), v),
 		)
 	})
 
@@ -95,7 +95,7 @@ func TestVariable(t *testing.T) {
 
 		assertEqualRecursive(t,
 			Imm(0),
-			Mul(Imm(0), Imm(3), Imm(1), v, Imm(9)),
+			Multiply(Imm(0), Imm(3), Imm(1), v, Imm(9)),
 		)
 	})
 
@@ -200,13 +200,14 @@ func TestVariable(t *testing.T) {
 }
 
 func assertEqualRecursive(t *testing.T, a, b U64) {
+	assert.Equal(t, a, b)
 	if !equalRecursive(a, b) {
 		t.Errorf("expected %s to be recursive equal to %s", a.String(), b.String())
 	}
 }
 func equalRecursive(a, b U64) bool {
-	if ima, aok := a.(immediate); aok {
-		if imb, bok := b.(immediate); bok {
+	if ima, aok := a.(*immediate); aok {
+		if imb, bok := b.(*immediate); bok {
 			return ima.Value == imb.Value
 		}
 		return false
@@ -217,20 +218,20 @@ func equalRecursive(a, b U64) bool {
 		}
 		return false
 	}
-	if ima, aok := a.(mem); aok {
-		if imb, bok := b.(mem); bok {
+	if ima, aok := a.(*mem); aok {
+		if imb, bok := b.(*mem); bok {
 			return ima.segment == imb.segment && equalRecursive(ima.at, imb.at)
 		}
 		return false
 	}
-	if ima, aok := a.(extend); aok {
-		if imb, bok := b.(extend); bok {
+	if ima, aok := a.(*extend); aok {
+		if imb, bok := b.(*extend); bok {
 			return ima.bitsSize == imb.bitsSize && equalRecursive(ima.v, imb.v)
 		}
 		return false
 	}
-	if ima, aok := a.(op); aok {
-		if imb, bok := b.(op); bok {
+	if ima, aok := a.(*op); aok {
+		if imb, bok := b.(*op); bok {
 			return ima.typ == imb.typ && equalOperands(ima.operands, imb.operands)
 		}
 		return false

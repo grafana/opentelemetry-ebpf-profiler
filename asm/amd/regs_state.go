@@ -20,7 +20,7 @@ const (
 	size08 = 8
 )
 
-var DebugPrinting = true
+var DebugPrinting = false
 
 type regIndexTableEntry struct {
 	idx int
@@ -177,6 +177,8 @@ type Interpreter struct {
 	CodeAddress variable.U64
 	pc          int
 
+	Opt variable.Options
+
 	cmp compare
 
 	mem            map[variable.U64]variable.U64
@@ -307,7 +309,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Reg:
 				i.Regs.Set(dst, variable.Add(i.Regs.Get(dst), i.Regs.Get(src)))
 			case x86asm.Mem:
-				v := i.MemArg(src)
+				v := i.MemArg(i.Opt, src)
 				v = variable.MemS(src.Segment, v, inst.MemBytes)
 				i.Regs.Set(dst, variable.Add(i.Regs.Get(dst), v))
 			}
@@ -316,7 +318,8 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 	if inst.Op == x86asm.SHL {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, imm := inst.Args[1].(x86asm.Imm); imm {
-				v := variable.Mul(
+				v := variable.MultiplyWithOptions(
+					i.Opt,
 					i.Regs.Get(dst),
 					variable.Imm(uint64(math.Pow(2, float64(src)))),
 				)
@@ -332,7 +335,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Reg:
 				i.Regs.Set(dst, i.Regs.Get(src))
 			case x86asm.Mem:
-				v := i.MemArg(src)
+				v := i.MemArg(i.Opt, src)
 
 				dataSizeBits := inst.DataSize
 
@@ -355,12 +358,14 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 		}
 
 		if dst, ok := inst.Args[0].(x86asm.Mem); ok {
-			dsta := i.MemArg(dst)
-			switch src := inst.Args[1].(type) {
-			case x86asm.Imm:
-				i.WriteMem(dsta, variable.Imm(uint64(src)))
-			case x86asm.Reg:
-				i.WriteMem(dsta, i.Regs.Get(src))
+			if i.mem != nil {
+				dsta := i.MemArg(i.Opt, dst)
+				switch src := inst.Args[1].(type) {
+				case x86asm.Imm:
+					i.WriteMem(dsta, variable.Imm(uint64(src)))
+				case x86asm.Reg:
+					i.WriteMem(dsta, i.Regs.Get(src))
+				}
 			}
 		}
 
@@ -386,7 +391,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 	if inst.Op == x86asm.LEA {
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, mem := inst.Args[1].(x86asm.Mem); mem {
-				v := i.MemArg(src)
+				v := i.MemArg(i.Opt, src)
 				i.Regs.Set(dst, v)
 			}
 		}
@@ -404,7 +409,7 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 	return inst, nil
 }
 
-func (i *Interpreter) MemArg(src x86asm.Mem) variable.U64 {
+func (i *Interpreter) MemArg(opt variable.Options, src x86asm.Mem) variable.U64 {
 	vs := make([]variable.U64, 0, 3)
 	if src.Disp != 0 {
 		vs = append(vs, variable.Imm(uint64(src.Disp)))
@@ -413,7 +418,8 @@ func (i *Interpreter) MemArg(src x86asm.Mem) variable.U64 {
 		vs = append(vs, i.Regs.Get(src.Base))
 	}
 	if src.Index != 0 {
-		v := variable.Mul(
+		v := variable.MultiplyWithOptions(
+			opt,
 			i.Regs.Get(src.Index),
 			variable.Imm(uint64(src.Scale)),
 		)
@@ -424,7 +430,6 @@ func (i *Interpreter) MemArg(src x86asm.Mem) variable.U64 {
 }
 
 func (i *Interpreter) compare(left x86asm.Reg, right x86asm.Imm) {
-	//i.cmp.cmpRIP = i.Regs.Get(x86asm.RIP)
 	i.cmp.left = i.Regs.Get(left)
 	i.cmp.right = uint64(right)
 	i.cmp.jmp = 0
@@ -438,6 +443,9 @@ func (i *Interpreter) saveCompareConstraint(inst x86asm.Op) {
 
 func (i *Interpreter) MaxValue(of variable.U64) uint64 {
 	for _, cmp := range i.cmpConstraints {
+		if cmp.left == nil { // unhandled compare instruction
+			continue
+		}
 		if cmp.left.Eval(of) {
 			switch cmp.jmp {
 			case x86asm.JAE:

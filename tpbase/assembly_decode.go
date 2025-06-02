@@ -129,7 +129,7 @@ func AnalyzeAoutDumpDebugregsAmd64(code []byte) (uint32, error) {
 					8,
 				)
 				if actual.Eval(expected) {
-					res := int64(offset.ExtractedValue) - 2*8
+					res := int64(offset.ExtractedValueImm()) - 2*8
 					if res < 0 || res > math.MaxUint32 {
 						return 0, errors.New("overflow") // todo better error
 					}

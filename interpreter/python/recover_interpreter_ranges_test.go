@@ -69,20 +69,37 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 			},
 		},
 		{
-			elf: debianExtractor("debian@sha256:1bcac6cbf17ce95f085a578bcab3d5bee7725fb23d808c190d86d541c757c9f6"),
+			elf: debian("debian@sha256:1bcac6cbf17ce95f085a578bcab3d5bee7725fb23d808c190d86d541c757c9f6"),
 			expected: []util.Range{
 				{Start: 0x430f05, End: 0x430f05 + 0x3659},
 				{Start: 0x52b0f0, End: 0x538a4c},
 			},
 		},
 		{
-			elf:      debianExtractor("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d"),
-			expected: []util.Range{},
+			// debian:11.11-slim
+			elf: debian("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d"),
+			expected: []util.Range{
+				{0x42c958, 0x42ed67},
+				{0x513f30, 0x51c9ea},
+			},
 		},
 		{
-			elf:      localFile{"/tmp/2891076654/python3.9"},
-			expected: []util.Range{},
+			// ubuntu:22.04
+			elf: debian("ubuntu@sha256:899ec23064539c814a4dbbf98d4baf0e384e4394ebc8638bea7bbe4cb8ef4e12"),
+			expected: []util.Range{
+				{0x7d6e9, 0x80f2e},
+				{0x175270, 0x17e009},
+			},
 		},
+		{
+			// ubuntu:20.04
+			elf: debian("ubuntu@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a"),
+			expected: []util.Range{
+				{0x4B7E86, 0x4B7E86 + 0x000024EE},
+				{0x56aa50, 0x573fd4},
+			},
+		},
+		//todo add gcloud store estcase
 	}
 	for _, td := range testdata {
 		t.Run(td.elf.id(), func(t *testing.T) {
@@ -91,9 +108,9 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 			python, _ := td.elf.extract(t)
 			sym, err := python.LookupSymbol("_PyEval_EvalFrameDefault")
 			require.NoError(t, err)
-			t.Logf("starting at %x-%x", sym.Address, uint64(sym.Address)+sym.Size)
+			t.Logf("hot at %x-%x", sym.Address, uint64(sym.Address)+sym.Size)
 			start := util.Range{Start: uint64(sym.Address), End: uint64(sym.Address) + sym.Size}
-			actual, err := decodeInterpreterRanges(python, start)
+			actual, err := recoverInterpreterRanges(python, start)
 			require.NoError(t, err)
 			require.Equal(t, td.expected, actual)
 		})
@@ -112,7 +129,7 @@ func BenchmarkDecodeInterpreter(b *testing.B) {
 	b.ResetTimer()
 	start := util.Range{Start: uint64(sym.Address), End: uint64(sym.Address) + sym.Size}
 	for i := 0; i < b.N; i++ {
-		ranges, err := decodeInterpreterRanges(libPython, start)
+		ranges, err := recoverInterpreterRanges(libPython, start)
 		if err != nil || len(ranges) != 2 {
 			b.FailNow()
 		}
@@ -125,15 +142,13 @@ func TestRecoverJumpTables(t *testing.T) {
 		jumpsChecksum uint32
 	}
 	testcases := []struct {
-		elf extractor
-		//opcodeTable uint64
+		elf    extractor
 		blocks []blockCheck
 	}{
 		{
 			elf: storeExtractor{"abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386"},
-			//opcodeTable: 0x55c160,
 			blocks: []blockCheck{
-				{0x172866, 0x0},
+				{0x172866, 0x39d4fd9e},
 				{0x1766e0, 0xaba1677},
 				{0x176dff, 0xaba1677},
 				{0x17a3fb, 0xaba1677},
@@ -141,28 +156,23 @@ func TestRecoverJumpTables(t *testing.T) {
 		},
 		{
 			elf: storeExtractor{"11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce"},
-			//opcodeTable: 0x13C7270,
 			blocks: []blockCheck{
 				{0x33110A, 0x4faa3f80},
 			},
 		},
 		{
 			elf: storeExtractor{"b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a"},
-			//opcodeTable: 0x3BFC80,
 			blocks: []blockCheck{
 				{0x1bedc8, 0xb0290d15},
 			},
 		},
 		{
 			// 11.11-slim
-			elf: debianExtractor("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d"),
-			//opcodeTable: 0x6DF200,
+			elf: debian("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d"),
 			blocks: []blockCheck{
 				{0x514084, 0x484ce97e},
-				//{0x51aae5, 0x8814e773},
+				{0x51aae5, 0x8814e773},
 			},
-			//indirect jump at bb 514084 => 256 jumps
-			//indirect jump at bb 51aae5 => 0 jumps
 		},
 	}
 	for _, td := range testcases {
@@ -274,33 +284,39 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 	}
 
 	testdata := []dockerPythonExtractor{
-		//alpineExtractor("alpine:latest"),
-		//alpineTestcase("alpine:3.22.0"),
-		//alpineTestcase("alpine:3.21.3"),
-		//alpineTestcase("alpine:3.21.2"),
-		//alpineTestcase("alpine:3.21.1"),
-		//alpineTestcase("alpine:3.21.0"),
-		//alpineTestcase("alpine:3.20.6"),
-		//alpineTestcase("alpine:3.20.5"),
-		//alpineTestcase("alpine:3.20.4"),
-		//alpineTestcase("alpine:3.20.3"),
-		//alpineTestcase("alpine:3.20.2"),
-		//alpineTestcase("alpine:3.20.1"),
-		//alpineTestcase("alpine:3.20.0"),
-		//alpineTestcase("alpine:3.19.7"),
-		//alpineTestcase("alpine:3.19.6"),
-		//alpineTestcase("alpine:3.19.5"),
-		//alpineTestcase("alpine:3.19.4"),
-		//alpineTestcase("alpine:3.19.3"),
-		//alpineTestcase("alpine:3.19.2"),
-		//alpineTestcase("alpine:3.19.1"),
-		//alpineTestcase("alpine:3.19.0"),
-		debianExtractor("debian:testing"),
-		debianExtractor("debian:testing-slim"),
-		debianExtractor("debian:12.11"),
-		debianExtractor("debian:12.11-slim"),
-		debianExtractor("debian:11.11"),
-		debianExtractor("debian:11.11-slim"),
+		alpine("alpine:latest"),
+		alpine("alpine:3.22.0"),
+		alpine("alpine:3.21.3"),
+		alpine("alpine:3.21.2"),
+		alpine("alpine:3.21.1"),
+		alpine("alpine:3.21.0"),
+		alpine("alpine:3.20.6"),
+		alpine("alpine:3.20.5"),
+		alpine("alpine:3.20.4"),
+		alpine("alpine:3.20.3"),
+		alpine("alpine:3.20.2"),
+		alpine("alpine:3.20.1"),
+		alpine("alpine:3.20.0"),
+		alpine("alpine:3.19.7"),
+		alpine("alpine:3.19.6"),
+		alpine("alpine:3.19.5"),
+		alpine("alpine:3.19.4"),
+		alpine("alpine:3.19.3"),
+		alpine("alpine:3.19.2"),
+		alpine("alpine:3.19.1"),
+		alpine("alpine:3.19.0"),
+		debian("debian:testing"),
+		debian("debian:testing-slim"),
+		debian("debian:12.11"),
+		debian("debian:12.11-slim"),
+		debian("debian:11.11"),
+		debian("debian:11.11-slim"),
+		debian("ubuntu:25.10"),
+		debian("ubuntu:25.04"),
+		debian("ubuntu:24.10"),
+		debian("ubuntu:24.04"),
+		debian("ubuntu:22.04"),
+		debian("ubuntu:20.04"),
 	}
 	for _, td := range testdata {
 		t.Run(td.name, func(t *testing.T) {
@@ -316,9 +332,13 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 
 			hot, err := elf.LookupSymbol("_PyEval_EvalFrameDefault")
 			require.NoError(t, err)
+			t.Logf("hot  %x : %x", hot.Address, hot.Size)
 
-			ranges, err := decodeInterpreterRanges(elf, hot.AsRange())
+			ranges, err := recoverInterpreterRanges(elf, hot.AsRange())
 			require.NoError(t, err)
+			for i, u := range ranges {
+				t.Logf("   range %2d [%x-%x)", i, u.Start, u.End)
+			}
 			t.Logf("%+v", ranges)
 			require.Contains(t, ranges, hot.AsRange())
 			if cold.Size > 2 {
@@ -395,7 +415,7 @@ func (e dockerPythonExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File)
 	return
 }
 
-func alpineExtractor(base string) dockerPythonExtractor {
+func alpine(base string) dockerPythonExtractor {
 	dockerfile := fmt.Sprintf(`
 FROM %s as builder
 RUN apk add python3 python3-dbg
@@ -411,7 +431,7 @@ COPY --from=builder /out /
 	}
 }
 
-func debianExtractor(base string) dockerPythonExtractor {
+func debian(base string) dockerPythonExtractor {
 	dockerfile := fmt.Sprintf(`
 FROM %s as builder
 RUN apt-get update && apt-get -y install  python3 python3-dbg binutils original-awk grep
@@ -473,17 +493,4 @@ func (e localFile) extract(t testing.TB) (elf, debugElf *pfelf.File) {
 		storeElf.Close()
 	})
 	return storeElf, nil
-}
-
-func TestName(t *testing.T) {
-	elf := debianExtractor("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d")
-	e, _ := elf.extract(t)
-	table := make([]byte, 166*8)
-	_, err := e.ReadVirtualMemory(table, 0x6DEC40)
-	require.NoError(t, err)
-
-	hash32 := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	hash32.Write(table)
-	h := hash32.Sum32()
-	t.Logf("%x", h)
 }

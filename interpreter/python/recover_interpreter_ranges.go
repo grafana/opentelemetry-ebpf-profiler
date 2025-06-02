@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"slices"
 
@@ -22,7 +21,7 @@ import (
 // add alpine and debian docker, ubuntu tests
 // fuzz for timeouts
 // todo if the result has more than 2 ranges - return the start and the biggest non intersected one
-func decodeInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, error) {
+func recoverInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, error) {
 	var err error
 	d := new(dfs.DFS)
 	d.AddBasicBlock(start.Start)
@@ -48,6 +47,8 @@ func decodeInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, er
 	}
 
 	recoveredRanges := d.Ranges()
+	//bb := d.FindBasicBlock(0x56AE96)
+	//fmt.Println(bb.String())
 	return mergeRecoveredRanges(start, recoveredRanges), nil
 }
 
@@ -98,10 +99,9 @@ func getBlocksWithCode(ef *pfelf.File, blocks []*dfs.BasicBlock) (amd.CodeBlock,
 }
 
 func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) error {
-
-	defer func() {
-		fmt.Printf("indirect jump at bb %x => %d jumps\n", bb.Start(), len(r.indirectJumpDestination))
-	}()
+	//defer func() {
+	//	fmt.Printf("indirect jump at bb %x => %d \n", bb.Start(), len(r.indirectJumpDestination))
+	//}()
 	var err error
 	blocks := r.d.FallThroughBlocksTo(bb, 3)
 	code, err := getBlocksWithCode(r.ef, blocks)
@@ -120,11 +120,10 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 		return nil
 	}
 	jmp256Table := variable.Var("jmp256Table")
+	mul := variable.Any()
 	jmp256Pattern := variable.Add(
-		variable.Mul(
-			//variable.ZeroExtend(variable.Any(), 8), //todo comment out and add a testcase for recover jumtable test debian 12.11
-			variable.Var("mul"),
-			// todo we need to have a constraint for the cases when the table is only 166 size
+		variable.Multiply(
+			mul,
 			variable.Imm(8),
 		),
 		jmp256Table,
@@ -135,8 +134,8 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 		variable.SignExtend(
 			variable.Mem(
 				variable.Add(
-					variable.Mul(
-						variable.ZeroExtend(variable.Any(), 2),
+					variable.Multiply(
+						mul,
 						variable.Imm(4),
 					),
 					jmp4Table,
@@ -153,31 +152,39 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 		actual := interp.Regs.Get(typed)
 		//fmt.Println(actual.String())
 		if actual.Eval(variable.Mem(jmp256Pattern, 8)) { // todo we need to have
-			return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
+			mv := interp.MaxValue(mul)
+			if mv <= 255 {
+				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValueImm(), mv+1)
+			}
 		}
 		if actual.Eval(jmp4Pattern) {
-			return r.recoverSwitchCase4(jmp4Base.ExtractedValue, jmp4Table.ExtractedValue)
+			mv := interp.MaxValue(mul)
+			if mv <= 255 {
+				return r.recoverSwitchCase4(jmp4Base.ExtractedValueImm(), jmp4Table.ExtractedValueImm(), mv+1)
+			}
 		}
 		return nil
 	case x86asm.Mem:
-		actual := interp.MemArg(typed)
+		actual := interp.MemArg(variable.Options{NoUnwrap: true}, typed)
 		if actual.Eval(jmp256Pattern) {
-			fmt.Println(actual.String())
-			return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
+			mv := interp.MaxValue(mul)
+			if mv <= 255 {
+				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValueImm(), mv+1)
+			}
 		}
 	}
 	return nil
 }
 
-func (r *rangesRecoverer) recoverOpcodeJumpTable(table uint64) error {
+func (r *rangesRecoverer) recoverOpcodeJumpTable(table uint64, tableSize uint64) error {
 	if _, ok := r.recoveredTables[table]; ok {
 		return nil
 	}
-	switchTableValues := make([]byte, 8*256)
+	switchTableValues := make([]byte, 8*tableSize)
 	if _, err := r.ef.ReadAt(switchTableValues, int64(table)); err != nil {
 		return err
 	}
-	for i := 0; i < 256; i++ {
+	for i := 0; i < int(tableSize); i++ {
 		it := switchTableValues[i*8 : i*8+8]
 		jmp := binary.LittleEndian.Uint64(it)
 		r.indirectJumpDestination = append(r.indirectJumpDestination, jmp)
@@ -186,15 +193,15 @@ func (r *rangesRecoverer) recoverOpcodeJumpTable(table uint64) error {
 	return nil
 }
 
-func (r *rangesRecoverer) recoverSwitchCase4(base, table uint64) error {
+func (r *rangesRecoverer) recoverSwitchCase4(base, table, tableSize uint64) error {
 	if _, ok := r.recoveredTables[table]; ok {
 		return nil
 	}
-	switchTableValues := make([]byte, 4*4)
+	switchTableValues := make([]byte, 4*int(tableSize))
 	if _, err := r.ef.ReadAt(switchTableValues, int64(table)); err != nil {
 		return err
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < int(tableSize); i++ {
 		it := switchTableValues[i*4 : i*4+4]
 		jmp := int32(binary.LittleEndian.Uint32(it))
 		dst := uint64(int64(base) + int64(jmp))

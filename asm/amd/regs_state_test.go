@@ -48,7 +48,7 @@ func testPythonInterpreter(t testing.TB) {
 	actual := it.Regs.Get(x86asm.RAX)
 	expected := variable.Mem(
 		variable.Add(
-			variable.Mul(
+			variable.Multiply(
 				variable.ZeroExtend(variable.Mem(variable.Any(), 8), 8),
 				variable.Imm(8),
 			),
@@ -92,7 +92,7 @@ func TestRecoverSwitchCase(t *testing.T) {
 			variable.SignExtend(
 				variable.Mem(
 					variable.Add(
-						variable.Mul(
+						variable.Multiply(
 							variable.ZeroExtend(initR12, 2),
 							variable.Imm(4),
 						),
@@ -105,8 +105,8 @@ func TestRecoverSwitchCase(t *testing.T) {
 			base,
 		)
 		assertEval(t, it.Regs.Get(x86asm.RAX), expected)
-		assert.EqualValues(t, 0xf3f82c, table.ExtractedValue)
-		assert.EqualValues(t, 0xf3f82c, base.ExtractedValue)
+		assert.EqualValues(t, 0xf3f82c, table.ExtractedValueImm())
+		assert.EqualValues(t, 0xf3f82c, base.ExtractedValueImm())
 	})
 }
 
