@@ -137,7 +137,7 @@ func TestVariable(t *testing.T) {
 		maxFF := Var("ff").SetMaxValue(0xff)
 		assert.EqualValues(t,
 			0b1111111,
-			ZeroExtend(maxFF, 7).maxValue(),
+			ZeroExtend(maxFF, 7).MaxValue(),
 		)
 	})
 
@@ -146,7 +146,7 @@ func TestVariable(t *testing.T) {
 
 		assert.EqualValues(t,
 			math.MaxUint32,
-			ZeroExtend(v, 32).maxValue(),
+			ZeroExtend(v, 32).MaxValue(),
 		)
 	})
 
@@ -155,14 +155,14 @@ func TestVariable(t *testing.T) {
 
 		assert.EqualValues(t,
 			uint64(math.MaxUint64),
-			ZeroExtend(v, 64).maxValue(),
+			ZeroExtend(v, 64).MaxValue(),
 		)
 	})
 
 	t.Run("add max value overflow", func(t *testing.T) {
 		assert.EqualValues(t,
 			uint64(math.MaxUint64),
-			Add(Var("max64"), Var("max1").SetMaxValue(1)).maxValue(),
+			Add(Var("max64"), Var("max1").SetMaxValue(1)).MaxValue(),
 		)
 	})
 
@@ -178,7 +178,7 @@ func TestVariable(t *testing.T) {
 	t.Run("extend 0", func(t *testing.T) {
 		assert.EqualValues(t,
 			0,
-			ZeroExtend(Var("v1"), 0).maxValue(),
+			ZeroExtend(Var("v1"), 0).MaxValue(),
 		)
 		assertEqualRecursive(t,
 			Imm(0),

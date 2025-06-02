@@ -53,7 +53,7 @@ func (o *op) String() string {
 	return fmt.Sprintf("( %s )", strings.Join(ss, sep))
 }
 
-func (o *op) maxValue() uint64 {
+func (o *op) MaxValue() uint64 {
 	switch o.typ {
 	case opAdd:
 		return o.maxAddValue()

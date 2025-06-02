@@ -26,7 +26,7 @@ type mem struct {
 	sizeBytes int
 }
 
-func (v mem) maxValue() uint64 {
+func (v mem) MaxValue() uint64 {
 	return math.MaxUint64
 }
 

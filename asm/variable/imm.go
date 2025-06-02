@@ -22,7 +22,7 @@ type immediate struct {
 	Value uint64
 }
 
-func (v immediate) maxValue() uint64 {
+func (v immediate) MaxValue() uint64 {
 	return v.Value
 }
 

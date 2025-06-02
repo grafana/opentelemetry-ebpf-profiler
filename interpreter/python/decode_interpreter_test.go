@@ -24,103 +24,71 @@ import (
 const moduleStoreCachePath = "../../tools/coredump/modulecache"
 
 func TestDecodeInterpreterKnown(t *testing.T) {
-	type elf struct {
-		id      string
-		extract func(t *testing.T) (*pfelf.File, error)
-	}
-	storeElf := func(id string) elf {
-		return elf{
-			id: "store/" + id,
-			extract: func(t *testing.T) (*pfelf.File, error) {
-				return openStoreElf(id)
-			},
-		}
-	}
-	//todo create extractor for store  - unify
-	dockerelf := func(e dockerPythonExtractor) elf {
-		return elf{
-			id: e.name,
-			extract: func(t *testing.T) (*pfelf.File, error) {
-				res, _ := e.extract(t)
-				return res, nil
-			},
-		}
-	}
-
-	localElf := func(f string) elf {
-		return elf{
-			id: strings.ReplaceAll(f, "/", "_"),
-			extract: func(t *testing.T) (*pfelf.File, error) {
-				return pfelf.Open(f)
-			},
-		}
-	}
 	testdata := []struct {
-		elf      elf
+		elf      extractor
 		expected []util.Range
 	}{
 		{
-			elf: storeElf("497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8"),
+			elf: storeExtractor{"497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8"},
 			expected: []util.Range{
 				{Start: 559770, End: 616313},
 				{Start: 1513344, End: 1513706},
 			},
 		},
 		{
-			elf: storeElf("11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce"),
+			elf: storeExtractor{"11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce"},
 			expected: []util.Range{
 				{Start: 0x325C10, End: 0x331E54},
 			},
 		},
 		{
-			elf: storeElf("1a2eb220c22ae7ba8aaf8b243e57dbc25542f8c9c269ed6100c7ad5aea7c3ada"),
+			elf: storeExtractor{"1a2eb220c22ae7ba8aaf8b243e57dbc25542f8c9c269ed6100c7ad5aea7c3ada"},
 			expected: []util.Range{
 				{Start: 0x10BABF, End: 0x10BAD9}, // unreachable ud2 TODO exclude?
 				{Start: 0x10C0E0, End: 0x11867a},
 			},
 		},
 		{
-			elf: storeElf("abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386"),
+			elf: storeExtractor{"abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386"},
 			expected: []util.Range{
 				{Start: 0x7a796, End: 0x7df87},
 				{Start: 0x1726e0, End: 0x17b3de},
 			},
 		},
 		{
-			elf: storeElf("67997ac257675599247dc0445f4d2705f67e203678fb9920162bc2cd7f9d0009"),
+			elf: storeExtractor{"67997ac257675599247dc0445f4d2705f67e203678fb9920162bc2cd7f9d0009"},
 			expected: []util.Range{
 				{Start: 0x1f47a0, End: 0x2013ff},
 			},
 		},
 		{
-			elf: storeElf("b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a"),
+			elf: storeExtractor{"b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a"},
 			expected: []util.Range{
 				{Start: 0xFA0AC, End: 0xFA0AC + 0x000024F7},
 				{Start: 0x1bed10, End: 0x1c922b},
 			},
 		},
 		{
-			elf: dockerelf(debianExtractor("debian@sha256:1bcac6cbf17ce95f085a578bcab3d5bee7725fb23d808c190d86d541c757c9f6")),
+			elf: debianExtractor("debian@sha256:1bcac6cbf17ce95f085a578bcab3d5bee7725fb23d808c190d86d541c757c9f6"),
 			expected: []util.Range{
 				{Start: 0x430f05, End: 0x430f05 + 0x3659},
 				{Start: 0x52b0f0, End: 0x538a4c},
 			},
-		}, {
-			elf:      dockerelf(debianExtractor("debian@sha256:4bd77968a8c82a605404beb6b3a915c4812e6b0901dd7e525ce2418fc8fa8506")),
+		},
+		{
+			elf:      debianExtractor("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d"),
 			expected: []util.Range{},
 		},
 		{
-			elf:      localElf("/home/korniltsev/Desktop/571d98e01096d5c1c32420d229a6731a0a50d2a0"),
+			elf:      localFile{"/tmp/2891076654/python3.9"},
 			expected: []util.Range{},
 		},
 	}
 	for _, td := range testdata {
-		t.Run(td.elf.id, func(t *testing.T) {
+		t.Run(td.elf.id(), func(t *testing.T) {
 			t.Parallel()
 			//python, err := openStoreElf(td.id)
-			python, err := td.elf.extract(t)
-			require.NoError(t, err)
-			defer python.Close()
+			python, _ := td.elf.extract(t)
 			sym, err := python.LookupSymbol("_PyEval_EvalFrameDefault")
 			require.NoError(t, err)
 			t.Logf("starting at %x-%x", sym.Address, uint64(sym.Address)+sym.Size)
@@ -135,10 +103,7 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 //todo docker test
 
 func BenchmarkDecodeInterpreter(b *testing.B) {
-	libPython, err := openStoreElf("497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8")
-	if err != nil {
-		b.FailNow()
-	}
+	libPython, _ := storeExtractor{"497dd0d2b4a80bfd11339306c84aa752d811f612a398cb526a0a9ac2f426c0b8"}.extract(b)
 	sym, err := libPython.LookupSymbol("_PyEval_EvalFrameDefault")
 	if err != nil {
 		b.FailNow()
@@ -154,41 +119,19 @@ func BenchmarkDecodeInterpreter(b *testing.B) {
 	}
 }
 
-func openStoreElf(id string) (*pfelf.File, error) {
-	s, err := modulestore.InitModuleStore(moduleStoreCachePath)
-	if err != nil {
-		return nil, err
-	}
-	parsedID, err := modulestore.IDFromString(id)
-	if err != nil {
-		return nil, err
-	}
-	buf := bytes.NewBuffer(nil)
-	err = s.UnpackModule(parsedID, buf)
-	if err != nil {
-		return nil, err
-	}
-	_ = s.UnpackModuleToPath(parsedID, filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+id))
-	file, err := pfelf.NewFile(bytes.NewReader(buf.Bytes()), 0, false)
-	if err != nil {
-		return nil, err
-	}
-	return file, nil
-}
-
-func TestRecoverJumpTable256(t *testing.T) {
+func TestRecoverJumpTables(t *testing.T) {
 	type blockCheck struct {
 		src           uint64
 		jumpsChecksum uint32
 	}
 	testcases := []struct {
-		id         string
-		opcodeTabe uint64
-		blocks     []blockCheck
+		elf extractor
+		//opcodeTable uint64
+		blocks []blockCheck
 	}{
 		{
-			id:         "abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386",
-			opcodeTabe: 0x55c160,
+			elf: storeExtractor{"abc9170dfb10b8a926d2376de94aa9a0ffd7b0ea4febf80606b4bba6c5ffa386"},
+			//opcodeTable: 0x55c160,
 			blocks: []blockCheck{
 				{0x172866, 0x0},
 				{0x1766e0, 0xaba1677},
@@ -197,24 +140,34 @@ func TestRecoverJumpTable256(t *testing.T) {
 			},
 		},
 		{
-			id:         "11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce",
-			opcodeTabe: 0x13C7270,
+			elf: storeExtractor{"11ce00a6490d5e4ef941e1f51faaddf40c088a1376f028cbc001985b779397ce"},
+			//opcodeTable: 0x13C7270,
 			blocks: []blockCheck{
 				{0x33110A, 0x4faa3f80},
 			},
 		},
 		{
-			id:         "b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a",
-			opcodeTabe: 0x3BFC80,
+			elf: storeExtractor{"b14a0e943b0480bd6d590fa0b2b2734763b3e134625e84ab1c363bb2f77e0a2a"},
+			//opcodeTable: 0x3BFC80,
 			blocks: []blockCheck{
 				{0x1bedc8, 0xb0290d15},
 			},
 		},
+		{
+			// 11.11-slim
+			elf: debianExtractor("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d"),
+			//opcodeTable: 0x6DF200,
+			blocks: []blockCheck{
+				{0x514084, 0x484ce97e},
+				//{0x51aae5, 0x8814e773},
+			},
+			//indirect jump at bb 514084 => 256 jumps
+			//indirect jump at bb 51aae5 => 0 jumps
+		},
 	}
 	for _, td := range testcases {
-		t.Run(td.id, func(t *testing.T) {
-			e, err := openStoreElf(td.id)
-			require.NoError(t, err)
+		t.Run(td.elf.id(), func(t *testing.T) {
+			e, _ := td.elf.extract(t)
 			sym, err := e.LookupSymbol("_PyEval_EvalFrameDefault")
 			require.NoError(t, err)
 			d := new(dfs.DFS)
@@ -223,7 +176,7 @@ func TestRecoverJumpTable256(t *testing.T) {
 				ef:                      e,
 				d:                       d,
 				indirectJumpDestination: nil,
-				opcodeTableAddress:      0,
+				recoveredTables:         make(map[uint64]struct{}),
 			}
 			for i := 0; i < 3; i++ {
 				indirectJumpsFrom := map[uint64]struct{}{}
@@ -236,17 +189,16 @@ func TestRecoverJumpTable256(t *testing.T) {
 					break
 				}
 			}
-			assert.Equal(t, td.opcodeTabe, r.opcodeTableAddress)
-
+			//assert.Equal(t, td.opcodeTable, r.opcodeTableAddress)
 			for _, b := range td.blocks {
 				t.Run(fmt.Sprintf("%x", b.src), func(t *testing.T) {
-					r.opcodeTableAddress = 0
+					r.recoveredTables = make(map[uint64]struct{})
 					bb := d.FindBasicBlock(b.src)
 					require.NotNil(t, bb)
 					err = r.collectIndirectJumpDestinations(bb)
 					require.NoError(t, err)
 					checksum := jumpsChecksum(r.indirectJumpDestination)
-					require.Equal(t, b.jumpsChecksum, checksum)
+					assert.Equal(t, b.jumpsChecksum, checksum)
 				})
 			}
 		})
@@ -316,90 +268,6 @@ func TestMergeRecoveredRages(t *testing.T) {
 
 }
 
-type dockerPythonExtractor struct {
-	name       string
-	dockerfile string
-}
-
-func (e *dockerPythonExtractor) extract(t *testing.T) (elf, debugElf *pfelf.File) {
-	d, _ := os.MkdirTemp("", "")
-	t.Logf("%s %s", e.name, d)
-	//d := t.TempDir()
-	err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
-	require.NoError(t, err)
-	c := exec.Command("docker", "build",
-		"-t", "test-"+e.name,
-		"--output=.",
-		"--pull",
-		".")
-	c.Dir = d
-	err = c.Run()
-	require.NoError(t, err)
-
-	es, err := os.ReadDir(d)
-	require.NoError(t, err)
-	require.Len(t, es, 3)
-	elfPath, debugElfPath := "", ""
-	for _, e := range es {
-		n := e.Name()
-		if n == "Dockerfile" {
-			continue
-		}
-		if strings.Contains(n, ".debug") {
-			debugElfPath = n
-		} else {
-			elfPath = n
-		}
-	}
-	t.Logf("%s %s", elfPath, debugElfPath)
-
-	elf, err = pfelf.Open(filepath.Join(d, elfPath))
-	require.NoError(t, err)
-	debugElf, err = pfelf.Open(filepath.Join(d, debugElfPath))
-	require.NoError(t, err)
-
-	return
-}
-
-func alpineExtractor(base string) dockerPythonExtractor {
-	dockerfile := fmt.Sprintf(`
-FROM %s as builder
-RUN apk add python3 python3-dbg
-RUN mkdir /out
-RUN cp /usr/lib/debug/usr/lib/libpython*1.0.debug /out
-RUN cp /usr/lib/libpython*1.0 /out
-FROM scratch
-COPY --from=builder /out /
-`, base)
-	return dockerPythonExtractor{
-		name:       base,
-		dockerfile: dockerfile,
-	}
-}
-
-func debianExtractor(base string) dockerPythonExtractor {
-	dockerfile := fmt.Sprintf(`
-FROM %s as builder
-RUN apt-get update && apt-get -y install  python3 python3-dbg binutils original-awk grep
-RUN <<EOF
-set -ex
-mkdir /out
-cp /usr/bin/$(readlink /usr/bin/python3) /out
-build_id=$(readelf -n /usr/bin/$(readlink /usr/bin/python3) | grep "Build ID" | awk '{print $3}')
-dir_name=$(echo "$build_id" | cut -c1-2)
-file_name=$(echo "$build_id" | cut -c3-).debug
-debug_file_path="/usr/lib/debug/.build-id/$dir_name/$file_name"
-cp $debug_file_path /out/$(readlink /usr/bin/python3).debug
-EOF
-FROM scratch
-COPY --from=builder /out /
-`, base)
-	return dockerPythonExtractor{
-		name:       base,
-		dockerfile: dockerfile,
-	}
-}
-
 func TestDecodeInterpreterCompareDebug(t *testing.T) {
 	if runtime.GOARCH != "amd64" {
 		t.Skip("only amd64 needed")
@@ -462,4 +330,160 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 			}
 		})
 	}
+}
+
+type extractor interface {
+	extract(t testing.TB) (elf, debugElf *pfelf.File)
+	id() string
+}
+type dockerPythonExtractor struct {
+	name       string
+	dockerfile string
+}
+
+func (e dockerPythonExtractor) id() string {
+	return e.name
+}
+func (e dockerPythonExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File) {
+	d, _ := os.MkdirTemp("", "")
+	t.Logf("%s %s", e.name, d)
+	//d := t.TempDir()
+	err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
+	require.NoError(t, err)
+	c := exec.Command("docker", "build",
+		"-t", "test-"+e.name,
+		"--output=.",
+		"--pull",
+		".")
+	c.Dir = d
+	err = c.Run()
+	require.NoError(t, err)
+
+	es, err := os.ReadDir(d)
+	require.NoError(t, err)
+	require.Len(t, es, 3)
+	elfPath, debugElfPath := "", ""
+	for _, entry := range es {
+		n := entry.Name()
+		if n == "Dockerfile" {
+			continue
+		}
+		if strings.Contains(n, ".debug") {
+			debugElfPath = n
+		} else {
+			elfPath = n
+		}
+	}
+	t.Logf("%s %s", elfPath, debugElfPath)
+
+	elfPath = filepath.Join(d, elfPath)
+
+	inspectPath := filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+e.id())
+	_ = os.Symlink(elfPath, inspectPath)
+
+	elf, err = pfelf.Open(elfPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		elf.Close()
+	})
+	debugElf, err = pfelf.Open(filepath.Join(d, debugElfPath))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		debugElf.Close()
+	})
+
+	return
+}
+
+func alpineExtractor(base string) dockerPythonExtractor {
+	dockerfile := fmt.Sprintf(`
+FROM %s as builder
+RUN apk add python3 python3-dbg
+RUN mkdir /out
+RUN cp /usr/lib/debug/usr/lib/libpython*1.0.debug /out
+RUN cp /usr/lib/libpython*1.0 /out
+FROM scratch
+COPY --from=builder /out /
+`, base)
+	return dockerPythonExtractor{
+		name:       "docker-alpine-" + base,
+		dockerfile: dockerfile,
+	}
+}
+
+func debianExtractor(base string) dockerPythonExtractor {
+	dockerfile := fmt.Sprintf(`
+FROM %s as builder
+RUN apt-get update && apt-get -y install  python3 python3-dbg binutils original-awk grep
+RUN <<EOF
+set -ex
+mkdir /out
+cp /usr/bin/$(readlink /usr/bin/python3) /out
+build_id=$(readelf -n /usr/bin/$(readlink /usr/bin/python3) | grep "Build ID" | awk '{print $3}')
+dir_name=$(echo "$build_id" | cut -c1-2)
+file_name=$(echo "$build_id" | cut -c3-).debug
+debug_file_path="/usr/lib/debug/.build-id/$dir_name/$file_name"
+cp $debug_file_path /out/$(readlink /usr/bin/python3).debug
+EOF
+FROM scratch
+COPY --from=builder /out /
+`, base)
+	return dockerPythonExtractor{
+		name:       "docker-debian-" + base,
+		dockerfile: dockerfile,
+	}
+}
+
+type storeExtractor struct {
+	storeId string
+}
+
+func (e storeExtractor) id() string {
+	return e.storeId
+}
+
+func (e storeExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File) {
+	s, err := modulestore.InitModuleStore(moduleStoreCachePath)
+	require.NoError(t, err)
+	parsedID, err := modulestore.IDFromString(e.id())
+	require.NoError(t, err)
+	buf := bytes.NewBuffer(nil)
+	err = s.UnpackModule(parsedID, buf)
+	require.NoError(t, err)
+	_ = s.UnpackModuleToPath(parsedID, filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+e.id())) // todo remove
+	file, err := pfelf.NewFile(bytes.NewReader(buf.Bytes()), 0, false)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		file.Close()
+	})
+	return file, nil
+}
+
+type localFile struct {
+	f string
+}
+
+func (e localFile) id() string {
+	return strings.ReplaceAll(e.f, "/", "_")
+}
+func (e localFile) extract(t testing.TB) (elf, debugElf *pfelf.File) {
+	storeElf, err := pfelf.Open(e.f)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		storeElf.Close()
+	})
+	return storeElf, nil
+}
+
+func TestName(t *testing.T) {
+	elf := debianExtractor("debian@sha256:4f71d532a25f8f0690ac6bf37616a3b2fc051d5535f3e32489fe8a62093b931d")
+	e, _ := elf.extract(t)
+	table := make([]byte, 166*8)
+	_, err := e.ReadVirtualMemory(table, 0x6DEC40)
+	require.NoError(t, err)
+
+	hash32 := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	hash32.Write(table)
+	h := hash32.Sum32()
+	t.Logf("%x", h)
 }

@@ -20,7 +20,7 @@ const (
 	size08 = 8
 )
 
-var DebugPrinting = false
+var DebugPrinting = true
 
 type regIndexTableEntry struct {
 	idx int
@@ -164,13 +164,23 @@ func (r *RegsState) DebugString() string {
 	return res
 }
 
+type compare struct {
+	left  variable.U64
+	right uint64
+	//cmpRIP variable.U64
+	jmp x86asm.Op
+}
+
 type Interpreter struct {
 	Regs        RegsState
 	code        []byte
 	CodeAddress variable.U64
 	pc          int
 
-	mem map[variable.U64]variable.U64
+	cmp compare
+
+	mem            map[variable.U64]variable.U64
+	cmpConstraints []compare
 }
 
 func NewInterpreter() *Interpreter {
@@ -237,19 +247,6 @@ func (i *Interpreter) initRegs() {
 	i.Regs.regs[regIndex(x86asm.R14)] = variable.Var("initial R14")
 	i.Regs.regs[regIndex(x86asm.R15)] = variable.Var("initial R15")
 	i.Regs.regs[regIndex(x86asm.RIP)] = variable.Var("initial RIP")
-}
-
-func (i *Interpreter) LoopBlocks(blocks []BasicBlockCode) (x86asm.Inst, error) {
-	var insn x86asm.Inst
-	var err error
-	for j := range blocks {
-		i.ResetCode(blocks[j].Code, blocks[j].Address)
-		insn, err = i.Loop()
-		if !errors.Is(err, io.EOF) {
-			return insn, err
-		}
-	}
-	return insn, err
 }
 
 func (i *Interpreter) Loop() (x86asm.Inst, error) {
@@ -394,6 +391,16 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			}
 		}
 	}
+	if inst.Op == x86asm.CMP {
+		if left, ok := inst.Args[0].(x86asm.Reg); ok {
+			if right, mem := inst.Args[1].(x86asm.Imm); mem {
+				i.compare(left, right)
+			}
+		}
+	}
+	if inst.Op == x86asm.JA || inst.Op == x86asm.JAE {
+		i.saveCompareConstraint(inst.Op)
+	}
 	return inst, nil
 }
 
@@ -416,7 +423,36 @@ func (i *Interpreter) MemArg(src x86asm.Mem) variable.U64 {
 	return v
 }
 
-type BasicBlockCode struct {
+func (i *Interpreter) compare(left x86asm.Reg, right x86asm.Imm) {
+	//i.cmp.cmpRIP = i.Regs.Get(x86asm.RIP)
+	i.cmp.left = i.Regs.Get(left)
+	i.cmp.right = uint64(right)
+	i.cmp.jmp = 0
+}
+
+func (i *Interpreter) saveCompareConstraint(inst x86asm.Op) {
+	i.cmp.jmp = inst
+	i.cmpConstraints = append(i.cmpConstraints, i.cmp)
+	i.cmp = compare{}
+}
+
+func (i *Interpreter) MaxValue(of variable.U64) uint64 {
+	for _, cmp := range i.cmpConstraints {
+		if cmp.left.Eval(of) {
+			switch cmp.jmp {
+			case x86asm.JAE:
+				return cmp.right - 1
+			case x86asm.JA:
+				return cmp.right
+			default:
+				return of.MaxValue()
+			}
+		}
+	}
+	return of.MaxValue()
+}
+
+type CodeBlock struct {
 	Address variable.U64
 	Code    []byte
 }

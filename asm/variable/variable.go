@@ -32,12 +32,12 @@ type Variable struct {
 	isAny              bool
 }
 
-func (v *Variable) maxValue() uint64 {
+func (v *Variable) MaxValue() uint64 {
 	return v.maxValueConstraint
 }
 
 func (v *Variable) String() string {
-	return fmt.Sprintf("{ @%s }", v.name)
+	return fmt.Sprintf("@%s", v.name)
 }
 
 func (v *Variable) Eval(other U64) bool {

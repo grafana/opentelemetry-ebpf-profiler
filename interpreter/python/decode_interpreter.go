@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 
@@ -29,7 +30,7 @@ func decodeInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, er
 		ef:                      ef,
 		d:                       d,
 		indirectJumpDestination: make([]uint64, 0, 256),
-		opcodeTableAddress:      0,
+		recoveredTables:         make(map[uint64]struct{}),
 	}
 	recovered := 0
 	for i := 0; i < 3; i++ {
@@ -52,7 +53,13 @@ func decodeInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, er
 
 func (r *rangesRecoverer) recoverIndirectJumps(indirectJumpsSource map[uint64]struct{}) (int, error) {
 	recovered := 0
-	for srcAddr, _ := range indirectJumpsSource {
+	indirectJumpsSourceOrdered := make([]uint64, 0, len(indirectJumpsSource))
+	for j := range indirectJumpsSource {
+		indirectJumpsSourceOrdered = append(indirectJumpsSourceOrdered, j)
+	}
+	slices.Sort(indirectJumpsSourceOrdered)
+	//slices.Reverse(indirectJumpsSourceOrdered)
+	for _, srcAddr := range indirectJumpsSourceOrdered {
 		src := r.d.FindBasicBlock(srcAddr)
 		if src == nil {
 			logrus.Errorf("programming error: failed to find block at %x", srcAddr)
@@ -75,39 +82,37 @@ func (r *rangesRecoverer) recoverIndirectJumps(indirectJumpsSource map[uint64]st
 	return recovered, nil
 }
 
-func getBlocksWithCode(ef *pfelf.File, blocks []*dfs.BasicBlock) ([]amd.BasicBlockCode, error) {
-	var err error
-	blocksWithCode := make([]amd.BasicBlockCode, len(blocks))
-	for i := range blocks {
-		var b *dfs.BasicBlock = blocks[i]
-		blockWithCode := amd.BasicBlockCode{
-			Address: variable.Imm(b.Start()),
-			Code:    make([]byte, b.Size()),
-		}
-		_, err2 := ef.ReadAt(blockWithCode.Code, int64(b.Start()))
-		blocksWithCode[i], err = blockWithCode, err2
-		if err != nil {
-			return nil, err
-		}
+func getBlocksWithCode(ef *pfelf.File, blocks []*dfs.BasicBlock) (amd.CodeBlock, error) {
+	if len(blocks) == 0 {
+		return amd.CodeBlock{}, errors.New("no blocks")
 	}
-	return blocksWithCode, nil
+	var err error
+	l := 0
+	for _, block := range blocks {
+		l += int(block.Size())
+	}
+	at := blocks[0].Start()
+	res := amd.CodeBlock{Code: make([]byte, l), Address: variable.Imm(at)}
+	_, err = ef.ReadAt(res.Code, int64(at))
+	return res, err
 }
 
 func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) error {
 
-	//defer func() {
-	//	fmt.Printf("indirect jump at bb %x => %d jumps\n", bb.Start(), len(r.indirectJumpDestination))
-	//}()
+	defer func() {
+		fmt.Printf("indirect jump at bb %x => %d jumps\n", bb.Start(), len(r.indirectJumpDestination))
+	}()
 	var err error
 	blocks := r.d.FallThroughBlocksTo(bb, 3)
-	blocksWithCode, err := getBlocksWithCode(r.ef, blocks)
+	code, err := getBlocksWithCode(r.ef, blocks)
 	if err != nil {
 		return err
 	}
 
 	r.indirectJumpDestination = r.indirectJumpDestination[:0]
 	interp := amd.NewInterpreter().WithMemory()
-	lastInsn, err := interp.LoopBlocks(blocksWithCode)
+	interp.ResetCode(code.Code, code.Address)
+	lastInsn, err := interp.Loop()
 	if !errors.Is(err, io.EOF) {
 		return err
 	}
@@ -117,7 +122,8 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 	jmp256Table := variable.Var("jmp256Table")
 	jmp256Pattern := variable.Add(
 		variable.Mul(
-			variable.ZeroExtend(variable.Any(), 8), //todo comment out and add a testcase for recover jumtable test debian 12.11
+			//variable.ZeroExtend(variable.Any(), 8), //todo comment out and add a testcase for recover jumtable test debian 12.11
+			variable.Var("mul"),
 			// todo we need to have a constraint for the cases when the table is only 166 size
 			variable.Imm(8),
 		),
@@ -145,29 +151,26 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 	switch typed := lastInsn.Args[0].(type) {
 	case x86asm.Reg:
 		actual := interp.Regs.Get(typed)
-		if r.opcodeTableAddress == 0 {
-			//fmt.Println(actual.String())
-			if actual.Eval(variable.Mem(jmp256Pattern, 8)) { // todo we need to have
-				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
-			}
+		//fmt.Println(actual.String())
+		if actual.Eval(variable.Mem(jmp256Pattern, 8)) { // todo we need to have
+			return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
 		}
 		if actual.Eval(jmp4Pattern) {
 			return r.recoverSwitchCase4(jmp4Base.ExtractedValue, jmp4Table.ExtractedValue)
 		}
 		return nil
 	case x86asm.Mem:
-		if r.opcodeTableAddress == 0 {
-			actual := interp.MemArg(typed)
-			if actual.Eval(jmp256Pattern) {
-				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
-			}
+		actual := interp.MemArg(typed)
+		if actual.Eval(jmp256Pattern) {
+			fmt.Println(actual.String())
+			return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValue)
 		}
 	}
 	return nil
 }
 
 func (r *rangesRecoverer) recoverOpcodeJumpTable(table uint64) error {
-	if r.opcodeTableAddress != 0 {
+	if _, ok := r.recoveredTables[table]; ok {
 		return nil
 	}
 	switchTableValues := make([]byte, 8*256)
@@ -179,11 +182,14 @@ func (r *rangesRecoverer) recoverOpcodeJumpTable(table uint64) error {
 		jmp := binary.LittleEndian.Uint64(it)
 		r.indirectJumpDestination = append(r.indirectJumpDestination, jmp)
 	}
-	r.opcodeTableAddress = table
+	r.recoveredTables[table] = struct{}{}
 	return nil
 }
 
 func (r *rangesRecoverer) recoverSwitchCase4(base, table uint64) error {
+	if _, ok := r.recoveredTables[table]; ok {
+		return nil
+	}
 	switchTableValues := make([]byte, 4*4)
 	if _, err := r.ef.ReadAt(switchTableValues, int64(table)); err != nil {
 		return err
@@ -194,6 +200,7 @@ func (r *rangesRecoverer) recoverSwitchCase4(base, table uint64) error {
 		dst := uint64(int64(base) + int64(jmp))
 		r.indirectJumpDestination = append(r.indirectJumpDestination, dst)
 	}
+	r.recoveredTables[table] = struct{}{}
 	return nil
 }
 
@@ -201,7 +208,7 @@ type rangesRecoverer struct {
 	ef                      *pfelf.File
 	d                       *dfs.DFS
 	indirectJumpDestination []uint64
-	opcodeTableAddress      uint64
+	recoveredTables         map[uint64]struct{}
 }
 
 func mergeRecoveredRanges(start util.Range, recovered []util.Range) []util.Range {

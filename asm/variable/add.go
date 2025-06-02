@@ -43,7 +43,7 @@ func (o op) maxAddValue() uint64 {
 	v := uint64(0)
 	c := uint64(0)
 	for i := range o.operands {
-		v, c = bits.Add64(v, o.operands[i].maxValue(), 0)
+		v, c = bits.Add64(v, o.operands[i].MaxValue(), 0)
 		if c != 0 {
 			return math.MaxUint64
 		}
