@@ -10,11 +10,15 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
+const flagExplored = 1
+const flagCallNoReturn = 2
+const flagUD = 4
+
 type BasicBlock struct {
-	index    int
-	start    uint64
-	end      uint64
-	explored bool
+	index int32
+	flags uint32
+	start uint64
+	end   uint64
 
 	edges []Edge
 }
@@ -37,15 +41,33 @@ func (r *BasicBlock) String() string {
 	return fmt.Sprintf("[%x;%x)", r.start, r.end)
 }
 
-func (r *BasicBlock) Explored() {
-	r.explored = true
+func (r *BasicBlock) MarkExplored() {
+	r.flags |= flagExplored
 }
 
+func (r *BasicBlock) MarkCallNoReturn() {
+	r.flags |= flagCallNoReturn
+}
+
+func (r *BasicBlock) MarkUD() {
+	r.flags |= flagUD
+}
+
+func (r *BasicBlock) UD() bool {
+	return (r.flags & flagUD) == flagUD
+}
+
+func (r *BasicBlock) CallDoesNotReturn() bool {
+	return (r.flags & flagCallNoReturn) == flagCallNoReturn
+}
+func (r *BasicBlock) Explored() bool {
+	return (r.flags & flagExplored) == flagExplored
+}
 func (r *BasicBlock) Size() uint64 {
 	return r.end - r.start
 }
 func (r *BasicBlock) Position() (uint64, bool) {
-	return r.end, r.explored
+	return r.end, r.Explored()
 }
 
 func (b *BasicBlock) Start() uint64 {
@@ -54,7 +76,7 @@ func (b *BasicBlock) Start() uint64 {
 
 func (d *DFS) PeekUnexplored() *BasicBlock {
 	for _, r := range d.blocks {
-		if !r.explored {
+		if !r.Explored() {
 			return r
 		}
 	}
@@ -71,7 +93,6 @@ func (d *DFS) BasicBlockCount() int {
 
 func (d *DFS) String() string {
 	ss := make([]string, 0, len(d.blocks))
-
 	for _, r := range d.blocks {
 		ss = append(ss, r.String())
 	}
@@ -97,18 +118,14 @@ func (d *DFS) FindBasicBlock(at uint64) *BasicBlock {
 }
 
 func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
-	//if start == 0 {
-	//	return &BasicBlock{}
-	//}
 	i := sort.Search(len(d.blocks), func(j int) bool {
 		return d.blocks[j].start > start
 	})
 	i--
 	if i < 0 {
 		r := &BasicBlock{
-			start:    start,
-			end:      start,
-			explored: false,
+			start: start,
+			end:   start,
 		}
 		d.blocks = slices.Insert(d.blocks, 0, r)
 		d.reassignIndexes()
@@ -121,19 +138,18 @@ func (d *DFS) AddBasicBlock(start uint64) *BasicBlock {
 	var r *BasicBlock
 	if start > l.start && start < l.end {
 		r = &BasicBlock{
-			start:    start,
-			end:      l.end,
-			explored: l.explored,
-			edges:    l.edges,
+			start: start,
+			end:   l.end,
+			flags: l.flags,
+			edges: l.edges,
 		}
-		l.explored = true
+		l.MarkExplored()
 		l.end = start
 		l.edges = []Edge{{EdgeTypeFallThrough, r}}
 	} else {
 		r = &BasicBlock{
-			start:    start,
-			end:      start,
-			explored: false,
+			start: start,
+			end:   start,
 		}
 	}
 	d.blocks = slices.Insert(d.blocks, i+1, r)
@@ -148,10 +164,8 @@ const (
 	EdgeTypeJump        = EdgeType(2)
 )
 
-// todo add two testcases wheen we add an edge from block A block B and then one of them is split
 func (d *DFS) AddEdge(from *BasicBlock, to *BasicBlock, et EdgeType) {
-
-	from.explored = true
+	from.MarkExplored()
 	if from.findEdge(to) != nil {
 		return
 	}
@@ -159,7 +173,7 @@ func (d *DFS) AddEdge(from *BasicBlock, to *BasicBlock, et EdgeType) {
 }
 
 func (d *DFS) AddInstruction(r *BasicBlock, l int, mayFallThrough bool) error {
-	if r.explored {
+	if r.Explored() {
 		return errors.New("explored")
 	}
 	r.end += uint64(l)
@@ -173,7 +187,7 @@ func (d *DFS) AddInstruction(r *BasicBlock, l int, mayFallThrough bool) error {
 		return nil
 	}
 	if end == next.start {
-		r.explored = true
+		r.MarkExplored()
 		if mayFallThrough {
 			d.AddEdge(r, next, EdgeTypeFallThrough)
 		}
@@ -184,33 +198,40 @@ func (d *DFS) AddInstruction(r *BasicBlock, l int, mayFallThrough bool) error {
 
 func (d *DFS) reassignIndexes() {
 	for i := 0; i < len(d.blocks); i++ {
-		d.blocks[i].index = i
+		d.blocks[i].index = int32(i)
 	}
 }
 
 func (d *DFS) Ranges() []util.Range {
-	// consider excluding blocks that contain ud or falls-through into a block with ud
-	if len(d.blocks) == 0 {
-		return nil
-	}
+	return d.RangesWithFilter(func(_ *BasicBlock) bool {
+		return true
+	})
+}
+
+func (d *DFS) RangesWithFilter(f func(b *BasicBlock) bool) []util.Range {
 	res := make([]util.Range, 0, 4)
-	it := util.Range{
-		Start: d.blocks[0].start,
-		End:   d.blocks[0].end,
-	}
-	for j := 1; j < len(d.blocks); j++ {
+	for j := 0; j < len(d.blocks); j++ {
 		jit := d.blocks[j]
-		if jit.start == it.End || jit.start-it.End < 16 {
-			it.End = jit.end
-		} else {
-			res = append(res, it)
-			it = util.Range{
+		if !f(jit) {
+			continue
+		}
+		if len(res) == 0 {
+			res = append(res, util.Range{
 				Start: jit.start,
 				End:   jit.end,
-			}
+			})
+			continue
+		}
+		it := &res[len(res)-1]
+		if jit.start == it.End || jit.start-it.End < 32 {
+			it.End = jit.end
+		} else {
+			res = append(res, util.Range{
+				Start: jit.start,
+				End:   jit.end,
+			})
 		}
 	}
-	res = append(res, it)
 	return res
 }
 

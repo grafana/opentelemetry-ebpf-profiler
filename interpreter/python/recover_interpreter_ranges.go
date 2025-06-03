@@ -17,15 +17,14 @@ import (
 )
 
 // PeekUnexplored and reassignIndexes are too hot in benchmarks
-// craft
-// add alpine and debian docker, ubuntu tests
 // fuzz for timeouts
-// todo if the result has more than 2 ranges - return the start and the biggest non intersected one
-func recoverInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, error) {
+// todo mark __Py_FatalErrorFunc as noreturn and mark the bb as explored
+func recoverInterpreterRanges(ef *pfelf.File, start util.Range, pythonVersion uint16) ([]util.Range, error) {
 	var err error
 	d := new(dfs.DFS)
 	d.AddBasicBlock(start.Start)
 	r := rangesRecoverer{
+		pythonVersion:           pythonVersion,
 		ef:                      ef,
 		d:                       d,
 		indirectJumpDestination: make([]uint64, 0, 256),
@@ -46,9 +45,12 @@ func recoverInterpreterRanges(ef *pfelf.File, start util.Range) ([]util.Range, e
 		}
 	}
 
-	recoveredRanges := d.Ranges()
-	//bb := d.FindBasicBlock(0x56AE96)
-	//fmt.Println(bb.String())
+	recoveredRanges := d.RangesWithFilter(func(b *dfs.BasicBlock) bool {
+		if b.UD() || b.Size() <= 4 {
+			return false
+		}
+		return true
+	})
 	return mergeRecoveredRanges(start, recoveredRanges), nil
 }
 
@@ -70,12 +72,28 @@ func (r *rangesRecoverer) recoverIndirectJumps(indirectJumpsSource map[uint64]st
 		if err != nil {
 			return recovered, err
 		}
-		for _, dst := range r.indirectJumpDestination {
+		for k, dst := range r.indirectJumpDestination {
 			if dst == 0 {
 				continue
 			}
+
 			b := r.d.AddBasicBlock(dst)
 			r.d.AddEdge(src, b, dfs.EdgeTypeJump)
+			if r.pythonVersion >= pythonVer(3, 11) && len(r.indirectJumpDestination) >= 128 {
+				if k == 0 { // CACHE
+					//todo check that it is nop?
+					//todo what if it is not nop?
+					// what if it calls to noreturn func?
+					if r.pythonVersion >= pythonVer(3, 13) {
+						// Py_UNREACHABLE();
+						b.MarkCallNoReturn()
+					} else {
+						// Py_FatalError("Executing a cache.");
+						b.MarkExplored()
+						b.MarkUD()
+					}
+				}
+			}
 			recovered++
 		}
 
@@ -154,7 +172,7 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 		if actual.Eval(variable.Mem(jmp256Pattern, 8)) { // todo we need to have
 			mv := interp.MaxValue(mul)
 			if mv <= 255 {
-				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValueImm(), mv+1)
+				return r.recoverJumpTable1(jmp256Table.ExtractedValueImm(), mv+1)
 			}
 		}
 		if actual.Eval(jmp4Pattern) {
@@ -169,14 +187,14 @@ func (r *rangesRecoverer) collectIndirectJumpDestinations(bb *dfs.BasicBlock) er
 		if actual.Eval(jmp256Pattern) {
 			mv := interp.MaxValue(mul)
 			if mv <= 255 {
-				return r.recoverOpcodeJumpTable(jmp256Table.ExtractedValueImm(), mv+1)
+				return r.recoverJumpTable1(jmp256Table.ExtractedValueImm(), mv+1)
 			}
 		}
 	}
 	return nil
 }
 
-func (r *rangesRecoverer) recoverOpcodeJumpTable(table uint64, tableSize uint64) error {
+func (r *rangesRecoverer) recoverJumpTable1(table uint64, tableSize uint64) error {
 	if _, ok := r.recoveredTables[table]; ok {
 		return nil
 	}
@@ -216,6 +234,7 @@ type rangesRecoverer struct {
 	d                       *dfs.DFS
 	indirectJumpDestination []uint64
 	recoveredTables         map[uint64]struct{}
+	pythonVersion           uint16
 }
 
 func mergeRecoveredRanges(start util.Range, recovered []util.Range) []util.Range {
@@ -226,12 +245,19 @@ func mergeRecoveredRanges(start util.Range, recovered []util.Range) []util.Range
 			it.Start = min(it.Start, v.Start)
 			it.End = max(it.End, v.End)
 		} else {
+			if v.Start == v.End {
+				continue
+			}
 			res = append(res, v)
 		}
 	}
 	res = append(res, it)
+	sortRanges(res)
+	return res
+}
+
+func sortRanges(res []util.Range) {
 	slices.SortFunc(res, func(a, b util.Range) int {
 		return cmp.Compare(a.Start, b.Start)
 	})
-	return res
 }

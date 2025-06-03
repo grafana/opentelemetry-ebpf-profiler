@@ -760,7 +760,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		autoTLSKey += 4
 	}
 
-	interpRanges, err := findInterpreterRanges(ef, info)
+	interpRanges, err := findInterpreterRanges(ef, info, version)
 	if err != nil {
 		return nil, err
 	}
@@ -838,7 +838,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return pd, nil
 }
 
-func findInterpreterRanges(ef *pfelf.File, info *interpreter.LoaderInfo) ([]util.Range, error) {
+func findInterpreterRanges(ef *pfelf.File, info *interpreter.LoaderInfo, pythonVersion uint16) ([]util.Range, error) {
 	// The Python main interpreter loop history in CPython git is:
 	//
 	//nolint:lll
@@ -854,7 +854,7 @@ func findInterpreterRanges(ef *pfelf.File, info *interpreter.LoaderInfo) ([]util
 		}
 		return []util.Range{interpRange}, nil
 	}
-	ranges, err := recoverInterpreterRanges(ef, interpRange) // todo cache this
+	ranges, err := recoverInterpreterRanges(ef, interpRange, pythonVersion) // todo cache this
 	if err != nil {
 		log.Warnf("failed to decode interpreter ranges %s", err)
 		return []util.Range{interpRange}, nil

@@ -10,7 +10,6 @@ import (
 	"golang.org/x/arch/x86/x86asm"
 )
 
-// todo add a trivial unittest with couple of handwritten BB and an indirect jump
 func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) error {
 	for {
 		it := d.PeekUnexplored()
@@ -44,7 +43,6 @@ func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 				return err
 			}
 			rip := pos
-			//fmt.Printf("[amd.dfs]  %6x %s\n", rip, x86asm.IntelSyntax(insn, rip, nil))
 			jump := IsJump(insn.Op)
 			conditionalJump := !(insn.Op == x86asm.JMP || insn.Op == x86asm.RET)
 			ud := insn.Op == x86asm.UD0 || insn.Op == x86asm.UD1 || insn.Op == x86asm.UD2
@@ -54,9 +52,11 @@ func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 			}
 			prevRIP := rip
 			rip += uint64(insn.Len)
-
+			if insn.Op == x86asm.CALL && it.CallDoesNotReturn() {
+				it.MarkExplored()
+			}
 			if jump {
-				it.Explored()
+				it.MarkExplored()
 				if conditionalJump {
 					e := d.AddBasicBlock(rip)
 					d.AddEdge(it, e, dfs.EdgeTypeFallThrough)
@@ -78,7 +78,7 @@ func Explore(ef io.ReaderAt, d *dfs.DFS, indirectJumps map[uint64]struct{}) erro
 				break
 			}
 			if ud {
-				it.Explored()
+				it.MarkExplored()
 				break
 			}
 		}
