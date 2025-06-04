@@ -1,20 +1,13 @@
 package python
 
 import (
-	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -197,62 +190,61 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 }
 
 func TestDecodeInterpreterCheckNumberOfRangesOnly(t *testing.T) {
-	t.Skip("takes too long")
 	var es []extractor
 	add := func(maj, min, fix int, extraSuffixes []string) {
-		//extraSuffixes = append(extraSuffixes, "-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye")
 		sver := fmt.Sprintf("%d.%d.%d", maj, min, fix)
 		v := pythonVer(maj, min)
 		for _, suffix := range extraSuffixes {
 			es = append(es, python("python:"+sver+suffix, "python:"+sver+suffix, v))
 		}
 	}
-	add(3, 13, 3, []string{"-alpine3.22", "-alpine3.21"})
-	add(3, 13, 2, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 13, 1, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 13, 0, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 12, 10, []string{"-alpine3.22", "-alpine3.21"})
-	add(3, 12, 9, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 12, 8, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 12, 7, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 12, 6, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 12, 5, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 12, 4, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 12, 3, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 12, 2, []string{"-alpine3.19", "-alpine3.18"})
-	add(3, 12, 1, []string{"-alpine3.19", "-alpine3.18"})
-	add(3, 12, 0, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 11, 12, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 11, 11, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 11, 10, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 11, 9, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 11, 8, []string{"-alpine3.19", "-alpine3.18"})
-	add(3, 11, 7, []string{"-alpine3.19", "-alpine3.18"})
-	add(3, 11, 6, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 11, 5, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 11, 4, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 11, 3, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 11, 2, []string{"-alpine3.17", "-alpine3.16"})
-	add(3, 11, 1, []string{"-alpine3.17", "-alpine3.16"})
-	add(3, 11, 0, []string{"-alpine3.17", "-alpine3.16"})
-	add(3, 10, 17, []string{"-alpine3.22", "-alpine3.21"})
-	add(3, 10, 16, []string{"-alpine3.21", "-alpine3.20"})
-	add(3, 10, 15, []string{"-alpine3.20", "-alpine3.19"})
-	add(3, 10, 14, []string{"-alpine3.19", "-alpine3.18"})
-	add(3, 10, 13, []string{"-alpine3.19", "-alpine3.18"})
-	add(3, 10, 12, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 10, 11, []string{"-alpine3.18", "-alpine3.17"})
-	add(3, 10, 10, []string{"-alpine3.17", "-alpine3.16"})
-	add(3, 10, 9, []string{"-alpine3.17", "-alpine3.16"})
-	add(3, 10, 8, []string{"-alpine3.17", "-alpine3.16"})
-	add(3, 10, 7, []string{"-alpine3.16", "-alpine3.15"})
-	add(3, 10, 6, []string{"-alpine3.16", "-alpine3.15"})
-	add(3, 10, 5, []string{"-alpine3.16", "-alpine3.15"})
-	add(3, 10, 4, []string{"-alpine3.16", "-alpine3.15"})
-	add(3, 10, 3, []string{"-alpine3.15", "-alpine3.14"})
-	add(3, 10, 2, []string{"-alpine3.15", "-alpine3.14"})
-	add(3, 10, 1, []string{"-alpine3.15", "-alpine3.14"})
-	add(3, 10, 0, []string{"-alpine3.15", "-alpine3.14"})
+	add(3, 13, 3, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.22", "-alpine3.21"})
+	add(3, 13, 2, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 13, 1, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 13, 0, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 12, 10, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.22", "-alpine3.21"})
+	add(3, 12, 9, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 12, 8, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 12, 7, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 12, 6, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 12, 5, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 12, 4, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 12, 3, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 12, 2, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.19", "-alpine3.18"})
+	add(3, 12, 1, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.19", "-alpine3.18"})
+	add(3, 12, 0, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+	add(3, 11, 12, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 11, 11, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 11, 10, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 11, 9, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 11, 8, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.19", "-alpine3.18"})
+	add(3, 11, 7, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.19", "-alpine3.18"})
+	add(3, 11, 6, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+	add(3, 11, 5, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+	add(3, 11, 4, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+
+	add(3, 11, 3, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+	add(3, 11, 2, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.17", "-alpine3.16"})
+	add(3, 11, 1, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.17", "-alpine3.16"})
+	add(3, 11, 0, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.17", "-alpine3.16"})
+	add(3, 10, 17, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.22", "-alpine3.21"})
+	add(3, 10, 16, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.21", "-alpine3.20"})
+	add(3, 10, 15, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.20", "-alpine3.19"})
+	add(3, 10, 14, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.19", "-alpine3.18"})
+	add(3, 10, 13, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.19", "-alpine3.18"})
+	add(3, 10, 12, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+	add(3, 10, 11, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.18", "-alpine3.17"})
+	add(3, 10, 10, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.17", "-alpine3.16"})
+	add(3, 10, 9, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.17", "-alpine3.16"})
+	add(3, 10, 8, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.17", "-alpine3.16"})
+	add(3, 10, 7, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.16", "-alpine3.15"})
+	add(3, 10, 6, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.16", "-alpine3.15"})
+	add(3, 10, 5, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.16", "-alpine3.15"})
+	add(3, 10, 4, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.16", "-alpine3.15"})
+	add(3, 10, 3, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.15", "-alpine3.14"})
+	add(3, 10, 2, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.15", "-alpine3.14"})
+	add(3, 10, 1, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.15", "-alpine3.14"})
+	add(3, 10, 0, []string{"-buster", "-bullseye", "-slim-buster", "-slim-bullseye", "-alpine3.15", "-alpine3.14"})
 	for _, e := range es {
 		t.Run(e.id(), func(t *testing.T) {
 			t1 := time.Now()
@@ -272,6 +264,133 @@ func TestDecodeInterpreterCheckNumberOfRangesOnly(t *testing.T) {
 		})
 	}
 
+}
+
+func TestDecodeInterpreterCompareDebug(t *testing.T) {
+	if runtime.GOARCH != "amd64" || runtime.GOOS != "linux" {
+		t.Skip("only amd64 linux needed")
+	}
+
+	testdata := []dockerPythonExtractor{
+		alpine("alpine:latest", pythonVer(3, 12)),
+		alpine("alpine:3.22.0", pythonVer(3, 12)),
+		alpine("alpine:3.21.3", pythonVer(3, 12)),
+		alpine("alpine:3.21.2", pythonVer(3, 12)),
+		alpine("alpine:3.21.1", pythonVer(3, 12)),
+		alpine("alpine:3.21.0", pythonVer(3, 12)),
+		alpine("alpine:3.20.6", pythonVer(3, 12)),
+		alpine("alpine:3.20.5", pythonVer(3, 12)),
+		alpine("alpine:3.20.4", pythonVer(3, 12)),
+		alpine("alpine:3.20.3", pythonVer(3, 12)),
+		alpine("alpine:3.20.2", pythonVer(3, 12)),
+		alpine("alpine:3.20.1", pythonVer(3, 12)),
+		alpine("alpine:3.20.0", pythonVer(3, 12)),
+		alpine("alpine:3.19.7", pythonVer(3, 11)),
+		alpine("alpine:3.19.6", pythonVer(3, 11)),
+		alpine("alpine:3.19.5", pythonVer(3, 11)),
+		alpine("alpine:3.19.4", pythonVer(3, 11)),
+		alpine("alpine:3.19.3", pythonVer(3, 11)),
+		alpine("alpine:3.19.2", pythonVer(3, 11)),
+		alpine("alpine:3.19.1", pythonVer(3, 11)),
+		alpine("alpine:3.19.0", pythonVer(3, 11)),
+		debian("debian:testing", pythonVer(3, 13)),
+		debian("debian:testing-slim", pythonVer(3, 13)),
+		debian("debian:trixie", pythonVer(3, 13)),
+		debian("debian:trixie-slim", pythonVer(3, 13)),
+		debian("debian:12.11", pythonVer(3, 11)),
+		debian("debian:12.11-slim", pythonVer(3, 11)),
+		debian("debian:11.11", pythonVer(3, 9)),
+		debian("debian:11.11-slim", pythonVer(3, 9)),
+		debian("ubuntu:25.10", pythonVer(3, 13)),
+		debian("ubuntu:25.04", pythonVer(3, 13)),
+		debian("ubuntu:24.10", pythonVer(3, 12)),
+		debian("ubuntu:24.04", pythonVer(3, 12)),
+		debian("ubuntu:22.04", pythonVer(3, 10)),
+		debian("ubuntu:20.04", pythonVer(3, 8)),
+		python("python:3.13-bookworm", "3.13-bookworm", pythonVer(3, 13)),
+		python("python:3.13.3-bookworm", "3.13.3-bookworm", pythonVer(3, 13)),
+		python("python:3.13.2-bookworm", "3.13.2-bookworm", pythonVer(3, 13)),
+		python("python:3.13.1-bookworm", "3.13.1-bookworm", pythonVer(3, 13)),
+		python("python:3.13.0-bookworm", "3.13.0-bookworm", pythonVer(3, 13)),
+
+		python("python:3.12-bookworm", "3.12-bookworm", pythonVer(3, 12)),
+		python("python:3.12.10-bookworm", "3.12.10-bookworm", pythonVer(3, 12)),
+		python("python:3.12.9-bookworm", "3.12.9-bookworm", pythonVer(3, 12)),
+		python("python:3.12.8-bookworm", "3.12.8-bookworm", pythonVer(3, 12)),
+		python("python:3.12.7-bookworm", "3.12.7-bookworm", pythonVer(3, 12)),
+		python("python:3.12.6-bookworm", "3.12.6-bookworm", pythonVer(3, 12)),
+		python("python:3.12.5-bookworm", "3.12.5-bookworm", pythonVer(3, 12)),
+		python("python:3.12.4-bookworm", "3.12.4-bookworm", pythonVer(3, 12)),
+		python("python:3.12.3-bookworm", "3.12.3-bookworm", pythonVer(3, 12)),
+		python("python:3.12.2-bookworm", "3.12.2-bookworm", pythonVer(3, 12)),
+		python("python:3.12.1-bookworm", "3.12.1-bookworm", pythonVer(3, 12)),
+		python("python:3.12.0-bookworm", "3.12.0-bookworm", pythonVer(3, 12)),
+
+		python("python:3.11-bookworm", "3.11-bookworm", pythonVer(3, 11)),
+		python("python:3.11.12-bookworm", "3.11.12-bookworm", pythonVer(3, 11)),
+		python("python:3.11.11-bookworm", "3.11.11-bookworm", pythonVer(3, 11)),
+		python("python:3.11.10-bookworm", "3.11.10-bookworm", pythonVer(3, 11)),
+		python("python:3.11.9-bookworm", "3.11.9-bookworm", pythonVer(3, 11)),
+		python("python:3.11.8-bookworm", "3.11.8-bookworm", pythonVer(3, 11)),
+		python("python:3.11.7-bookworm", "3.11.7-bookworm", pythonVer(3, 11)),
+		python("python:3.11.6-bookworm", "3.11.6-bookworm", pythonVer(3, 11)),
+		python("python:3.11.5-bookworm", "3.11.5-bookworm", pythonVer(3, 11)),
+		python("python:3.11.4-bookworm", "3.11.4-bookworm", pythonVer(3, 11)),
+
+		python("python:3.10-bookworm", "3.10-bookworm", pythonVer(3, 10)),
+		python("python:3.10.17-bookworm", "3.10.17-bookworm", pythonVer(3, 10)),
+		python("python:3.10.16-bookworm", "3.10.16-bookworm", pythonVer(3, 10)),
+		python("python:3.10.15-bookworm", "3.10.15-bookworm", pythonVer(3, 10)),
+		python("python:3.10.14-bookworm", "3.10.14-bookworm", pythonVer(3, 10)),
+		python("python:3.10.13-bookworm", "3.10.13-bookworm", pythonVer(3, 10)),
+		python("python:3.10.12-bookworm", "3.10.12-bookworm", pythonVer(3, 10)),
+		python("python:3.10.11-bookworm", "3.10.11-bookworm", pythonVer(3, 10)),
+		python("python:3.10.10-bookworm", "3.10.10-bookworm", pythonVer(3, 10)),
+		python("python:3.10.9-bookworm", "3.10.9-bookworm", pythonVer(3, 10)),
+		python("python:3.10.8-bookworm", "3.10.8-bookworm", pythonVer(3, 10)),
+		python("python:3.10.7-bookworm", "3.10.7-bookworm", pythonVer(3, 10)),
+		python("python:3.10.6-bookworm", "3.10.6-bookworm", pythonVer(3, 10)),
+		python("python:3.10.5-bookworm", "3.10.5-bookworm", pythonVer(3, 10)),
+		python("python:3.10.4-bookworm", "3.10.4-bookworm", pythonVer(3, 10)),
+		python("python:3.10.3-bookworm", "3.10.3-bookworm", pythonVer(3, 10)),
+		python("python:3.10.2-bookworm", "3.10.2-bookworm", pythonVer(3, 10)),
+		python("python:3.10.1-bookworm", "3.10.1-bookworm", pythonVer(3, 10)),
+		python("python:3.10.0-bookworm", "3.10.0-bookworm", pythonVer(3, 10)),
+
+		python("python:3.13-bullseye", "3.13-bullseye", pythonVer(3, 13)),
+		python("python:3.12-bullseye", "3.12-bullseye", pythonVer(3, 12)),
+		python("python:3.11-bullseye", "3.11-bullseye", pythonVer(3, 11)),
+		python("python:3.10-bullseye", "3.10-bullseye", pythonVer(3, 10)),
+		//todo no need for hash, add more patch versions
+	}
+	for _, td := range testdata {
+		t.Run(td.name, func(t *testing.T) {
+			elf, debugElf := td.extract(t)
+			require.NotNil(t, debugElf)
+
+			debugSymbols, err := debugElf.ReadSymbols()
+			require.NoError(t, err)
+			cold, err := debugSymbols.LookupSymbol("_PyEval_EvalFrameDefault.cold")
+			require.NoError(t, err)
+			t.Logf("cold 0x%x - 0x%x", cold.AsRange().Start, cold.AsRange().End)
+
+			hot, err := elf.LookupSymbol("_PyEval_EvalFrameDefault")
+			require.NoError(t, err)
+			t.Logf("hot  0x%x - 0x%x", hot.AsRange().Start, hot.AsRange().End)
+
+			ranges, err := recoverInterpreterRanges(elf, hot.AsRange(), td.version())
+			require.NoError(t, err)
+			for i, u := range ranges {
+				t.Logf("   range %2d [%x-%x)", i, u.Start, u.End)
+			}
+			t.Logf("%+v", ranges)
+			require.Contains(t, ranges, hot.AsRange())
+			expected := []util.Range{hot.AsRange()}
+			expected = append(expected, cold.AsRange())
+			sortRanges(expected)
+			require.Equal(t, expected, ranges)
+		})
+	}
 }
 
 func BenchmarkDecodeInterpreter(b *testing.B) {
@@ -342,258 +461,4 @@ func TestMergeRecoveredRages(t *testing.T) {
 		})
 	}
 
-}
-
-func TestDecodeInterpreterCompareDebug(t *testing.T) {
-	if runtime.GOARCH != "amd64" || runtime.GOOS != "linux" {
-		t.Skip("only amd64 linux needed")
-	}
-
-	testdata := []dockerPythonExtractor{
-		alpine("alpine:latest", pythonVer(3, 12)),
-		alpine("alpine:3.22.0", pythonVer(3, 12)),
-		alpine("alpine:3.21.3", pythonVer(3, 12)),
-		alpine("alpine:3.21.2", pythonVer(3, 12)),
-		alpine("alpine:3.21.1", pythonVer(3, 12)),
-		alpine("alpine:3.21.0", pythonVer(3, 12)),
-		alpine("alpine:3.20.6", pythonVer(3, 12)),
-		alpine("alpine:3.20.5", pythonVer(3, 12)),
-		alpine("alpine:3.20.4", pythonVer(3, 12)),
-		alpine("alpine:3.20.3", pythonVer(3, 12)),
-		alpine("alpine:3.20.2", pythonVer(3, 12)),
-		alpine("alpine:3.20.1", pythonVer(3, 12)),
-		alpine("alpine:3.20.0", pythonVer(3, 12)),
-		alpine("alpine:3.19.7", pythonVer(3, 11)),
-		alpine("alpine:3.19.6", pythonVer(3, 11)),
-		alpine("alpine:3.19.5", pythonVer(3, 11)),
-		alpine("alpine:3.19.4", pythonVer(3, 11)),
-		alpine("alpine:3.19.3", pythonVer(3, 11)),
-		alpine("alpine:3.19.2", pythonVer(3, 11)),
-		alpine("alpine:3.19.1", pythonVer(3, 11)),
-		alpine("alpine:3.19.0", pythonVer(3, 11)),
-		debian("debian:testing", pythonVer(3, 13)),
-		debian("debian:testing-slim", pythonVer(3, 13)),
-		debian("debian:12.11", pythonVer(3, 11)),
-		debian("debian:12.11-slim", pythonVer(3, 11)),
-		debian("debian:11.11", pythonVer(3, 9)),
-		debian("debian:11.11-slim", pythonVer(3, 9)),
-		debian("ubuntu:25.10", pythonVer(3, 13)),
-		debian("ubuntu:25.04", pythonVer(3, 13)),
-		debian("ubuntu:24.10", pythonVer(3, 12)),
-		debian("ubuntu:24.04", pythonVer(3, 12)),
-		debian("ubuntu:22.04", pythonVer(3, 10)),
-		debian("ubuntu:20.04", pythonVer(3, 8)),
-		python("python@sha256:091f21ccc2f4d319f220582c4e33801e99029f788d5767f74c8cff5396cf4fa5", "3.13-bookworm", pythonVer(3, 13)),
-		python("python@sha256:8191c572cf979a5dbc7345474ed93d96c56a6ac95c1dae2451132fe1ba633ae3", "3.12-bookworm", pythonVer(3, 12)),
-		python("python@sha256:1c8a588efa1aa943f6692604687aaddf440496fe8ebb6f630b8f0b039b586de0", "3.11-bookworm", pythonVer(3, 11)),
-		python("python@sha256:6f387d98c66ae06298cdbc19f937cbf375850fb348ae15d9f39f77c8e4d8ad3a", "3.10-bookworm", pythonVer(3, 10)),
-
-		python("python@sha256:845de9a763179bd336f12b6d296a5d016f766b77868d4873d2ac2c01e74e83e9", "3.13-bullseye", pythonVer(3, 13)),
-		python("python@sha256:f999fda265134523a8a65089edf0c1d94371c800639844030648f77fabd29493", "3.12-bullseye", pythonVer(3, 12)),
-		python("python@sha256:6bc5115724b3acffba620c04ba4b5b490a948e73771e7d3c503688c44e6e1a9b", "3.11-bullseye", pythonVer(3, 11)),
-		python("python@sha256:687bc3df0766d7ed96fa136a9b0c09c838e55fdad4c6284a931e55f311ef4e56", "3.10-bullseye", pythonVer(3, 10)),
-		//todo no need for hash, add more patch versions
-	}
-	for _, td := range testdata {
-		t.Run(td.name, func(t *testing.T) {
-			t.Parallel()
-			elf, debugElf := td.extract(t)
-			require.NotNil(t, debugElf)
-
-			debugSymbols, err := debugElf.ReadSymbols()
-			require.NoError(t, err)
-			cold, err := debugSymbols.LookupSymbol("_PyEval_EvalFrameDefault.cold")
-			require.NoError(t, err)
-			t.Logf("cold 0x%x - 0x%x", cold.AsRange().Start, cold.AsRange().End)
-
-			hot, err := elf.LookupSymbol("_PyEval_EvalFrameDefault")
-			require.NoError(t, err)
-			t.Logf("hot  0x%x - 0x%x", hot.AsRange().Start, hot.AsRange().End)
-
-			ranges, err := recoverInterpreterRanges(elf, hot.AsRange(), td.version())
-			require.NoError(t, err)
-			for i, u := range ranges {
-				t.Logf("   range %2d [%x-%x)", i, u.Start, u.End)
-			}
-			t.Logf("%+v", ranges)
-			require.Contains(t, ranges, hot.AsRange())
-			expected := []util.Range{hot.AsRange()}
-			expected = append(expected, cold.AsRange())
-			sortRanges(expected)
-			require.Equal(t, expected, ranges)
-		})
-	}
-}
-
-type extractor interface {
-	extract(t testing.TB) (elf, debugElf *pfelf.File)
-	id() string
-	version() uint16
-}
-type dockerPythonExtractor struct {
-	name       string
-	dockerfile string
-	withDebug  bool
-	ver        uint16
-}
-
-func (e dockerPythonExtractor) id() string {
-	return e.name
-}
-func (e dockerPythonExtractor) version() uint16 {
-	return e.ver
-}
-func (e dockerPythonExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File) {
-	d, _ := os.MkdirTemp("", "")
-	t.Logf("%s %s", e.name, d)
-	//d := t.TempDir()
-	err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
-	require.NoError(t, err)
-	c := exec.Command("docker", "build",
-		"--output=.",
-		".")
-	buffer := bytes.NewBuffer(nil)
-	c.Stderr = buffer
-	c.Dir = d
-	err = c.Run()
-	require.NoError(t, err, buffer.String())
-
-	es, err := os.ReadDir(d)
-	require.NoError(t, err)
-	if e.withDebug {
-		require.Len(t, es, 3)
-	} else {
-		require.Len(t, es, 2)
-	}
-	elfPath, debugElfPath := "", ""
-	for _, entry := range es {
-		n := entry.Name()
-		if n == "Dockerfile" {
-			continue
-		}
-		if strings.Contains(n, ".debug") {
-			debugElfPath = n
-		} else {
-			elfPath = n
-		}
-	}
-	t.Logf("%s %s", elfPath, debugElfPath)
-
-	elfPath = filepath.Join(d, elfPath)
-
-	inspectPath := filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+e.id())
-	_ = os.Symlink(elfPath, inspectPath)
-
-	elf, err = pfelf.Open(elfPath)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		elf.Close()
-	})
-	if e.withDebug {
-		debugElf, err = pfelf.Open(filepath.Join(d, debugElfPath))
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			debugElf.Close()
-		})
-	} else {
-		s, _ := elf.ReadSymbols()
-		if s != nil {
-			_, err = s.LookupSymbolAddress("_PyEval_EvalFrameDefault.cold")
-			if err == nil {
-				debugElf = elf
-			}
-		}
-	}
-
-	return
-}
-
-func alpine(base string, ver uint16) dockerPythonExtractor {
-	dockerfile := fmt.Sprintf(`
-FROM %s as builder
-RUN apk add python3 python3-dbg
-RUN mkdir /out
-RUN cp /usr/lib/debug/usr/lib/libpython*1.0.debug /out
-RUN cp /usr/lib/libpython*1.0 /out
-FROM scratch
-COPY --from=builder /out /
-`, base)
-	return dockerPythonExtractor{
-		ver:        ver,
-		name:       "docker-alpine-" + base,
-		dockerfile: dockerfile,
-		withDebug:  true,
-	}
-}
-
-func python(base string, name string, version uint16) dockerPythonExtractor {
-	dockerfile := fmt.Sprintf(`
-FROM %s as builder
-RUN mkdir /out
-RUN cp /usr/local/lib/libpython*1.0 /out
-FROM scratch
-COPY --from=builder /out /
-`, base)
-	return dockerPythonExtractor{
-
-		ver:        version,
-		name:       "docker-python-alpine-" + name + "-" + base,
-		dockerfile: dockerfile,
-
-		withDebug: false,
-	}
-}
-
-func debian(base string, ver uint16) dockerPythonExtractor {
-	dockerfile := fmt.Sprintf(`
-FROM %s as builder
-RUN apt-get update && apt-get -y install  python3 python3-dbg binutils original-awk grep
-RUN <<EOF
-set -ex
-mkdir /out
-cp /usr/bin/$(readlink /usr/bin/python3) /out
-build_id=$(readelf -n /usr/bin/$(readlink /usr/bin/python3) | grep "Build ID" | awk '{print $3}')
-dir_name=$(echo "$build_id" | cut -c1-2)
-file_name=$(echo "$build_id" | cut -c3-).debug
-debug_file_path="/usr/lib/debug/.build-id/$dir_name/$file_name"
-cp $debug_file_path /out/$(readlink /usr/bin/python3).debug
-EOF
-FROM scratch
-COPY --from=builder /out /
-`, base)
-	return dockerPythonExtractor{
-		ver:        ver,
-		name:       "docker-debian-" + base,
-		dockerfile: dockerfile,
-		withDebug:  true,
-	}
-}
-
-type storeExtractor struct {
-	ver     uint16
-	storeId string
-}
-
-func (e storeExtractor) id() string {
-	return e.storeId
-}
-func (e storeExtractor) version() uint16 {
-	return e.ver
-}
-
-func (e storeExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File) {
-	s, err := modulestore.InitModuleStore(moduleStoreCachePath)
-	require.NoError(t, err)
-	parsedID, err := modulestore.IDFromString(e.id())
-	require.NoError(t, err)
-	buf := bytes.NewBuffer(nil)
-	err = s.UnpackModule(parsedID, buf)
-	require.NoError(t, err)
-	_ = s.UnpackModuleToPath(parsedID, filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+e.id())) // todo remove
-	file, err := pfelf.NewFile(bytes.NewReader(buf.Bytes()), 0, false)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		file.Close()
-	})
-	return file, nil
 }
