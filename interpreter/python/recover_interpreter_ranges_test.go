@@ -2,15 +2,14 @@ package python
 
 import (
 	"bytes"
-	"cmp"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,8 +146,36 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 				{0x6754A, 0x6754A + 0x190F},
 			},
 		},
-		// todo add bullseye
-		// todo add slim-bullseye
+		{
+			elf: python("python@sha256:002de9892d4c0a06486086a261f1d69841f0d2b212dc2799984d08ab028ba3c2", "3.13-slim-bullseye", pythonVer(3, 13)),
+			expected: []util.Range{
+				{0x949FB, 0x949FB + 0x6354},
+				{0x193e20, 0x1a13ea},
+			},
+		},
+		{
+			elf: python("python@sha256:3d92a5560ebe1f1992dc8dfffddcb53996c41337eb9a1c3632a206fcd767e4a1", "3.12-slim-bullseye", pythonVer(3, 12)),
+			expected: []util.Range{
+				{0x111EDE, 0x111EDE + 0x48D2},
+				{0x1f52b0, 0x2014d3},
+			},
+		},
+		{
+			elf: python("python@sha256:ef5bda33991f10d7f4cc585e8aa9f793bb7c62446d56cc0882a8ce4e59cd8adc", "3.11-slim-bullseye", pythonVer(3, 11)),
+			expected: []util.Range{
+				{0x1c0ab0, 0x1cbdf9},
+				{0xFE01C, 0xFE01C + 0x3513},
+			},
+		},
+		{
+			elf: python("python@sha256:474659d6f8839900ffe80e8422f36f68a22ed667460c5e16a4fe5963df84cbd5", "3.10-slim-bullseye", pythonVer(3, 10)),
+			expected: []util.Range{
+				{0x11d730, 0x125073},
+				{0x6672A, 0x6672A + 0x207D},
+			},
+		},
+		//todo add alpine 3.21
+		//todo add alpine 3.20
 	}
 	for _, td := range testdata {
 		t.Run(td.elf.id(), func(t *testing.T) {
@@ -167,6 +194,84 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 
 		})
 	}
+}
+
+func TestDecodeInterpreterCheckNumberOfRangesOnly(t *testing.T) {
+	t.Skip("takes too long")
+	var es []extractor
+	add := func(maj, min, fix int, extraSuffixes []string) {
+		//extraSuffixes = append(extraSuffixes, "-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye")
+		sver := fmt.Sprintf("%d.%d.%d", maj, min, fix)
+		v := pythonVer(maj, min)
+		for _, suffix := range extraSuffixes {
+			es = append(es, python("python:"+sver+suffix, "python:"+sver+suffix, v))
+		}
+	}
+	add(3, 13, 3, []string{"-alpine3.22", "-alpine3.21"})
+	add(3, 13, 2, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 13, 1, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 13, 0, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 12, 10, []string{"-alpine3.22", "-alpine3.21"})
+	add(3, 12, 9, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 12, 8, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 12, 7, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 12, 6, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 12, 5, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 12, 4, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 12, 3, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 12, 2, []string{"-alpine3.19", "-alpine3.18"})
+	add(3, 12, 1, []string{"-alpine3.19", "-alpine3.18"})
+	add(3, 12, 0, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 11, 12, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 11, 11, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 11, 10, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 11, 9, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 11, 8, []string{"-alpine3.19", "-alpine3.18"})
+	add(3, 11, 7, []string{"-alpine3.19", "-alpine3.18"})
+	add(3, 11, 6, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 11, 5, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 11, 4, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 11, 3, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 11, 2, []string{"-alpine3.17", "-alpine3.16"})
+	add(3, 11, 1, []string{"-alpine3.17", "-alpine3.16"})
+	add(3, 11, 0, []string{"-alpine3.17", "-alpine3.16"})
+	add(3, 10, 17, []string{"-alpine3.22", "-alpine3.21"})
+	add(3, 10, 16, []string{"-alpine3.21", "-alpine3.20"})
+	add(3, 10, 15, []string{"-alpine3.20", "-alpine3.19"})
+	add(3, 10, 14, []string{"-alpine3.19", "-alpine3.18"})
+	add(3, 10, 13, []string{"-alpine3.19", "-alpine3.18"})
+	add(3, 10, 12, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 10, 11, []string{"-alpine3.18", "-alpine3.17"})
+	add(3, 10, 10, []string{"-alpine3.17", "-alpine3.16"})
+	add(3, 10, 9, []string{"-alpine3.17", "-alpine3.16"})
+	add(3, 10, 8, []string{"-alpine3.17", "-alpine3.16"})
+	add(3, 10, 7, []string{"-alpine3.16", "-alpine3.15"})
+	add(3, 10, 6, []string{"-alpine3.16", "-alpine3.15"})
+	add(3, 10, 5, []string{"-alpine3.16", "-alpine3.15"})
+	add(3, 10, 4, []string{"-alpine3.16", "-alpine3.15"})
+	add(3, 10, 3, []string{"-alpine3.15", "-alpine3.14"})
+	add(3, 10, 2, []string{"-alpine3.15", "-alpine3.14"})
+	add(3, 10, 1, []string{"-alpine3.15", "-alpine3.14"})
+	add(3, 10, 0, []string{"-alpine3.15", "-alpine3.14"})
+	for _, e := range es {
+		t.Run(e.id(), func(t *testing.T) {
+			t1 := time.Now()
+			python, _ := e.extract(t)
+			t.Logf("extract took %v", time.Since(t1))
+			sym, err := python.LookupSymbol("_PyEval_EvalFrameDefault")
+			require.NoError(t, err)
+			t.Logf("hot at {0x%x, 0x%x}", sym.Address, uint64(sym.Address)+sym.Size)
+			start := util.Range{Start: uint64(sym.Address), End: uint64(sym.Address) + sym.Size}
+			actual, err := recoverInterpreterRanges(python, start, e.version())
+			require.NoError(t, err)
+			for _, u := range actual {
+				t.Logf("actual {0x%x, 0x%x}", u.Start, u.End)
+			}
+			require.Contains(t, actual, sym.AsRange())
+			require.True(t, len(actual) <= 2)
+		})
+	}
+
 }
 
 func BenchmarkDecodeInterpreter(b *testing.B) {
@@ -240,8 +345,8 @@ func TestMergeRecoveredRages(t *testing.T) {
 }
 
 func TestDecodeInterpreterCompareDebug(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("only amd64 needed")
+	if runtime.GOARCH != "amd64" || runtime.GOOS != "linux" {
+		t.Skip("only amd64 linux needed")
 	}
 
 	testdata := []dockerPythonExtractor{
@@ -283,8 +388,11 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 		python("python@sha256:1c8a588efa1aa943f6692604687aaddf440496fe8ebb6f630b8f0b039b586de0", "3.11-bookworm", pythonVer(3, 11)),
 		python("python@sha256:6f387d98c66ae06298cdbc19f937cbf375850fb348ae15d9f39f77c8e4d8ad3a", "3.10-bookworm", pythonVer(3, 10)),
 
-		// bullseye
-
+		python("python@sha256:845de9a763179bd336f12b6d296a5d016f766b77868d4873d2ac2c01e74e83e9", "3.13-bullseye", pythonVer(3, 13)),
+		python("python@sha256:f999fda265134523a8a65089edf0c1d94371c800639844030648f77fabd29493", "3.12-bullseye", pythonVer(3, 12)),
+		python("python@sha256:6bc5115724b3acffba620c04ba4b5b490a948e73771e7d3c503688c44e6e1a9b", "3.11-bullseye", pythonVer(3, 11)),
+		python("python@sha256:687bc3df0766d7ed96fa136a9b0c09c838e55fdad4c6284a931e55f311ef4e56", "3.10-bullseye", pythonVer(3, 10)),
+		//todo no need for hash, add more patch versions
 	}
 	for _, td := range testdata {
 		t.Run(td.name, func(t *testing.T) {
@@ -310,15 +418,8 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 			t.Logf("%+v", ranges)
 			require.Contains(t, ranges, hot.AsRange())
 			expected := []util.Range{hot.AsRange()}
-			if cold.Size > 2 {
-				expected = append(expected, cold.AsRange())
-			} else {
-				// likely a small range with just ud2 instruction which we don't
-				// care about
-			}
-			slices.SortFunc(expected, func(e util.Range, e2 util.Range) int {
-				return cmp.Compare(e.Start, e2.Start)
-			})
+			expected = append(expected, cold.AsRange())
+			sortRanges(expected)
 			require.Equal(t, expected, ranges)
 		})
 	}
@@ -349,13 +450,13 @@ func (e dockerPythonExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File)
 	err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
 	require.NoError(t, err)
 	c := exec.Command("docker", "build",
-		"-t", "test-"+e.name,
 		"--output=.",
-		//"--pull",
 		".")
+	buffer := bytes.NewBuffer(nil)
+	c.Stderr = buffer
 	c.Dir = d
 	err = c.Run()
-	require.NoError(t, err)
+	require.NoError(t, err, buffer.String())
 
 	es, err := os.ReadDir(d)
 	require.NoError(t, err)

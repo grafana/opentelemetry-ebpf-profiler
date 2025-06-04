@@ -45,13 +45,12 @@ func recoverInterpreterRanges(ef *pfelf.File, start util.Range, pythonVersion ui
 		}
 	}
 
-	recoveredRanges := d.RangesWithFilter(func(b *dfs.BasicBlock) bool {
-		if b.UD() || b.Size() <= 4 {
-			return false
-		}
-		return true
-	})
-	return mergeRecoveredRanges(start, recoveredRanges), nil
+	recoveredRanges := d.Ranges()
+	recoveredRanges = mergeRecoveredRanges(start, recoveredRanges)
+	//recoveredRanges = slices.DeleteFunc(recoveredRanges, func(e util.Range) bool {
+	//	return (e.End - e.Start) <= 4
+	//})
+	return recoveredRanges, nil
 }
 
 func (r *rangesRecoverer) recoverIndirectJumps(indirectJumpsSource map[uint64]struct{}) (int, error) {
@@ -90,7 +89,6 @@ func (r *rangesRecoverer) recoverIndirectJumps(indirectJumpsSource map[uint64]st
 					} else {
 						// Py_FatalError("Executing a cache.");
 						b.MarkExplored()
-						b.MarkUD()
 					}
 				}
 			}

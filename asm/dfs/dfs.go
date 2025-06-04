@@ -12,7 +12,6 @@ import (
 
 const flagExplored = 1
 const flagCallNoReturn = 2
-const flagUD = 4
 
 type BasicBlock struct {
 	index int32
@@ -47,14 +46,6 @@ func (r *BasicBlock) MarkExplored() {
 
 func (r *BasicBlock) MarkCallNoReturn() {
 	r.flags |= flagCallNoReturn
-}
-
-func (r *BasicBlock) MarkUD() {
-	r.flags |= flagUD
-}
-
-func (r *BasicBlock) UD() bool {
-	return (r.flags & flagUD) == flagUD
 }
 
 func (r *BasicBlock) CallDoesNotReturn() bool {
