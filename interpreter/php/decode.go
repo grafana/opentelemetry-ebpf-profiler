@@ -24,7 +24,7 @@ func retrieveZendVMKindAmd64(code []byte) (uint, error) {
 	res := it.Regs.Get(x86asm.RAX)
 	imm := variable.Var("imm")
 	if res.Eval(imm) {
-		return uint(imm.ExtractedValue), nil
+		return uint(imm.ExtractedValueImm()), nil
 	}
 	return 0, errors.New("failed to decode zend_vm_kind: target not found")
 }
@@ -42,7 +42,7 @@ func retrieveExecuteExJumpLabelAddressAmd64(code []byte, addrBase libpf.SymbolVa
 	res := it.Regs.Get(x86asm.RIP)
 	imm := variable.Var("imm")
 	if res.Eval(imm) {
-		return libpf.SymbolValue(imm.ExtractedValue), nil
+		return libpf.SymbolValue(imm.ExtractedValueImm()), nil
 	}
 	return libpf.SymbolValueInvalid,
 		fmt.Errorf("failed to decode execute_ex: %s", "target not found")
@@ -62,8 +62,8 @@ func retrieveJITBufferPtrAmd64(code []byte, addrBase libpf.SymbolValue) (
 	rsi := variable.Var("rsi")
 	if it.Regs.Get(x86asm.RDI).Eval(variable.Mem(rdi, 8)) &&
 		it.Regs.Get(x86asm.RSI).Eval(variable.Mem(rsi, 8)) {
-		rdiValue := libpf.SymbolValue(rdi.ExtractedValue)
-		rsiValue := libpf.SymbolValue(rsi.ExtractedValue)
+		rdiValue := libpf.SymbolValue(rdi.ExtractedValueImm())
+		rsiValue := libpf.SymbolValue(rsi.ExtractedValueImm())
 		return rdiValue, rsiValue, nil
 	}
 	return libpf.SymbolValueInvalid, libpf.SymbolValueInvalid,

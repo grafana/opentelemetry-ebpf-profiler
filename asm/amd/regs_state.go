@@ -121,10 +121,10 @@ type RegsState struct {
 }
 
 func (r *RegsState) Set(reg x86asm.Reg, v variable.U64) {
-	idx, _ := regIndexWithSize(reg)
-	//if sz != size64 {
-	//	v = variable.ZeroExtend(v, sz)
-	//}
+	idx, sz := regIndexWithSize(reg)
+	if sz != size64 {
+		v = variable.ZeroExtend(v, sz)
+	}
 	if DebugPrinting {
 		if reg != x86asm.RIP {
 			fmt.Printf("    [REG-W] %6s = %s\n", reg, v.String())
