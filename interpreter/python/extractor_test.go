@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 )
 
-// todo add cache
 type extractor interface {
 	extract(t testing.TB) (elf, debugElf *pfelf.File)
 	id() string
@@ -22,6 +21,8 @@ type extractor interface {
 }
 type dockerPythonExtractor struct {
 	name       string
+	debugName  string
+	base       string
 	dockerfile string
 	withDebug  bool
 	ver        uint16
@@ -34,19 +35,30 @@ func (e dockerPythonExtractor) version() uint16 {
 	return e.ver
 }
 func (e dockerPythonExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File) {
-	d, _ := os.MkdirTemp("", "")
+	d := filepath.Join("extractorcache", e.name)
 	t.Logf("%s %s", e.name, d)
-	//d := t.TempDir()
-	err := os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
-	require.NoError(t, err)
-	c := exec.Command("docker", "build",
-		"--output=.",
-		".")
-	buffer := bytes.NewBuffer(nil)
-	c.Stderr = buffer
-	c.Dir = d
-	err = c.Run()
-	require.NoError(t, err, buffer.String())
+	_, err := os.Stat(d)
+	t.Cleanup(func() {
+		if t.Failed() {
+			_ = os.RemoveAll(d)
+		}
+	})
+	if err != nil {
+		err = os.MkdirAll(d, 0777)
+		require.NoError(t, err)
+		err = os.WriteFile(filepath.Join(d, "Dockerfile"), []byte(e.dockerfile), 0666)
+		require.NoError(t, err)
+		c := exec.Command("docker", "build",
+			"--output=.",
+			".")
+		buffer := bytes.NewBuffer(nil)
+		c.Stderr = buffer
+		c.Dir = d
+		err = c.Run()
+		if err != nil {
+			t.Skip(err.Error(), buffer.String())
+		}
+	}
 
 	es, err := os.ReadDir(d)
 	require.NoError(t, err)
@@ -70,9 +82,6 @@ func (e dockerPythonExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File)
 	t.Logf("%s %s", elfPath, debugElfPath)
 
 	elfPath = filepath.Join(d, elfPath)
-
-	inspectPath := filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+e.id())
-	_ = os.Symlink(elfPath, inspectPath)
 
 	elf, err = pfelf.Open(elfPath)
 	require.NoError(t, err)
@@ -110,13 +119,14 @@ COPY --from=builder /out /
 `, base)
 	return dockerPythonExtractor{
 		ver:        ver,
-		name:       "docker-alpine-" + base,
+		debugName:  "",
+		name:       "alpine:" + base,
 		dockerfile: dockerfile,
 		withDebug:  true,
 	}
 }
 
-func python(base string, name string, version uint16) dockerPythonExtractor {
+func python(base string, debugName string, version uint16) dockerPythonExtractor {
 	dockerfile := fmt.Sprintf(`
 FROM %s as builder
 RUN mkdir /out
@@ -125,12 +135,12 @@ FROM scratch
 COPY --from=builder /out /
 `, base)
 	return dockerPythonExtractor{
-
 		ver:        version,
-		name:       "docker-python-alpine-" + name + "-" + base,
+		debugName:  debugName,
+		base:       base,
+		name:       "python:" + base,
 		dockerfile: dockerfile,
-
-		withDebug: false,
+		withDebug:  false,
 	}
 }
 
@@ -153,7 +163,8 @@ COPY --from=builder /out /
 `, base)
 	return dockerPythonExtractor{
 		ver:        ver,
-		name:       "docker-debian-" + base,
+		debugName:  "",
+		name:       "debian:" + base,
 		dockerfile: dockerfile,
 		withDebug:  true,
 	}
@@ -179,7 +190,6 @@ func (e storeExtractor) extract(t testing.TB) (elf, debugElf *pfelf.File) {
 	buf := bytes.NewBuffer(nil)
 	err = s.UnpackModule(parsedID, buf)
 	require.NoError(t, err)
-	_ = s.UnpackModuleToPath(parsedID, filepath.Join(os.Getenv("HOME"), "Desktop", "__inspect__"+e.id())) // todo remove
 	file, err := pfelf.NewFile(bytes.NewReader(buf.Bytes()), 0, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {

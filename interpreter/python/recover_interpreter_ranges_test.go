@@ -14,6 +14,7 @@ import (
 const moduleStoreCachePath = "../../tools/coredump/modulecache"
 
 func TestDecodeInterpreterKnown(t *testing.T) {
+	skipRecoverTest(t)
 	testdata := []struct {
 		elf      extractor
 		expected []util.Range
@@ -190,12 +191,13 @@ func TestDecodeInterpreterKnown(t *testing.T) {
 }
 
 func TestDecodeInterpreterCheckNumberOfRangesOnly(t *testing.T) {
+	skipRecoverTest(t)
 	var es []extractor
 	add := func(maj, min, fix int, extraSuffixes []string) {
 		sver := fmt.Sprintf("%d.%d.%d", maj, min, fix)
 		v := pythonVer(maj, min)
 		for _, suffix := range extraSuffixes {
-			es = append(es, python("python:"+sver+suffix, "python:"+sver+suffix, v))
+			es = append(es, python("python:"+sver+suffix, "", v))
 		}
 	}
 	add(3, 13, 3, []string{"-bookworm", "-bullseye", "-slim-bookworm", "-slim-bullseye", "-alpine3.22", "-alpine3.21"})
@@ -254,7 +256,10 @@ func TestDecodeInterpreterCheckNumberOfRangesOnly(t *testing.T) {
 			require.NoError(t, err)
 			t.Logf("hot at {0x%x, 0x%x}", sym.Address, uint64(sym.Address)+sym.Size)
 			start := util.Range{Start: uint64(sym.Address), End: uint64(sym.Address) + sym.Size}
+			t1 = time.Now()
 			actual, err := recoverInterpreterRanges(python, start, e.version())
+			t.Logf("recover took %v", time.Since(t1))
+
 			require.NoError(t, err)
 			for _, u := range actual {
 				t.Logf("actual {0x%x, 0x%x}", u.Start, u.End)
@@ -267,9 +272,7 @@ func TestDecodeInterpreterCheckNumberOfRangesOnly(t *testing.T) {
 }
 
 func TestDecodeInterpreterCompareDebug(t *testing.T) {
-	if runtime.GOARCH != "amd64" || runtime.GOOS != "linux" {
-		t.Skip("only amd64 linux needed")
-	}
+	skipRecoverTest(t)
 
 	testdata := []dockerPythonExtractor{
 		alpine("alpine:latest", pythonVer(3, 12)),
@@ -307,61 +310,89 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 		debian("ubuntu:24.04", pythonVer(3, 12)),
 		debian("ubuntu:22.04", pythonVer(3, 10)),
 		debian("ubuntu:20.04", pythonVer(3, 8)),
-		python("python:3.13-bookworm", "3.13-bookworm", pythonVer(3, 13)),
-		python("python:3.13.3-bookworm", "3.13.3-bookworm", pythonVer(3, 13)),
-		python("python:3.13.2-bookworm", "3.13.2-bookworm", pythonVer(3, 13)),
-		python("python:3.13.1-bookworm", "3.13.1-bookworm", pythonVer(3, 13)),
-		python("python:3.13.0-bookworm", "3.13.0-bookworm", pythonVer(3, 13)),
+		python("python:3.13-bookworm", "", pythonVer(3, 13)),
+		python("python:3.13.3-bookworm", "", pythonVer(3, 13)),
+		python("python:3.13.2-bookworm", "", pythonVer(3, 13)),
+		python("python:3.13.1-bookworm", "", pythonVer(3, 13)),
+		python("python:3.13.0-bookworm", "", pythonVer(3, 13)),
 
-		python("python:3.12-bookworm", "3.12-bookworm", pythonVer(3, 12)),
-		python("python:3.12.10-bookworm", "3.12.10-bookworm", pythonVer(3, 12)),
-		python("python:3.12.9-bookworm", "3.12.9-bookworm", pythonVer(3, 12)),
-		python("python:3.12.8-bookworm", "3.12.8-bookworm", pythonVer(3, 12)),
-		python("python:3.12.7-bookworm", "3.12.7-bookworm", pythonVer(3, 12)),
-		python("python:3.12.6-bookworm", "3.12.6-bookworm", pythonVer(3, 12)),
-		python("python:3.12.5-bookworm", "3.12.5-bookworm", pythonVer(3, 12)),
-		python("python:3.12.4-bookworm", "3.12.4-bookworm", pythonVer(3, 12)),
-		python("python:3.12.3-bookworm", "3.12.3-bookworm", pythonVer(3, 12)),
-		python("python:3.12.2-bookworm", "3.12.2-bookworm", pythonVer(3, 12)),
-		python("python:3.12.1-bookworm", "3.12.1-bookworm", pythonVer(3, 12)),
-		python("python:3.12.0-bookworm", "3.12.0-bookworm", pythonVer(3, 12)),
+		python("python:3.12-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.10-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.9-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.8-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.7-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.6-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.5-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.4-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.3-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.2-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.1-bookworm", "", pythonVer(3, 12)),
+		python("python:3.12.0-bookworm", "", pythonVer(3, 12)),
 
-		python("python:3.11-bookworm", "3.11-bookworm", pythonVer(3, 11)),
-		python("python:3.11.12-bookworm", "3.11.12-bookworm", pythonVer(3, 11)),
-		python("python:3.11.11-bookworm", "3.11.11-bookworm", pythonVer(3, 11)),
-		python("python:3.11.10-bookworm", "3.11.10-bookworm", pythonVer(3, 11)),
-		python("python:3.11.9-bookworm", "3.11.9-bookworm", pythonVer(3, 11)),
-		python("python:3.11.8-bookworm", "3.11.8-bookworm", pythonVer(3, 11)),
-		python("python:3.11.7-bookworm", "3.11.7-bookworm", pythonVer(3, 11)),
-		python("python:3.11.6-bookworm", "3.11.6-bookworm", pythonVer(3, 11)),
-		python("python:3.11.5-bookworm", "3.11.5-bookworm", pythonVer(3, 11)),
-		python("python:3.11.4-bookworm", "3.11.4-bookworm", pythonVer(3, 11)),
+		python("python:3.11-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.12-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.11-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.10-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.9-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.8-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.7-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.6-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.5-bookworm", "", pythonVer(3, 11)),
+		python("python:3.11.4-bookworm", "", pythonVer(3, 11)),
 
-		python("python:3.10-bookworm", "3.10-bookworm", pythonVer(3, 10)),
-		python("python:3.10.17-bookworm", "3.10.17-bookworm", pythonVer(3, 10)),
-		python("python:3.10.16-bookworm", "3.10.16-bookworm", pythonVer(3, 10)),
-		python("python:3.10.15-bookworm", "3.10.15-bookworm", pythonVer(3, 10)),
-		python("python:3.10.14-bookworm", "3.10.14-bookworm", pythonVer(3, 10)),
-		python("python:3.10.13-bookworm", "3.10.13-bookworm", pythonVer(3, 10)),
-		python("python:3.10.12-bookworm", "3.10.12-bookworm", pythonVer(3, 10)),
-		python("python:3.10.11-bookworm", "3.10.11-bookworm", pythonVer(3, 10)),
-		python("python:3.10.10-bookworm", "3.10.10-bookworm", pythonVer(3, 10)),
-		python("python:3.10.9-bookworm", "3.10.9-bookworm", pythonVer(3, 10)),
-		python("python:3.10.8-bookworm", "3.10.8-bookworm", pythonVer(3, 10)),
-		python("python:3.10.7-bookworm", "3.10.7-bookworm", pythonVer(3, 10)),
-		python("python:3.10.6-bookworm", "3.10.6-bookworm", pythonVer(3, 10)),
-		python("python:3.10.5-bookworm", "3.10.5-bookworm", pythonVer(3, 10)),
-		python("python:3.10.4-bookworm", "3.10.4-bookworm", pythonVer(3, 10)),
-		python("python:3.10.3-bookworm", "3.10.3-bookworm", pythonVer(3, 10)),
-		python("python:3.10.2-bookworm", "3.10.2-bookworm", pythonVer(3, 10)),
-		python("python:3.10.1-bookworm", "3.10.1-bookworm", pythonVer(3, 10)),
-		python("python:3.10.0-bookworm", "3.10.0-bookworm", pythonVer(3, 10)),
+		python("python:3.10-bookworm", "", pythonVer(3, 10)),
+		python("python:3.10.17-bookworm", "", pythonVer(3, 10)),
+		python("python:3.10.16-bookworm", "", pythonVer(3, 10)),
+		python("python:3.10.15-bookworm", "", pythonVer(3, 10)),
+		python("python:3.10.14-bookworm", "", pythonVer(3, 10)),
+		python("python:3.10.13-bookworm", "", pythonVer(3, 10)),
+		python("python:3.10.12-bookworm", "", pythonVer(3, 10)),
 
-		python("python:3.13-bullseye", "3.13-bullseye", pythonVer(3, 13)),
-		python("python:3.12-bullseye", "3.12-bullseye", pythonVer(3, 12)),
-		python("python:3.11-bullseye", "3.11-bullseye", pythonVer(3, 11)),
-		python("python:3.10-bullseye", "3.10-bullseye", pythonVer(3, 10)),
-		//todo no need for hash, add more patch versions
+		python("python:3.13-bullseye", "", pythonVer(3, 13)),
+		python("python:3.13.3-bullseye", "", pythonVer(3, 13)),
+		python("python:3.13.2-bullseye", "", pythonVer(3, 13)),
+		python("python:3.13.1-bullseye", "", pythonVer(3, 13)),
+		python("python:3.13.0-bullseye", "", pythonVer(3, 13)),
+
+		python("python:3.12-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.10-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.9-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.8-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.7-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.6-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.5-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.4-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.3-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.2-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.1-bullseye", "", pythonVer(3, 12)),
+		python("python:3.12.0-bullseye", "", pythonVer(3, 12)),
+
+		python("python:3.11-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.12-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.11-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.10-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.9-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.8-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.7-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.6-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.5-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.4-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.3-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.2-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.1-bullseye", "", pythonVer(3, 11)),
+		python("python:3.11.0-bullseye", "", pythonVer(3, 11)),
+
+		python("python:3.10-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.18-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.17-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.16-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.15-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.14-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.13-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.12-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.11-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.10-bullseye", "", pythonVer(3, 10)),
+		python("python:3.10.9-bullseye", "", pythonVer(3, 10)),
 	}
 	for _, td := range testdata {
 		t.Run(td.name, func(t *testing.T) {
@@ -378,7 +409,9 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 			require.NoError(t, err)
 			t.Logf("hot  0x%x - 0x%x", hot.AsRange().Start, hot.AsRange().End)
 
+			t1 := time.Now()
 			ranges, err := recoverInterpreterRanges(elf, hot.AsRange(), td.version())
+			t.Logf("recover took  %s", time.Since(t1))
 			require.NoError(t, err)
 			for i, u := range ranges {
 				t.Logf("   range %2d [%x-%x)", i, u.Start, u.End)
@@ -390,6 +423,12 @@ func TestDecodeInterpreterCompareDebug(t *testing.T) {
 			sortRanges(expected)
 			require.Equal(t, expected, ranges)
 		})
+	}
+}
+
+func skipRecoverTest(t *testing.T) {
+	if runtime.GOARCH != "amd64" || runtime.GOOS != "linux" {
+		t.Skip("only amd64 linux needed")
 	}
 }
 
