@@ -24,11 +24,6 @@ jobs:
             echo "run \"make legal\"."
             exit 1
           fi
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        if: ${{ failure() }}
-        with:
-          limit-access-to-actor: true
   lint:
     name: Lint (${{ matrix.target_arch }})
     runs-on: ubuntu-24.04
@@ -83,11 +78,7 @@ jobs:
         run: make rust-tests
       - name: Tests
         run: make test TARGET_ARCH=${{ matrix.target_arch }}
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        if: ${{ failure() }}
-        with:
-          limit-access-to-actor: true
+
   check-binary-blobs:
     name: Check for differences in the eBPF and Rust binary blobs
     runs-on: ubuntu-24.04
