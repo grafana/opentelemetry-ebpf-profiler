@@ -17,7 +17,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	_ "go.opentelemetry.io/ebpf-profiler/interpreter/go/link"
+	// link to symblib
+	_ "go.opentelemetry.io/ebpf-profiler/interpreter/go/link" // link to symblib
 )
 
 func symlibError(c C.SymblibStatus) error {
