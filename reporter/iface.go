@@ -73,7 +73,7 @@ type FrameMetadataArgs struct {
 	// FunctionOffset is the line offset from function start line for the frame.
 	FunctionOffset uint32
 
-	FileIdCacheSizeHint uint32 //todo maybe pass a frame type or some other information
+	FileIDCacheSizeHint uint32 //todo maybe pass a frame type or some other information
 }
 
 type SymbolReporter interface {
