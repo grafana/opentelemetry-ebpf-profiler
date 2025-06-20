@@ -25,7 +25,7 @@ func TestCoreDumps(t *testing.T) {
 			testCase, err := readTestCase(filename)
 			require.NoError(t, err)
 			if testCase.Skip != "" {
-				t.Skip(testCase.Skip)
+				//t.Skip(testCase.Skip)
 			}
 
 			ctx := context.Background()

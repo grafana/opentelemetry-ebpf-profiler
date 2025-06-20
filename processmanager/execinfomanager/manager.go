@@ -94,6 +94,7 @@ type ExecutableInfoManager struct {
 	// deferredFileIDs caches file IDs for which stack delta extraction failed and
 	// retrying extraction of stack deltas should be deferred for some time.
 	deferredFileIDs *lru.SyncedLRU[host.FileID, libpf.Void]
+	havePython      bool
 }
 
 // NewExecutableInfoManager creates a new instance of the executable info manager.
@@ -147,6 +148,7 @@ func NewExecutableInfoManager(
 			ebpf:               ebpf,
 		}),
 		deferredFileIDs: deferredFileIDs,
+		havePython:      includeTracers.Has(types.PythonTracer),
 	}, nil
 }
 
@@ -212,7 +214,10 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	}
 
 	// Create the LoaderInfo for interpreter detection
-	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, gaps)
+	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, gaps,
+		//intervalData.PythonColdRange,
+		util.Range{},
+	)
 
 	// Insert a corresponding record into our map.
 	info = &entry{
@@ -365,6 +370,16 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 	}
 
 	return nil
+}
+
+func (state *executableInfoManagerState) pythonEnabled() bool {
+	//for _, loader := range state.interpreterLoaders {
+	//	if loader == python.Loader {
+	//		return true
+	//	}
+	//}
+	return false
+
 }
 
 // loadDeltas converts the sdtypes.StackDelta to StackDeltaEBPF and passes that to

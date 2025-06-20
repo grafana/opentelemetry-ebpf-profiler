@@ -11,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 const (
@@ -35,12 +36,23 @@ type extractionFilter struct {
 
 	// unsortedFrames is set if stack deltas from unsorted source are found
 	unsortedFrames bool
+
+	captureFDE  []uintptr
+	capturedFDE []util.Range
 }
 
 var _ ehframeHooks = &extractionFilter{}
 
 // fdeHook filters out .eh_frame data that is superseded by .gopclntab data
 func (f *extractionFilter) fdeHook(_ *cieInfo, fde *fdeInfo) bool {
+	for j, ip := range f.captureFDE {
+		if ip >= fde.ipStart && ip < fde.ipStart+fde.ipLen {
+			f.capturedFDE[j] = util.Range{
+				Start: uint64(fde.ipStart),
+				End:   uint64(fde.ipStart + fde.ipLen),
+			}
+		}
+	}
 	if !fde.sorted {
 		// Seems .debug_frame sometimes has broken FDEs for zero address
 		if fde.ipStart == 0 {
@@ -115,9 +127,18 @@ func Extract(filename string, interval *sdtypes.IntervalData) error {
 	return ExtractELF(elfRef, interval)
 }
 
+type Option func(*elfExtractor, *extractionFilter)
+
+func WithCaptureFDE(p uintptr) Option {
+	return func(ee *elfExtractor, f *extractionFilter) {
+		f.captureFDE = append(f.captureFDE, p)
+		f.capturedFDE = append(f.capturedFDE, util.Range{Start: 0, End: 0})
+	}
+}
+
 // ExtractELF takes a pfelf.Reference and provides the stack delta
 // intervals for it in the interval parameter.
-func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
+func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData, opt ...Option) error {
 	elfFile, err := elfRef.GetELF()
 	if err != nil {
 		return err
@@ -132,6 +153,9 @@ func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
 		deltas:           &deltas,
 		hooks:            &filter,
 		allowGenericRegs: isLibCrypto(elfFile),
+	}
+	for _, o := range opt {
+		o(&ee, &filter)
 	}
 
 	if err = ee.parseGoPclntab(); err != nil {
@@ -198,7 +222,8 @@ func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
 	}
 
 	*interval = sdtypes.IntervalData{
-		Deltas: deltas,
+		Deltas:      deltas,
+		CapturedFDE: filter.capturedFDE,
 	}
 	return nil
 }

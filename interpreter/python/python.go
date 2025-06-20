@@ -47,14 +47,20 @@ var (
 	libpythonRegex = regexp.MustCompile(`^(?:.*/)?libpython(\d)\.(\d+)[^/]*`)
 )
 
-// pythonVer builds a version number from readable numbers
-func pythonVer(major, minor int) uint16 {
-	return uint16(major)*0x100 + uint16(minor)
+// NewVersion builds a version number from readable numbers
+func NewVersion(major, minor int) Version {
+	return Version(uint16(major)*0x100 + uint16(minor))
+}
+
+type Version uint16
+
+func (v Version) String() string {
+	return fmt.Sprintf("%d.%d", (v>>8)&0xff, v&0xff)
 }
 
 //nolint:lll
 type pythonData struct {
-	version uint16
+	version Version
 
 	autoTLSKey libpf.SymbolValue
 
@@ -138,9 +144,9 @@ func (d *pythonData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.A
 	}
 
 	switch {
-	case d.version >= pythonVer(3, 11):
+	case d.version >= NewVersion(3, 11):
 		i.getFuncOffset = walkLocationTable
-	case d.version == pythonVer(3, 10):
+	case d.version == NewVersion(3, 10):
 		i.getFuncOffset = walkLineTable
 	default:
 		i.getFuncOffset = mapByteCodeIndexToLine
@@ -157,7 +163,7 @@ func (d *pythonData) Unload(_ interpreter.EbpfHandler) {
 type pythonCodeObject struct {
 	// As of Python 3.10 elements of PyCodeObject have changed and so we need
 	// to handle them differently. To be able to do so we keep track of the python version.
-	version uint16
+	version Version
 
 	// name is the extracted co_name (the unqualified method or function name)
 	name string
@@ -500,7 +506,7 @@ func (p *pythonInstance) getCodeObject(addr libpf.Address,
 	data := libpf.Address(vms.PyASCIIObject.Data)
 
 	var lineInfoPtr libpf.Address
-	if p.d.version < pythonVer(3, 10) {
+	if p.d.version < NewVersion(3, 10) {
 		lineInfoPtr = npsr.Ptr(cobj, vms.PyCodeObject.Lnotab)
 	} else {
 		lineInfoPtr = npsr.Ptr(cobj, vms.PyCodeObject.Linetable)
@@ -543,7 +549,7 @@ func (p *pythonInstance) getCodeObject(addr libpf.Address,
 	}
 
 	lineTableSize := p.rm.Uint64(lineInfoPtr + libpf.Address(vms.PyVarObject.ObSize))
-	if lineTableSize >= 0x10000 || (p.d.version < pythonVer(3, 11) && lineTableSize&1 != 0) {
+	if lineTableSize >= 0x10000 || (p.d.version < NewVersion(3, 11) && lineTableSize&1 != 0) {
 		return nil, fmt.Errorf("invalid line table size (%v)", lineTableSize)
 	}
 	lineTable := make([]byte, lineTableSize)
@@ -691,52 +697,74 @@ func decodeStub(
 		symbolName, codeAddress, hex.Dump(code), value)
 }
 
-func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+func GetInterpreter(fileName string, ef *pfelf.File) (ver Version, symbol *libpf.Symbol, err error) {
 	mainDSO := false
-	matches := libpythonRegex.FindStringSubmatch(info.FileName())
+	matches := libpythonRegex.FindStringSubmatch(fileName)
 	if matches == nil {
 		mainDSO = true
-		matches = pythonRegex.FindStringSubmatch(info.FileName())
+		matches = pythonRegex.FindStringSubmatch(fileName)
 		if matches == nil {
-			return nil, nil
+			return 0, nil, nil
 		}
-	}
-
-	ef, err := info.GetELF()
-	if err != nil {
-		return nil, err
 	}
 
 	if mainDSO {
 		var needed []string
-		needed, err = ef.DynString(elf.DT_NEEDED)
+		needed, err := ef.DynString(elf.DT_NEEDED)
 		if err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		for _, n := range needed {
 			if libpythonRegex.MatchString(n) {
 				// 'python' linked with 'libpython'. The beef is in the library,
 				// so do not try to inspect the shim main binary.
-				return nil, nil
+				return 0, nil, nil
 			}
 		}
 	}
 
-	var pyruntimeAddr, autoTLSKey libpf.SymbolValue
 	major, _ := strconv.Atoi(matches[1])
 	minor, _ := strconv.Atoi(matches[2])
-	version := pythonVer(major, minor)
+	version := NewVersion(major, minor)
 
-	minVer := pythonVer(3, 6)
-	maxVer := pythonVer(3, 13)
+	minVer := NewVersion(3, 6)
+	maxVer := NewVersion(3, 13)
 	if version < minVer || version > maxVer {
-		return nil, fmt.Errorf("unsupported Python %d.%d (need >= %d.%d and <= %d.%d)",
-			major, minor,
-			(minVer>>8)&0xff, minVer&0xff,
-			(maxVer>>8)&0xff, maxVer&0xff)
+		return 0, nil, fmt.Errorf("unsupported Python %s (need >= %s and <= %s)",
+			version.String(),
+			minVer.String(),
+			maxVer.String())
 	}
 
-	if version >= pythonVer(3, 7) {
+	// The Python main interpreter loop history in CPython git is:
+	//
+	//nolint:lll
+	// 87af12bff33 v3.11 2022-02-15 _PyEval_EvalFrameDefault(PyThreadState*,_PyInterpreterFrame*,int)
+	// ae0a2b75625 v3.10 2021-06-25 _PyEval_EvalFrameDefault(PyThreadState*,_interpreter_frame*,int)
+	// 0b72b23fb0c v3.9  2020-03-12 _PyEval_EvalFrameDefault(PyThreadState*,PyFrameObject*,int)
+	// 3cebf938727 v3.6  2016-09-05 _PyEval_EvalFrameDefault(PyFrameObject*,int)
+	// 49fd7fa4431 v3.0  2006-04-21 PyEval_EvalFrameEx(PyFrameObject*,int)
+	if symbol, err = ef.LookupSymbol("_PyEval_EvalFrameDefault"); err != nil {
+		symbol, err = ef.LookupSymbol("PyEval_EvalFrameEx")
+	}
+
+	return version, symbol, err
+}
+
+func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+	ef, err := info.GetELF()
+	if err != nil {
+		return nil, err
+	}
+
+	version, interp, err := GetInterpreter(info.FileName(), ef)
+	if err != nil || version == 0 {
+		return nil, err
+	}
+
+	var pyruntimeAddr, autoTLSKey libpf.SymbolValue
+
+	if version >= NewVersion(3, 7) {
 		if pyruntimeAddr, err = ef.LookupSymbolAddress("_PyRuntime"); err != nil {
 			return nil, fmt.Errorf("_PyRuntime not defined: %v", err)
 		}
@@ -747,7 +775,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	if autoTLSKey == libpf.SymbolValueInvalid {
 		return nil, fmt.Errorf("unable to resolve autoTLSKey %v", err)
 	}
-	if version >= pythonVer(3, 7) && autoTLSKey%8 == 0 {
+	if version >= NewVersion(3, 7) && autoTLSKey%8 == 0 {
 		// On Python 3.7+, the call is to PyThread_tss_get, but can get optimized to
 		// call directly pthread_getspecific. So we might be finding the address
 		// for "Py_tss_t" or "pthread_key_t" depending on call target.
@@ -760,9 +788,11 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		autoTLSKey += 4
 	}
 
-	interpRanges, err := findInterpreterRanges(info)
-	if err != nil {
-		return nil, err
+	interpRanges := []util.Range{
+		interp.AsRange(),
+	}
+	if info.PythonColdRange != (util.Range{}) {
+		interpRanges = append(interpRanges, info.PythonColdRange)
 	}
 
 	pd := &pythonData{
@@ -783,7 +813,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	vms.PyThreadState.Frame = 24
 
 	switch version {
-	case pythonVer(3, 11):
+	case NewVersion(3, 11):
 		// Starting with 3.11 we no longer can extract needed information from
 		// PyFrameObject. In addition PyFrameObject was replaced with _PyInterpreterFrame.
 		// The following offsets come from _PyInterpreterFrame but we continue to use
@@ -797,7 +827,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		// frame got removed in PyThreadState but we can use cframe instead.
 		vms.PyThreadState.Frame = 56
 		vms.PyCFrame.CurrentFrame = 8
-	case pythonVer(3, 12):
+	case NewVersion(3, 12):
 		// Entry frame detection changed due to the shim frame
 		// https://github.com/python/cpython/commit/1e197e63e21f77b102ff2601a549dda4b6439455
 		vms.PyFrameObject.Code = 0
@@ -808,7 +838,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		vms.PyThreadState.Frame = 56
 		vms.PyCFrame.CurrentFrame = 0
 		vms.PyASCIIObject.Data = 40
-	case pythonVer(3, 13):
+	case NewVersion(3, 13):
 		vms.PyFrameObject.Code = 0
 		vms.PyFrameObject.LastI = 56       // _Py_CODEUNIT *prev_instr
 		vms.PyFrameObject.Back = 8         // struct _PyInterpreterFrame *previous
@@ -838,23 +868,21 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return pd, nil
 }
 
-func findInterpreterRanges(info *interpreter.LoaderInfo) (interpRanges []util.Range, err error) {
-	// The Python main interpreter loop history in CPython git is:
-	//
-	//nolint:lll
-	// 87af12bff33 v3.11 2022-02-15 _PyEval_EvalFrameDefault(PyThreadState*,_PyInterpreterFrame*,int)
-	// ae0a2b75625 v3.10 2021-06-25 _PyEval_EvalFrameDefault(PyThreadState*,_interpreter_frame*,int)
-	// 0b72b23fb0c v3.9  2020-03-12 _PyEval_EvalFrameDefault(PyThreadState*,PyFrameObject*,int)
-	// 3cebf938727 v3.6  2016-09-05 _PyEval_EvalFrameDefault(PyFrameObject*,int)
-	// 49fd7fa4431 v3.0  2006-04-21 PyEval_EvalFrameEx(PyFrameObject*,int)
-	if interpRanges, err = info.GetSymbolAsRanges("_PyEval_EvalFrameDefault"); err != nil {
-		interpRanges, _ = info.GetSymbolAsRanges("PyEval_EvalFrameEx")
-	}
-	if len(interpRanges) == 0 {
-		return nil, errors.New("no _PyEval_EvalFrameDefault/PyEval_EvalFrameEx symbol found")
-	}
-	// TODO(korniltsev): find cold ranges
-	// see tools/coredump/testdata/amd64/python312-alpine320-nobuildid.json
-	// https://github.com/open-telemetry/opentelemetry-ebpf-profiler/issues/416
-	return interpRanges, nil
-}
+//func findInterpreterRanges(info *interpreter.LoaderInfo, ef *pfelf.File) (interpRanges []util.Range, err error) {
+//	interp, err := FindInterpreterSymbol(ef)
+//	if err != nil {
+//		return nil, errors.New("no _PyEval_EvalFrameDefault symbol found")
+//	}
+//	interpRanges = []util.Range{
+//		interp.AsRange(),
+//	}
+//	return interpRanges, nil
+//	//fid := info.FileID()
+//	//recovered, err := recoverInterpreterRangesCached(fid, ef, interpRanges[0])
+//	//if err != nil {
+//	//	log.WithError(err).Errorf("failed to recover python ranges %s",
+//	//		fid.StringNoQuotes())
+//	//	return interpRanges, nil
+//	//}
+//	//return recovered, nil
+//}

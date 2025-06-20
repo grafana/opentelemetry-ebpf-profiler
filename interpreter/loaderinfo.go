@@ -22,14 +22,17 @@ type LoaderInfo struct {
 	elfRef *pfelf.Reference
 	// gaps represents holes in the stack deltas of the executable.
 	gaps []util.Range
+
+	PythonColdRange util.Range
 }
 
 // NewLoaderInfo returns a populated LoaderInfo struct.
-func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, gaps []util.Range) *LoaderInfo {
+func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, gaps []util.Range, pythonColdRange util.Range) *LoaderInfo {
 	return &LoaderInfo{
-		fileID: fileID,
-		elfRef: elfRef,
-		gaps:   gaps,
+		fileID:          fileID,
+		elfRef:          elfRef,
+		gaps:            gaps,
+		PythonColdRange: pythonColdRange,
 	}
 }
 

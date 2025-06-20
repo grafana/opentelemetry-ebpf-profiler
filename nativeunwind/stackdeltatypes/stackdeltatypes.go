@@ -8,6 +8,7 @@ package stackdeltatypes // import "go.opentelemetry.io/ebpf-profiler/nativeunwin
 
 import (
 	"go.opentelemetry.io/ebpf-profiler/support"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 const (
@@ -78,6 +79,8 @@ type IntervalData struct {
 	// Deltas contains all stack deltas for a single binary.
 	// Two consecutive entries describe an interval.
 	Deltas StackDeltaArray
+
+	CapturedFDE []util.Range
 }
 
 // AddEx adds a new stack delta to the array.
