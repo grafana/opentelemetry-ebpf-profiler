@@ -371,6 +371,16 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 	return nil
 }
 
+func (state *executableInfoManagerState) pythonEnabled() bool {
+	//for _, loader := range state.interpreterLoaders {
+	//	if loader == python.Loader {
+	//		return true
+	//	}
+	//}
+	return false
+
+}
+
 // loadDeltas converts the sdtypes.StackDelta to StackDeltaEBPF and passes that to
 // the ebpf interface to be loaded to kernel maps. While converting the deltas, it
 // also creates a list of all large gaps in the executable.

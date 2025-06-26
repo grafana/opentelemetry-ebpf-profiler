@@ -19,6 +19,8 @@ import (
 	"unsafe"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/asm/amd"
+	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 
 	"github.com/elastic/go-freelru"
 
@@ -752,7 +754,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		autoTLSKey += 4
 	}
 
-	interpRanges, err := findInterpreterRanges(info)
+	interpRanges, err := findInterpreterRanges(info.FileID(), ef)
 	if err != nil {
 		return nil, err
 	}
@@ -830,7 +832,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return pd, nil
 }
 
-func findInterpreterRanges(info *interpreter.LoaderInfo) (interpRanges []util.Range, err error) {
+func findInterpreterRanges(fid host.FileID, ef *pfelf.File) (interpRanges []util.Range, err error) {
 	// The Python main interpreter loop history in CPython git is:
 	//
 	//nolint:lll
@@ -839,14 +841,72 @@ func findInterpreterRanges(info *interpreter.LoaderInfo) (interpRanges []util.Ra
 	// 0b72b23fb0c v3.9  2020-03-12 _PyEval_EvalFrameDefault(PyThreadState*,PyFrameObject*,int)
 	// 3cebf938727 v3.6  2016-09-05 _PyEval_EvalFrameDefault(PyFrameObject*,int)
 	// 49fd7fa4431 v3.0  2006-04-21 PyEval_EvalFrameEx(PyFrameObject*,int)
-	if interpRanges, err = info.GetSymbolAsRanges("_PyEval_EvalFrameDefault"); err != nil {
-		interpRanges, _ = info.GetSymbolAsRanges("PyEval_EvalFrameEx")
+	var interpSym *libpf.Symbol
+	if interpSym, err = ef.LookupSymbol("_PyEval_EvalFrameDefault"); err != nil {
+		interpSym, _ = ef.LookupSymbol("PyEval_EvalFrameEx")
 	}
-	if len(interpRanges) == 0 {
-		return nil, errors.New("no _PyEval_EvalFrameDefault/PyEval_EvalFrameEx symbol found")
+	if interpSym == nil {
+		return nil, errors.New("no _PyEval_EvalFrameDefault symbol found")
 	}
-	// TODO(korniltsev): find cold ranges
-	// see tools/coredump/testdata/amd64/python312-alpine320-nobuildid.json
-	// https://github.com/open-telemetry/opentelemetry-ebpf-profiler/issues/416
+	interpRanges = make([]util.Range, 0, 2)
+	interpRanges = append(interpRanges, util.Range{
+		Start: uint64(interpSym.Address),
+		End:   uint64(interpSym.Address) + interpSym.Size,
+	})
+	var (
+		coldRange util.Range
+	)
+	if cached, ok := coldRangeCache.Get(fid); ok {
+		coldRange = cached.value
+		err = cached.err
+	} else {
+		coldRange, err = findColdRange(ef, interpSym)
+		coldRangeCache.Add(fid, coldRangeResult{
+			value: coldRange,
+			err:   err,
+		})
+		if err != nil {
+			log.WithError(err).Errorf("failed to recover python ranges %s",
+				fid.StringNoQuotes())
+			return interpRanges, nil
+		}
+	}
+	if coldRange != (util.Range{}) {
+		interpRanges = append(interpRanges, coldRange)
+	}
 	return interpRanges, nil
 }
+
+// findColdRange finds a relative jump from the _PyEval_EvalFrameDefault to
+// _PyEval_EvalFrameDefault.cold symbol and then recovers the range of the
+// .cold symbol using an instance of elfunwindinfo.EhFrameTable.
+// findColdRange returns the util.Range of the `.cold` symbol or an empty util.Range
+// https://github.com/open-telemetry/opentelemetry-ebpf-profiler/issues/416
+func findColdRange(ef *pfelf.File, interpSym *libpf.Symbol) (util.Range, error) {
+	dst, err := amd.FindExternalJump(ef, interpSym)
+	if err != nil || dst == 0 {
+		return util.Range{}, err
+	}
+	t, err := elfunwindinfo.NewEhFrameTable(ef)
+	if err != nil {
+		return util.Range{}, err
+	}
+	fde, err := t.LookupFDE(dst)
+	if err != nil {
+		return util.Range{}, err
+	}
+	return util.Range{
+		Start: uint64(fde.PCBegin),
+		End:   uint64(fde.PCBegin + fde.PCRange),
+	}, nil
+}
+
+type coldRangeResult struct {
+	value util.Range
+	err   error
+}
+
+var coldRangeCache, _ = freelru.NewSynced[host.FileID, coldRangeResult](
+	256, func(k host.FileID) uint32 {
+		return uint32(k)
+	})
