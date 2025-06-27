@@ -485,6 +485,7 @@ func (f *File) VirtualMemory(addr int64, sz, maxSize int) ([]byte, error) {
 	return nil, fmt.Errorf("no matching segment for 0x%x", uint64(addr))
 }
 
+// todo submit separately
 func (f *File) LookupSymbolData(name libpf.SymbolName, maxCopy int) (*libpf.Symbol, []byte, error) {
 	sym, err := f.LookupSymbol(name)
 	if err != nil {
