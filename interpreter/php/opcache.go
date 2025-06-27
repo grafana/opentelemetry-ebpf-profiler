@@ -313,7 +313,7 @@ func getOpcacheJITInfo(ef *pfelf.File) (dasmBuf, dasmSize libpf.Address, err err
 	// and ARM64.
 
 	// We should only need 64 bytes, since this should be early in the instruction sequence.
-	sym, code, err := ef.SymbolData("zend_jit_unprotect", 64)
+	sym, code, err := ef.LookupSymbolData("zend_jit_unprotect", 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("unable to read 'zend_jit_unprotect': %w", err)
 	}

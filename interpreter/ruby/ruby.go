@@ -785,7 +785,7 @@ func (r *rubyInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
 // determineRubyVersion looks for the symbol ruby_version and extracts version
 // information from its value.
 func determineRubyVersion(ef *pfelf.File) (uint32, error) {
-	_, memory, err := ef.SymbolData("ruby_version", 64)
+	_, memory, err := ef.LookupSymbolData("ruby_version", 64)
 	if err != nil {
 		return 0, fmt.Errorf("unable to read 'ruby_version': %v", err)
 	}

@@ -93,9 +93,9 @@ func IsPotentialTSDDSO(filename string) bool {
 
 // ExtractTSDInfo extracts the introspection data for pthread thread specific data.
 func ExtractTSDInfo(ef *pfelf.File) (*TSDInfo, error) {
-	_, code, err := ef.SymbolData("__pthread_getspecific", 2048)
+	_, code, err := ef.LookupSymbolData("__pthread_getspecific", 2048)
 	if err != nil {
-		_, code, err = ef.SymbolData("pthread_getspecific", 2048)
+		_, code, err = ef.LookupSymbolData("pthread_getspecific", 2048)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read 'pthread_getspecific': %s", err)
 		}

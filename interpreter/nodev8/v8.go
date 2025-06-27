@@ -2149,7 +2149,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		// Resolve and read "v8::internal::Versions::XXXXXX_E"
 		var val []byte
 		sym = fmt.Sprintf("_ZN2v88internal7Version6%s_E", sym)
-		_, val, err = ef.SymbolData(libpf.SymbolName(sym), 4)
+		_, val, err = ef.LookupSymbolData(libpf.SymbolName(sym), 4)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read '%s': %v", sym, err)
 		}

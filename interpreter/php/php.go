@@ -205,7 +205,7 @@ func recoverExecuteExJumpLabelAddress(ef *pfelf.File) (libpf.SymbolValue, error)
 
 	// The address we care about varies from being 47 bytes in to about 107 bytes in,
 	// so we'll cap at 128 bytes. This might need to be adjusted up in future.
-	sym, code, err := ef.SymbolData("execute_ex", 128)
+	sym, code, err := ef.LookupSymbolData("execute_ex", 128)
 	if err != nil {
 		return libpf.SymbolValueInvalid,
 			fmt.Errorf("unable to read 'execute_ex': %w", err)
@@ -231,7 +231,7 @@ func determineVMKind(ef *pfelf.File) (uint, error) {
 
 	// We should only need around 32 bytes here, since this function should be
 	// really short (e.g a mov and a ret).
-	_, code, err := ef.SymbolData("zend_vm_kind", 64)
+	_, code, err := ef.LookupSymbolData("zend_vm_kind", 64)
 	if err != nil {
 		return 0, fmt.Errorf("unable to read 'zend_vm_kind': %w", err)
 	}

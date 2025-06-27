@@ -661,7 +661,7 @@ func (d *pythonData) readIntrospectionData(ef *pfelf.File, symbol libpf.SymbolNa
 func decodeStub(ef *pfelf.File, memoryBase libpf.SymbolValue,
 	symbolName libpf.SymbolName) (libpf.SymbolValue, error) {
 	// Read and decode the code for the symbol
-	sym, code, err := ef.SymbolData(symbolName, 64)
+	sym, code, err := ef.LookupSymbolData(symbolName, 64)
 	if err != nil {
 		return libpf.SymbolValueInvalid, fmt.Errorf("unable to read '%s': %v",
 			symbolName, err)
@@ -843,10 +843,8 @@ func findInterpreterRanges(info *interpreter.LoaderInfo, ef *pfelf.File,
 	// 3cebf938727 v3.6  2016-09-05 _PyEval_EvalFrameDefault(PyFrameObject*,int)
 	// 49fd7fa4431 v3.0  2006-04-21 PyEval_EvalFrameEx(PyFrameObject*,int)
 	var interp *libpf.Symbol
-	var code []byte
-	const maxCodeSize = 128 * 1024 // observed ~65k in the wild
-	if interp, code, err = ef.SymbolData("_PyEval_EvalFrameDefault", maxCodeSize); err != nil {
-		interp, code, err = ef.SymbolData("PyEval_EvalFrameEx", maxCodeSize)
+	if interp, err = ef.LookupSymbol("_PyEval_EvalFrameDefault"); err != nil {
+		interp, err = ef.LookupSymbol("PyEval_EvalFrameEx")
 	}
 	if err != nil {
 		return nil, errors.New("no _PyEval_EvalFrameDefault/PyEval_EvalFrameEx symbol found")
@@ -856,7 +854,7 @@ func findInterpreterRanges(info *interpreter.LoaderInfo, ef *pfelf.File,
 		Start: uint64(interp.Address),
 		End:   uint64(interp.Address) + interp.Size,
 	})
-	coldRange, err := findColdRange(ef, code, interp)
+	coldRange, err := findColdRange(ef, interp)
 	if err != nil {
 		log.WithError(err).Warnf("failed to recover python ranges %s",
 			info.FileName())
@@ -872,11 +870,11 @@ func findInterpreterRanges(info *interpreter.LoaderInfo, ef *pfelf.File,
 // symbol using an instance of elfunwindinfo.EhFrameTable.
 // findColdRange returns the util.Range of the `.cold` symbol or an empty util.Range
 // https://github.com/open-telemetry/opentelemetry-ebpf-profiler/issues/416
-func findColdRange(ef *pfelf.File, code []byte, interp *libpf.Symbol) (util.Range, error) {
+func findColdRange(ef *pfelf.File, interp *libpf.Symbol) (util.Range, error) {
 	if ef.Machine != elf.EM_X86_64 {
 		return util.Range{}, nil
 	}
-	dst, err := amd.FindExternalJump(code, interp)
+	dst, err := amd.FindExternalJump(ef, interp)
 	if err != nil || dst == 0 {
 		return util.Range{}, err
 	}
