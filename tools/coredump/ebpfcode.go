@@ -42,6 +42,7 @@ int bpf_log(const char *fmt, ...)
 		__bpf_log(msg, sz);
 		va_end(va);
 	}
+return 0;
 }
 
 #include "../../support/ebpf/interpreter_dispatcher.ebpf.c"

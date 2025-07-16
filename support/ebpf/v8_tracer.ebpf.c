@@ -327,7 +327,7 @@ static EBPF_INLINE int unwind_v8(struct pt_regs *ctx)
 
   increment_metric(metricID_UnwindV8Attempts);
 
-#pragma unroll
+// #pragma unroll
   for (int i = 0; i < V8_FRAMES_PER_PROGRAM; i++) {
     unwinder = PROG_UNWIND_STOP;
 

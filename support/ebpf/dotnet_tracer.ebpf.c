@@ -305,7 +305,7 @@ static EBPF_INLINE int unwind_dotnet(struct pt_regs *ctx)
   record->ratelimitAction = RATELIMIT_ACTION_FAST;
   increment_metric(metricID_UnwindDotnetAttempts);
 
-#pragma unroll
+//#pragma unroll
   for (int i = 0; i < DOTNET_FRAMES_PER_PROGRAM; i++) {
     unwinder = PROG_UNWIND_STOP;
 

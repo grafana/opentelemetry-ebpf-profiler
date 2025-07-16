@@ -13,9 +13,6 @@ import (
 
 	cebpf "github.com/cilium/ebpf"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/exp/constraints"
-	"golang.org/x/sys/unix"
-
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -25,6 +22,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/rlimit"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/util"
+	"golang.org/x/exp/constraints"
 )
 
 /*
@@ -495,7 +493,8 @@ func probeBatchOperations(mapType cebpf.MapType) error {
 		KeySize:    8,
 		ValueSize:  8,
 		MaxEntries: uint32(updates),
-		Flags:      unix.BPF_F_NO_PREALLOC,
+		//Flags:      unix.BPF_F_NO_PREALLOC, //todo
+		Flags: 0,
 	}
 
 	var keys any
