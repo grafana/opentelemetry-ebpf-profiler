@@ -90,7 +90,7 @@ func (scd *StoreCoredump) Close() error {
 }
 
 func OpenStoreCoredump(store *modulestore.Store, coreFileRef modulestore.ID, modules []ModuleInfo) (
-	process.Process, error) {
+	process.TestingProcess, error) {
 	// Open the coredump from the module store.
 	reader, err := store.OpenBufferedReadAt(coreFileRef, 16*1024*1024)
 	if err != nil {

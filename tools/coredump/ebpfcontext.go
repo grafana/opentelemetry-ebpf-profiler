@@ -69,7 +69,7 @@ type ebpfContext struct {
 var ebpfContextMap = map[C.u64]*ebpfContext{}
 
 // newEBPFContext creates new EBPF Context from given core dump image
-func newEBPFContext(pr process.Process) *ebpfContext {
+func newEBPFContext(pr process.TestingProcess) *ebpfContext {
 	pid := pr.PID()
 	unwindInfoArray := C.unwind_info_array
 	ctx := &ebpfContext{

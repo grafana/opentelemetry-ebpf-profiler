@@ -43,7 +43,7 @@ func ptraceGetRegset(tid, regset int, data []byte) error {
 // from one goroutine. If this is not sufficient in future, the implementation
 // should be refactored to pass all requests via a proxy goroutine through
 // channels so that the kernel requirements are fulfilled.
-func NewPtrace(pid libpf.PID) (Process, error) {
+func NewPtrace(pid libpf.PID) (TestingProcess, error) {
 	// Lock this goroutine to the OS thread. It is ptrace API requirement
 	// that all ptrace calls must come from same thread.
 	runtime.LockOSThread()

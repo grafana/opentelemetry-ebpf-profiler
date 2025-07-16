@@ -126,7 +126,7 @@ func (c *symbolizationCache) symbolize(ty libpf.FrameType, fileID libpf.FileID,
 	return fmt.Sprintf("%s+0x%x", sourceFile, lineNumber), nil
 }
 
-func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
+func ExtractTraces(ctx context.Context, pr process.TestingProcess, debug bool,
 	lwpFilter libpf.Set[libpf.PID]) ([]ThreadInfo, error) {
 	todo, cancel := context.WithCancel(ctx)
 	defer cancel()

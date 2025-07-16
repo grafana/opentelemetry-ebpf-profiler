@@ -84,7 +84,7 @@ func (cmd *analyzeCmd) exec(context.Context, []string) (err error) {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	var proc process.Process
+	var proc process.TestingProcess
 	switch {
 	case cmd.pid != 0:
 		proc, err = process.NewPtrace(libpf.PID(cmd.pid))

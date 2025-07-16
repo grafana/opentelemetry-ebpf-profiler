@@ -71,10 +71,6 @@ func (sp *systemProcess) PID() libpf.PID {
 	return sp.pid
 }
 
-func (sp *systemProcess) GetMachineData() MachineData {
-	return MachineData{Machine: currentMachine}
-}
-
 func trimMappingPath(path string) string {
 	// Trim the deleted indication from the path.
 	// See path_with_deleted in linux/fs/d_path.c
@@ -270,14 +266,6 @@ func (sp *systemProcess) GetMappings() ([]Mapping, uint32, error) {
 	}
 	sp.fileToMapping = fileToMapping
 	return mappings, numParseErrors, nil
-}
-
-func (sp *systemProcess) GetThreads() ([]ThreadInfo, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (sp *systemProcess) Close() error {
-	return nil
 }
 
 func (sp *systemProcess) GetRemoteMemory() remotememory.RemoteMemory {

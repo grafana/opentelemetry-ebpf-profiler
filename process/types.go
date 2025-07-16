@@ -89,6 +89,17 @@ type ReadAtCloser interface {
 	io.Closer
 }
 
+type TestingProcess interface {
+	Process
+	io.Closer
+
+	// GetMachineData reads machine specific data from the target process.
+	GetMachineData() MachineData
+
+	// GetThreads reads the process thread states.
+	GetThreads() ([]ThreadInfo, error)
+}
+
 // Process is the interface to inspect ELF coredump/process.
 // The current implementations do not allow concurrent access to this interface
 // from different goroutines. As an exception the ELFOpener and the returned
@@ -97,14 +108,8 @@ type Process interface {
 	// PID returns the process identifier.
 	PID() libpf.PID
 
-	// GetMachineData reads machine specific data from the target process.
-	GetMachineData() MachineData
-
 	// GetMappings reads and parses process memory mappings.
 	GetMappings() ([]Mapping, uint32, error)
-
-	// GetThreads reads the process thread states.
-	GetThreads() ([]ThreadInfo, error)
 
 	// GetRemoteMemory returns a remote memory reader accessing the target process.
 	GetRemoteMemory() remotememory.RemoteMemory
@@ -125,8 +130,6 @@ type Process interface {
 	// filename may refer to /proc or be a temporarily file, and it must not be modified
 	// or deleted.
 	ExtractAsFile(string) (string, error)
-
-	io.Closer
 
 	pfelf.ELFOpener
 }
