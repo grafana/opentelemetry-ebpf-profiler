@@ -13,8 +13,6 @@ import (
 	"time"
 	"unsafe"
 
-	cebpf "github.com/cilium/ebpf"
-
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
@@ -22,7 +20,6 @@ import (
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
-	"go.opentelemetry.io/ebpf-profiler/support"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
@@ -135,17 +132,6 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	debugFlag := C.int(0)
 	if debug {
 		debugFlag = 1
-	}
-
-	dummyMaps := make(map[string]*cebpf.Map)
-	for _, mapName := range []string{"interpreter_offsets",
-		"pid_page_to_mapping_info", "stack_delta_page_to_info", "pid_page_to_mapping_info",
-		"dotnet_procs", "perl_procs", "py_procs", "hotspot_procs", "ruby_procs",
-		"php_procs", "v8_procs"} {
-		dummyMaps[mapName] = &cebpf.Map{}
-	}
-	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
-		dummyMaps[fmt.Sprintf("exe_id_to_%d_stack_deltas", i)] = &cebpf.Map{}
 	}
 
 	// In host agent we have set the default value for monitorInterval to 5 seconds. But as coredump

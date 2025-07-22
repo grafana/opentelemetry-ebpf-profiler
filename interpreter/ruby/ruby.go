@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -211,7 +212,7 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 		return nil, err
 	}
 
-	addrToString, err := freelru.New[libpf.Address, string](addrToStringSize,
+	addrToString, err := freelru.New[libpf.Address, libpf.String](addrToStringSize,
 		libpf.Address.Hash32)
 	if err != nil {
 		return nil, err
@@ -250,7 +251,7 @@ func hashRubyIseqBodyPC(iseq rubyIseqBodyPC) uint32 {
 // rubyIseq stores information extracted from a iseq_constant_body struct.
 type rubyIseq struct {
 	// sourceFileName is the extracted filename field
-	sourceFileName string
+	sourceFileName libpf.String
 
 	// fileID is the synthesized methodID
 	fileID libpf.FileID
@@ -274,7 +275,7 @@ type rubyInstance struct {
 	iseqBodyPCToFunction *freelru.LRU[rubyIseqBodyPC, *rubyIseq]
 
 	// addrToString maps an address to an extracted Ruby String from this address.
-	addrToString *freelru.LRU[libpf.Address, string]
+	addrToString *freelru.LRU[libpf.Address, libpf.String]
 
 	// memPool provides pointers to byte arrays for efficient memory reuse.
 	memPool sync.Pool
@@ -361,25 +362,31 @@ func (r *rubyInstance) readRubyString(addr libpf.Address) (string, error) {
 		str = r.rm.String(addr + libpf.Address(vms.rstring_struct.as_ary))
 	}
 
-	r.addrToString.Add(addr, str)
+	r.addrToString.Add(addr, libpf.Intern(str))
 	return str, nil
 }
 
 type StringReader = func(address libpf.Address) (string, error)
 
 // getStringCached retrieves a string from cache or reads and inserts it if it's missing.
-func (r *rubyInstance) getStringCached(addr libpf.Address, reader StringReader) (string, error) {
+func (r *rubyInstance) getStringCached(addr libpf.Address, reader StringReader) (
+	libpf.String, error) {
 	if value, ok := r.addrToString.Get(addr); ok {
 		return value, nil
 	}
 
 	str, err := reader(addr)
 	if err != nil {
-		return "", err
+		return libpf.NullString, err
+	}
+	if !util.IsValidString(str) {
+		log.Debugf("Extracted invalid string from Ruby at 0x%x '%v'", addr, libpf.SliceFrom(str))
+		return libpf.NullString, fmt.Errorf("extracted invalid Ruby string from address 0x%x", addr)
 	}
 
-	r.addrToString.Add(addr, str)
-	return str, err
+	val := libpf.Intern(str)
+	r.addrToString.Add(addr, val)
+	return val, err
 }
 
 // rubyPopcount64 is a helper macro.
@@ -674,12 +681,6 @@ func (r *rubyInstance) Symbolize(symbolReporter reporter.SymbolReporter,
 	if err != nil {
 		return err
 	}
-	if !util.IsValidString(sourceFileName) {
-		log.Debugf("Extracted invalid Ruby source file name at 0x%x '%v'",
-			iseqBody, []byte(sourceFileName))
-		return fmt.Errorf("extracted invalid Ruby source file name from address 0x%x",
-			iseqBody)
-	}
 
 	funcNamePtr := r.rm.Ptr(iseqBody +
 		libpf.Address(vms.iseq_constant_body.location+vms.iseq_location_struct.base_label))
@@ -687,20 +688,14 @@ func (r *rubyInstance) Symbolize(symbolReporter reporter.SymbolReporter,
 	if err != nil {
 		return err
 	}
-	if !util.IsValidString(functionName) {
-		log.Debugf("Extracted invalid Ruby method name at 0x%x '%v'",
-			iseqBody, []byte(functionName))
-		return fmt.Errorf("extracted invalid Ruby method name from address 0x%x",
-			iseqBody)
-	}
 
 	pcBytes := uint64ToBytes(uint64(pc))
 	iseqBodyBytes := uint64ToBytes(uint64(iseqBody))
 
 	// The fnv hash Write() method calls cannot fail, so it's safe to ignore the errors.
 	h := fnv.New128a()
-	_, _ = h.Write([]byte(sourceFileName))
-	_, _ = h.Write([]byte(functionName))
+	_, _ = h.Write([]byte(sourceFileName.String()))
+	_, _ = h.Write([]byte(functionName.String()))
 	_, _ = h.Write(pcBytes)
 	_, _ = h.Write(iseqBodyBytes)
 	fileID, err := libpf.FileIDFromBytes(h.Sum(nil))
@@ -784,19 +779,16 @@ func (r *rubyInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
 // determineRubyVersion looks for the symbol ruby_version and extracts version
 // information from its value.
 func determineRubyVersion(ef *pfelf.File) (uint32, error) {
-	sym, err := ef.LookupSymbol("ruby_version")
+	_, memory, err := ef.SymbolData("ruby_version", 64)
 	if err != nil {
-		return 0, fmt.Errorf("symbol ruby_version not found: %v", err)
+		return 0, fmt.Errorf("unable to read 'ruby_version': %v", err)
 	}
 
-	memory := make([]byte, 5)
-	if _, err := ef.ReadVirtualMemory(memory, int64(sym.Address)); err != nil {
-		return 0, fmt.Errorf("failed to read process memory at 0x%x:%v",
-			sym.Address, err)
+	versionString := strings.TrimRight(unsafe.String(unsafe.SliceData(memory), len(memory)), "\x00")
+	matches := rubyVersionRegex.FindStringSubmatch(versionString)
+	if len(matches) < 3 {
+		return 0, fmt.Errorf("failed to parse version string: '%s'", versionString)
 	}
-
-	matches := rubyVersionRegex.FindStringSubmatch(string(memory))
-
 	major, _ := strconv.Atoi(matches[1])
 	minor, _ := strconv.Atoi(matches[2])
 	release, _ := strconv.Atoi(matches[3])

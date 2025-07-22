@@ -15,16 +15,20 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 )
-
-const localCachePath = "modulecache"
 
 func main() {
 	log.SetReportCaller(false)
 	log.SetFormatter(&log.TextFormatter{})
 
-	store, err := modulestore.InitModuleStore(localCachePath)
+	cloudClient, err := cloudstore.Client()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	store, err := modulestore.New(cloudClient,
+		cloudstore.PublicReadURL(), cloudstore.ModulestoreS3Bucket(), "modulecache")
 	if err != nil {
 		log.Fatalf("%v", err)
 	}

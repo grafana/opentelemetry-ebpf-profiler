@@ -29,7 +29,7 @@ struct cgo_ctx {
 
 __thread struct cgo_ctx *__cgo_ctx;
 
-int bpf_log(const char *fmt, ...)
+void bpf_log(const char *fmt, ...)
 {
 	void __bpf_log(const char *, int);
 	if (__cgo_ctx->debug) {
@@ -54,6 +54,7 @@ int bpf_log(const char *fmt, ...)
 #include "../../support/ebpf/ruby_tracer.ebpf.c"
 #include "../../support/ebpf/v8_tracer.ebpf.c"
 #include "../../support/ebpf/system_config.ebpf.c"
+#include "../../support/ebpf/go_labels.ebpf.c"
 
 int unwind_traces(u64 id, int debug, u64 tp_base, void *ctx)
 {
@@ -116,6 +117,9 @@ int bpf_tail_call(void *ctx, bpf_map_def *map, int index)
 		break;
 	case PROG_UNWIND_DOTNET:
 		rc = unwind_dotnet(ctx);
+		break;
+	case PROG_GO_LABELS:
+		rc = go_labels(ctx);
 		break;
 	default:
 		return -1;

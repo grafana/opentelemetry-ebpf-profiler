@@ -136,7 +136,7 @@ type Mapping struct {
 	// File offset of the backing file
 	FileOffset uint64
 
-	FilePath string
+	FilePath libpf.String
 }
 
 // GetOnDiskFileIdentifier returns the OnDiskFileIdentifier for the mapping
@@ -155,6 +155,8 @@ type ProcessMeta struct {
 	Executable string
 	// process env vars from /proc/PID/environ
 	EnvVariables map[string]string
+	// container ID retrieved from /proc/PID/cgroup
+	ContainerID string
 }
 
 // processInfo contains information about the executable mappings

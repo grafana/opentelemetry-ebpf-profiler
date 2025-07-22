@@ -181,7 +181,7 @@ func (c *Resolver) ObserveExecutable(fid libpf.FileID, elfRef *pfelf.Reference) 
 	if !ok {
 		return nil
 	}
-	if elfRef.FileName() == process.VdsoPathName {
+	if elfRef.FileName() == process.VdsoPathName.String() {
 		c.cache.Add(fid, cached)
 		return nil
 	}

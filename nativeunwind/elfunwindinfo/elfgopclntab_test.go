@@ -61,7 +61,7 @@ func TestGoStrategy(t *testing.T) {
 		{"go/src/crypto/elliptic/p256_asm.go", strategyDeltasWithFrame},
 	}
 	for _, x := range res {
-		s := getSourceFileStrategy(elf.EM_X86_64, []byte(x.file), strategyFramePointer)
+		s := getSourceFileStrategy(elf.EM_X86_64, x.file, strategyFramePointer)
 		assert.Equal(t, x.result, s)
 	}
 }
@@ -81,8 +81,6 @@ func TestParseGoPclntab(t *testing.T) {
 	}
 
 	for name, test := range tests {
-		name := name
-		test := test
 		t.Run(name, func(t *testing.T) {
 			ef, err := pfelf.Open(test.elfFile)
 			require.NoError(t, err)

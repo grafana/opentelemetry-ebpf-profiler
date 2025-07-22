@@ -5,11 +5,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/elastic/go-freelru"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
 type DiscoveredTarget map[string]string
@@ -105,7 +103,7 @@ type containerID string
 
 // TargetProducer ( ex TargetFinder)
 type TargetProducer interface {
-	FindTarget(pid uint32) *Target
+	FindTarget(pid uint32, containerID string) *Target
 	Update(args TargetsOptions)
 }
 type TargetsOptions struct {
@@ -117,25 +115,21 @@ type TargetsOptions struct {
 type targetProducer struct {
 	cid2target    map[containerID]*Target
 	pid2target    map[uint32]*Target
-	cgroups       freelru.Cache[libpf.PID, string]
 	defaultTarget *Target
 	sync          sync.Mutex
 }
 
 func NewTargetProducer(
-	cgroups freelru.Cache[libpf.PID, string],
 	options TargetsOptions,
 ) TargetProducer {
-	res := &targetProducer{
-		cgroups: cgroups,
-	}
+	res := &targetProducer{}
 	res.setTargets(options)
 	return res
 }
 
-func (tf *targetProducer) FindTarget(pid uint32) *Target {
+func (tf *targetProducer) FindTarget(pid uint32, cid string) *Target {
 	tf.sync.Lock()
-	res := tf.findTarget(pid)
+	res := tf.findTarget(pid, cid)
 	if res != nil {
 		tf.sync.Unlock()
 		return res
@@ -184,13 +178,9 @@ func (tf *targetProducer) setTargets(opts TargetsOptions) {
 		len(tf.cid2target), len(tf.pid2target))
 }
 
-func (tf *targetProducer) findTarget(pid uint32) *Target {
+func (tf *targetProducer) findTarget(pid uint32, cid string) *Target {
 	if target, ok := tf.pid2target[pid]; ok {
 		return target
-	}
-	cid, err := libpf.LookupCgroupv2(tf.cgroups, libpf.PID(pid))
-	if err != nil {
-		return nil
 	}
 
 	return tf.cid2target[containerID(cid)]

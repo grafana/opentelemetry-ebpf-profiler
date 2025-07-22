@@ -6,9 +6,11 @@ package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"sync/atomic"
@@ -40,12 +42,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/tracehandler"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
-
-/*
-#include <stdint.h>
-#include "../support/ebpf/types.h"
-*/
-import "C"
 
 // Compile time check to make sure config.Times satisfies the interfaces.
 var _ Intervals = (*times.Times)(nil)
@@ -172,6 +168,15 @@ type progLoaderHelper struct {
 	noTailCallTarget bool
 }
 
+// Convert a C-string to Go string.
+func goString(cstr []byte) string {
+	index := bytes.IndexByte(cstr, byte(0))
+	if index < 0 {
+		index = len(cstr)
+	}
+	return strings.Clone(unsafe.String(unsafe.SliceData(cstr), index))
+}
+
 // NewTracer loads eBPF code and map definitions from the ELF module at the configured path.
 func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	kernelSymbolizer, err := kallsyms.NewSymbolizer()
@@ -203,8 +208,6 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
-
-	const fallbackSymbolsCacheSize = 16384
 
 	perfEventList := []*perf.Event{}
 
@@ -265,8 +268,8 @@ func buildStackDeltaTemplates(coll *cebpf.CollectionSpec) error {
 		}
 		def.InnerMap = &cebpf.MapSpec{
 			Type:       cebpf.Array,
-			KeySize:    uint32(C.sizeof_uint32_t),
-			ValueSize:  uint32(C.sizeof_StackDelta),
+			KeySize:    4,
+			ValueSize:  support.Sizeof_StackDelta,
 			MaxEntries: 1 << i,
 		}
 	}
@@ -283,9 +286,15 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	// References to eBPF maps in the eBPF programs are just placeholders that need to be
 	// replaced by the actual loaded maps later on with RewriteMaps before loading the
 	// programs into the kernel.
-	coll, err := support.LoadCollectionSpec(cfg.DebugTracer)
+	coll, err := support.LoadCollectionSpec()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load specification for tracers: %v", err)
+	}
+
+	if cfg.DebugTracer {
+		if err = coll.Variables["with_debug_output"].Set(uint32(1)); err != nil {
+			return nil, nil, fmt.Errorf("failed to set debug output: %v", err)
+		}
 	}
 
 	err = buildStackDeltaTemplates(coll)
@@ -376,6 +385,11 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 			name:   "unwind_dotnet",
 			enable: cfg.IncludeTracers.Has(types.DotnetTracer),
 		},
+		{
+			progID: uint32(support.ProgGoLabels),
+			name:   "go_labels",
+			enable: cfg.IncludeTracers.Has(types.Labels),
+		},
 	}
 
 	if err = loadPerfUnwinders(coll, ebpfProgs, ebpfMaps["perf_progs"], tailCallProgs,
@@ -441,11 +455,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	adaption["stack_delta_page_to_info"] =
 		1 << uint32(stackDeltaPageToInfoSize+cfg.MapScaleFactor)
 
-	// To not lose too many scheduling events but also not oversize sched_times,
-	// calculate a size based on an assumed upper bound of scheduler events per
-	// second (1000hz) multiplied by an average time a task remains off CPU (3s),
-	// scaled by the probability of capturing a trace.
-	adaption["sched_times"] = (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
+	adaption["sched_times"] = schedTimesSize(cfg.OffCPUThreshold)
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
 		mapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
@@ -469,6 +479,25 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	return nil
+}
+
+// schedTimesSize calculates the size of the sched_times map based on the
+// configured off-cpu threshold.
+// To not lose too many scheduling events but also not oversize sched_times,
+// calculate a size based on an assumed upper bound of scheduler events per
+// second (1000hz) multiplied by an average time a task remains off CPU (3s),
+// scaled by the probability of capturing a trace.
+func schedTimesSize(threshold uint32) uint32 {
+	size := uint32((4096 * uint64(threshold)) / math.MaxUint32)
+	if size < 16 {
+		// Guarantee a minimal size of 16.
+		return 16
+	}
+	if size > 4096 {
+		// Guarantee a maximum size of 4096.
+		return 4096
+	}
+	return size
 }
 
 // loadPerfUnwinders loads all perf eBPF Programs and their tail call targets.
@@ -643,8 +672,8 @@ func loadProgram(ebpfProgs map[string]*cebpf.Program, tailcallMap *cebpf.Map,
 // It returns the number of kernel frames for kstackID or an error.
 func (t *Tracer) insertKernelFrames(trace *host.Trace, ustackLen uint32,
 	kstackID int32) (uint32, error) {
-	cKstackID := C.s32(kstackID)
-	kstackVal := make([]C.uint64_t, support.PerfMaxStackDepth)
+	cKstackID := kstackID
+	kstackVal := make([]uint64, support.PerfMaxStackDepth)
 
 	if err := t.ebpfMaps["kernel_stackmap"].Lookup(unsafe.Pointer(&cKstackID),
 		unsafe.Pointer(&kstackVal[0])); err != nil {
@@ -701,7 +730,7 @@ func (t *Tracer) insertKernelFrames(trace *host.Trace, ustackLen uint32,
 		if funcName, _, err := kmod.LookupSymbolByAddress(libpf.Address(kstackVal[i])); err == nil {
 			t.reporter.FrameMetadata(&reporter.FrameMetadataArgs{
 				FrameID:      frameID,
-				FunctionName: funcName,
+				FunctionName: libpf.Intern(funcName),
 			})
 			t.reporter.ExecutableMetadata(&reporter.ExecutableMetadataArgs{
 				FileID:     kmod.FileID(),
@@ -851,33 +880,34 @@ func (t *Tracer) eBPFMetricsCollector(
 // If the raw trace contains a kernel stack ID, the kernel stack is also
 // retrieved and inserted at the appropriate position.
 func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
-	frameListOffs := int(unsafe.Offsetof(C.Trace{}.frames))
+	frameListOffs := int(unsafe.Offsetof(support.Trace{}.Frames))
 
 	if len(raw) < frameListOffs {
 		panic("trace record too small")
 	}
 
-	frameSize := int(unsafe.Sizeof(C.Frame{}))
-	ptr := (*C.Trace)(unsafe.Pointer(unsafe.SliceData(raw)))
+	frameSize := support.Sizeof_Frame
+	ptr := (*support.Trace)(unsafe.Pointer(unsafe.SliceData(raw)))
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
-	if len(raw) < frameListOffs+int(ptr.stack_len)*frameSize {
+	if len(raw) < frameListOffs+int(ptr.Stack_len)*frameSize {
 		panic("unexpected record size")
 	}
 
-	pid := libpf.PID(ptr.pid)
+	pid := libpf.PID(ptr.Pid)
 	procMeta := t.processManager.MetaForPID(pid)
 	trace := &host.Trace{
-		Comm:             C.GoString((*C.char)(unsafe.Pointer(&ptr.comm))),
+		Comm:             goString(ptr.Comm[:]),
 		ExecutablePath:   procMeta.Executable,
+		ContainerID:      procMeta.ContainerID,
 		ProcessName:      procMeta.Name,
-		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.apm_trace_id)),
-		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.apm_transaction_id)),
+		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.Apm_trace_id)),
+		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.Apm_transaction_id)),
 		PID:              pid,
-		TID:              libpf.PID(ptr.tid),
-		Origin:           libpf.Origin(ptr.origin),
-		OffTime:          int64(ptr.offtime),
-		KTime:            times.KTime(ptr.ktime),
+		TID:              libpf.PID(ptr.Tid),
+		Origin:           libpf.Origin(ptr.Origin),
+		OffTime:          int64(ptr.Offtime),
+		KTime:            times.KTime(ptr.Ktime),
 		CPU:              cpu,
 		EnvVars:          procMeta.EnvVariables,
 	}
@@ -891,18 +921,18 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	//  - PID, kernel stack ID, length & frame array
 	// Intentionally excluded:
 	//  - ktime, COMM, APM trace, APM transaction ID, Origin and Off Time
-	ptr.comm = [16]C.char{}
-	ptr.apm_trace_id = C.ApmTraceID{}
-	ptr.apm_transaction_id = C.ApmSpanID{}
-	ptr.ktime = 0
-	ptr.origin = 0
-	ptr.offtime = 0
+	ptr.Comm = [16]byte{}
+	ptr.Apm_trace_id = support.ApmTraceID{}
+	ptr.Apm_transaction_id = support.ApmSpanID{}
+	ptr.Ktime = 0
+	ptr.Origin = 0
+	ptr.Offtime = 0
 	trace.Hash = host.TraceHash(xxh3.Hash128(raw).Lo)
 
 	userFrameOffs := 0
-	if ptr.kernel_stack_id >= 0 {
+	if ptr.Kernel_stack_id >= 0 {
 		kstackLen, err := t.insertKernelFrames(
-			trace, uint32(ptr.stack_len), int32(ptr.kernel_stack_id))
+			trace, ptr.Stack_len, ptr.Kernel_stack_id)
 
 		if err != nil {
 			log.Errorf("Failed to get kernel stack frames for 0x%x: %v", trace.Hash, err)
@@ -911,19 +941,29 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		}
 	}
 
+	if ptr.Custom_labels.Len > 0 {
+		trace.CustomLabels = make(map[string]string, int(ptr.Custom_labels.Len))
+		for i := 0; i < int(ptr.Custom_labels.Len); i++ {
+			lbl := ptr.Custom_labels.Labels[i]
+			key := goString(lbl.Key[:])
+			val := goString(lbl.Val[:])
+			trace.CustomLabels[key] = val
+		}
+	}
+
 	// If there are no kernel frames, or reading them failed, we are responsible
 	// for allocating the columnar frame array.
 	if len(trace.Frames) == 0 {
-		trace.Frames = make([]host.Frame, ptr.stack_len)
+		trace.Frames = make([]host.Frame, ptr.Stack_len)
 	}
 
-	for i := 0; i < int(ptr.stack_len); i++ {
-		rawFrame := &ptr.frames[i]
+	for i := 0; i < int(ptr.Stack_len); i++ {
+		rawFrame := &ptr.Frames[i]
 		trace.Frames[userFrameOffs+i] = host.Frame{
-			File:          host.FileID(rawFrame.file_id),
-			Lineno:        libpf.AddressOrLineno(rawFrame.addr_or_line),
-			Type:          libpf.FrameType(rawFrame.kind),
-			ReturnAddress: rawFrame.return_address != 0,
+			File:          host.FileID(rawFrame.File_id),
+			Lineno:        libpf.AddressOrLineno(rawFrame.Addr_or_line),
+			Type:          libpf.FrameType(rawFrame.Kind),
+			ReturnAddress: rawFrame.Return_address != 0,
 		}
 	}
 	return trace
@@ -955,99 +995,7 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *host
 
 	// translateIDs is a translation table for eBPF IDs into Metric IDs.
 	// Index is the ebpfID, value is the corresponding metricID.
-	//nolint:lll
-	translateIDs := []metrics.MetricID{
-		C.metricID_UnwindCallInterpreter:                      metrics.IDUnwindCallInterpreter,
-		C.metricID_UnwindErrZeroPC:                            metrics.IDUnwindErrZeroPC,
-		C.metricID_UnwindErrStackLengthExceeded:               metrics.IDUnwindErrStackLengthExceeded,
-		C.metricID_UnwindErrBadTSDAddr:                        metrics.IDUnwindErrBadTLSAddr,
-		C.metricID_UnwindErrBadTPBaseAddr:                     metrics.IDUnwindErrBadTPBaseAddr,
-		C.metricID_UnwindNativeAttempts:                       metrics.IDUnwindNativeAttempts,
-		C.metricID_UnwindNativeFrames:                         metrics.IDUnwindNativeFrames,
-		C.metricID_UnwindNativeStackDeltaStop:                 metrics.IDUnwindNativeStackDeltaStop,
-		C.metricID_UnwindNativeErrLookupTextSection:           metrics.IDUnwindNativeErrLookupTextSection,
-		C.metricID_UnwindNativeErrLookupIterations:            metrics.IDUnwindNativeErrLookupIterations,
-		C.metricID_UnwindNativeErrLookupRange:                 metrics.IDUnwindNativeErrLookupRange,
-		C.metricID_UnwindNativeErrKernelAddress:               metrics.IDUnwindNativeErrKernelAddress,
-		C.metricID_UnwindNativeErrWrongTextSection:            metrics.IDUnwindNativeErrWrongTextSection,
-		C.metricID_UnwindNativeErrPCRead:                      metrics.IDUnwindNativeErrPCRead,
-		C.metricID_UnwindPythonAttempts:                       metrics.IDUnwindPythonAttempts,
-		C.metricID_UnwindPythonFrames:                         metrics.IDUnwindPythonFrames,
-		C.metricID_UnwindPythonErrBadPyThreadStateCurrentAddr: metrics.IDUnwindPythonErrBadPyThreadStateCurrentAddr,
-		C.metricID_UnwindPythonErrZeroThreadState:             metrics.IDUnwindPythonErrZeroThreadState,
-		C.metricID_UnwindPythonErrBadThreadStateFrameAddr:     metrics.IDUnwindPythonErrBadThreadStateFrameAddr,
-		C.metricID_UnwindPythonZeroFrameCodeObject:            metrics.IDUnwindPythonZeroFrameCodeObject,
-		C.metricID_UnwindPythonErrBadCodeObjectArgCountAddr:   metrics.IDUnwindPythonErrBadCodeObjectArgCountAddr,
-		C.metricID_UnwindNativeErrStackDeltaInvalid:           metrics.IDUnwindNativeErrStackDeltaInvalid,
-		C.metricID_ErrEmptyStack:                              metrics.IDErrEmptyStack,
-		C.metricID_UnwindHotspotAttempts:                      metrics.IDUnwindHotspotAttempts,
-		C.metricID_UnwindHotspotFrames:                        metrics.IDUnwindHotspotFrames,
-		C.metricID_UnwindHotspotErrNoCodeblob:                 metrics.IDUnwindHotspotErrNoCodeblob,
-		C.metricID_UnwindHotspotErrInvalidCodeblob:            metrics.IDUnwindHotspotErrInvalidCodeblob,
-		C.metricID_UnwindHotspotErrInterpreterFP:              metrics.IDUnwindHotspotErrInterpreterFP,
-		C.metricID_UnwindHotspotErrLrUnwindingMidTrace:        metrics.IDUnwindHotspotErrLrUnwindingMidTrace,
-		C.metricID_UnwindHotspotUnsupportedFrameSize:          metrics.IDHotspotUnsupportedFrameSize,
-		C.metricID_UnwindNativeSmallPC:                        metrics.IDUnwindNativeSmallPC,
-		C.metricID_UnwindNativeErrLookupStackDeltaInnerMap:    metrics.IDUnwindNativeErrLookupStackDeltaInnerMap,
-		C.metricID_UnwindNativeErrLookupStackDeltaOuterMap:    metrics.IDUnwindNativeErrLookupStackDeltaOuterMap,
-		C.metricID_ErrBPFCurrentComm:                          metrics.IDErrBPFCurrentComm,
-		C.metricID_UnwindPHPAttempts:                          metrics.IDUnwindPHPAttempts,
-		C.metricID_UnwindPHPFrames:                            metrics.IDUnwindPHPFrames,
-		C.metricID_UnwindPHPErrBadCurrentExecuteData:          metrics.IDUnwindPHPErrBadCurrentExecuteData,
-		C.metricID_UnwindPHPErrBadZendExecuteData:             metrics.IDUnwindPHPErrBadZendExecuteData,
-		C.metricID_UnwindPHPErrBadZendFunction:                metrics.IDUnwindPHPErrBadZendFunction,
-		C.metricID_UnwindPHPErrBadZendOpline:                  metrics.IDUnwindPHPErrBadZendOpline,
-		C.metricID_UnwindRubyAttempts:                         metrics.IDUnwindRubyAttempts,
-		C.metricID_UnwindRubyFrames:                           metrics.IDUnwindRubyFrames,
-		C.metricID_UnwindPerlAttempts:                         metrics.IDUnwindPerlAttempts,
-		C.metricID_UnwindPerlFrames:                           metrics.IDUnwindPerlFrames,
-		C.metricID_UnwindPerlTSD:                              metrics.IDUnwindPerlTLS,
-		C.metricID_UnwindPerlReadStackInfo:                    metrics.IDUnwindPerlReadStackInfo,
-		C.metricID_UnwindPerlReadContextStackEntry:            metrics.IDUnwindPerlReadContextStackEntry,
-		C.metricID_UnwindPerlResolveEGV:                       metrics.IDUnwindPerlResolveEGV,
-		C.metricID_UnwindHotspotErrInvalidRA:                  metrics.IDUnwindHotspotErrInvalidRA,
-		C.metricID_UnwindV8Attempts:                           metrics.IDUnwindV8Attempts,
-		C.metricID_UnwindV8Frames:                             metrics.IDUnwindV8Frames,
-		C.metricID_UnwindV8ErrBadFP:                           metrics.IDUnwindV8ErrBadFP,
-		C.metricID_UnwindV8ErrBadJSFunc:                       metrics.IDUnwindV8ErrBadJSFunc,
-		C.metricID_UnwindV8ErrBadCode:                         metrics.IDUnwindV8ErrBadCode,
-		C.metricID_ReportedPIDsErr:                            metrics.IDReportedPIDsErr,
-		C.metricID_PIDEventsErr:                               metrics.IDPIDEventsErr,
-		C.metricID_UnwindNativeLr0:                            metrics.IDUnwindNativeLr0,
-		C.metricID_NumProcNew:                                 metrics.IDNumProcNew,
-		C.metricID_NumProcExit:                                metrics.IDNumProcExit,
-		C.metricID_NumUnknownPC:                               metrics.IDNumUnknownPC,
-		C.metricID_NumGenericPID:                              metrics.IDNumGenericPID,
-		C.metricID_UnwindPythonErrBadCFrameFrameAddr:          metrics.IDUnwindPythonErrBadCFrameFrameAddr,
-		C.metricID_MaxTailCalls:                               metrics.IDMaxTailCalls,
-		C.metricID_UnwindPythonErrNoProcInfo:                  metrics.IDUnwindPythonErrNoProcInfo,
-		C.metricID_UnwindPythonErrBadAutoTlsKeyAddr:           metrics.IDUnwindPythonErrBadAutoTlsKeyAddr,
-		C.metricID_UnwindPythonErrReadThreadStateAddr:         metrics.IDUnwindPythonErrReadThreadStateAddr,
-		C.metricID_UnwindPythonErrReadTsdBase:                 metrics.IDUnwindPythonErrReadTsdBase,
-		C.metricID_UnwindRubyErrNoProcInfo:                    metrics.IDUnwindRubyErrNoProcInfo,
-		C.metricID_UnwindRubyErrReadStackPtr:                  metrics.IDUnwindRubyErrReadStackPtr,
-		C.metricID_UnwindRubyErrReadStackSize:                 metrics.IDUnwindRubyErrReadStackSize,
-		C.metricID_UnwindRubyErrReadCfp:                       metrics.IDUnwindRubyErrReadCfp,
-		C.metricID_UnwindRubyErrReadEp:                        metrics.IDUnwindRubyErrReadEp,
-		C.metricID_UnwindRubyErrReadIseqBody:                  metrics.IDUnwindRubyErrReadIseqBody,
-		C.metricID_UnwindRubyErrReadIseqEncoded:               metrics.IDUnwindRubyErrReadIseqEncoded,
-		C.metricID_UnwindRubyErrReadIseqSize:                  metrics.IDUnwindRubyErrReadIseqSize,
-		C.metricID_UnwindNativeErrLrUnwindingMidTrace:         metrics.IDUnwindNativeErrLrUnwindingMidTrace,
-		C.metricID_UnwindNativeErrReadKernelModeRegs:          metrics.IDUnwindNativeErrReadKernelModeRegs,
-		C.metricID_UnwindNativeErrChaseIrqStackLink:           metrics.IDUnwindNativeErrChaseIrqStackLink,
-		C.metricID_UnwindV8ErrNoProcInfo:                      metrics.IDUnwindV8ErrNoProcInfo,
-		C.metricID_UnwindNativeErrBadUnwindInfoIndex:          metrics.IDUnwindNativeErrBadUnwindInfoIndex,
-		C.metricID_UnwindApmIntErrReadTsdBase:                 metrics.IDUnwindApmIntErrReadTsdBase,
-		C.metricID_UnwindApmIntErrReadCorrBufPtr:              metrics.IDUnwindApmIntErrReadCorrBufPtr,
-		C.metricID_UnwindApmIntErrReadCorrBuf:                 metrics.IDUnwindApmIntErrReadCorrBuf,
-		C.metricID_UnwindApmIntReadSuccesses:                  metrics.IDUnwindApmIntReadSuccesses,
-		C.metricID_UnwindDotnetAttempts:                       metrics.IDUnwindDotnetAttempts,
-		C.metricID_UnwindDotnetFrames:                         metrics.IDUnwindDotnetFrames,
-		C.metricID_UnwindDotnetErrNoProcInfo:                  metrics.IDUnwindDotnetErrNoProcInfo,
-		C.metricID_UnwindDotnetErrBadFP:                       metrics.IDUnwindDotnetErrBadFP,
-		C.metricID_UnwindDotnetErrCodeHeader:                  metrics.IDUnwindDotnetErrCodeHeader,
-		C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
-	}
+	translateIDs := support.MetricsTranslation
 
 	// previousMetricValue stores the previously retrieved metric values to
 	// calculate and store delta values.
@@ -1131,6 +1079,7 @@ func (t *Tracer) probabilisticProfile(interval time.Duration, threshold uint) {
 	enableSampling := false
 	var probProfilingStatus = probProfilingDisable
 
+	//nolint:gosec
 	if rand.UintN(ProbabilisticThresholdMax) < threshold {
 		enableSampling = true
 		probProfilingStatus = probProfilingEnable
