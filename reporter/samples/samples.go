@@ -3,7 +3,9 @@
 
 package samples // import "go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
-import "go.opentelemetry.io/ebpf-profiler/libpf"
+import (
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+)
 
 type TraceEventMeta struct {
 	Timestamp      libpf.UnixTime64
@@ -11,6 +13,7 @@ type TraceEventMeta struct {
 	ProcessName    string
 	ExecutablePath string
 	APMServiceName string
+	ContainerID    string
 	PID, TID       libpf.PID
 	CPU            int
 	Origin         libpf.Origin
@@ -39,7 +42,7 @@ type TraceAndMetaKey struct {
 	// comm and apmServiceName are provided by the eBPF programs
 	Comm           string
 	ApmServiceName string
-	// containerID is annotated based on PID information
+	// ContainerID is annotated based on PID information
 	ContainerID string
 	Pid         int64
 	Tid         int64
@@ -52,6 +55,13 @@ type TraceAndMetaKey struct {
 	// `SampleAttrProducer` instance. May be nil.
 	ExtraMeta any
 }
+
+// TraceEventsTree stores samples and their related metadata in a tree-like
+// structure optimized for the OTel Profiling protocol representation.
+type TraceEventsTree map[ContainerID]map[libpf.Origin]KeyToEventMapping
+
+// ContainerID represents an extracted key from /proc/<PID>/cgroup.
+type ContainerID string
 
 // KeyToEventMapping supports temporary mapping traces to additional information.
 type KeyToEventMapping map[TraceAndMetaKey]*TraceEvents
@@ -72,17 +82,8 @@ type ExecInfo struct {
 
 // SourceInfo allows mapping a frame to its source origin.
 type SourceInfo struct {
-	Frames []SourceInfoFrame
-}
-
-type SourceInfoFrame struct {
-	LineNumber   libpf.SourceLineno
-	FunctionName string
-	FilePath     string
-}
-
-// FuncInfo is a helper to construct profile.Function messages.
-type FuncInfo struct {
-	Name     string
-	FileName string
+	LineNumber     libpf.SourceLineno
+	FunctionOffset uint32
+	FunctionName   libpf.String
+	FilePath       libpf.String
 }

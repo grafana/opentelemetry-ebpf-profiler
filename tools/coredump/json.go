@@ -18,6 +18,7 @@ import (
 // CoredumpTestCase is the data structure generated from the core dump.
 type CoredumpTestCase struct {
 	CoredumpRef modulestore.ID `json:"coredump-ref"`
+	Skip        string         `json:"skip,omitempty"`
 	Threads     []ThreadInfo   `json:"threads"`
 	Modules     []ModuleInfo   `json:"modules"`
 }
@@ -93,7 +94,7 @@ func readTestCase(path string) (*CoredumpTestCase, error) {
 }
 
 // readJSON reads a JSON file and unmarshalls it into the given object.
-func readJSON(path string, to interface{}) error {
+func readJSON(path string, to any) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err

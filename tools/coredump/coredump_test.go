@@ -8,26 +8,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 )
 
 func TestCoreDumps(t *testing.T) {
-	var skip = map[string]bool{}
 	cases, err := findTestCases(true)
 	require.NoError(t, err)
 	require.NotEmpty(t, cases)
 
-	store, err := modulestore.InitModuleStore(localCachePath)
+	cloudClient, err := cloudstore.Client()
+	require.NoError(t, err)
+	store, err := modulestore.New(cloudClient,
+		cloudstore.PublicReadURL(), cloudstore.ModulestoreS3Bucket(), "modulecache")
 	require.NoError(t, err)
 
 	for _, filename := range cases {
-		filename := filename
 		t.Run(filename, func(t *testing.T) {
-			if skip[filename] {
-				t.Skip()
-			}
 			testCase, err := readTestCase(filename)
 			require.NoError(t, err)
+			if testCase.Skip != "" {
+				t.Skip(testCase.Skip)
+			}
 
 			ctx := context.Background()
 

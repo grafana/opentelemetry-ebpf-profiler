@@ -8,10 +8,10 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
@@ -33,7 +33,7 @@ type Config struct {
 	Tracers                string
 	VerboseMode            bool
 	Version                bool
-	OffCPUThreshold        uint
+	OffCPUThreshold        float64
 
 	Policy       dynamicprofiling.Policy
 	FileObserver samples.NativeSymbolResolver
@@ -43,7 +43,6 @@ type Config struct {
 	PyroscopeDynamicProfilingPolicy bool
 	SymbCachePath                   string
 	SymbCacheSizeEntries            int
-	SymbolizeNativeFrames           bool
 
 	Fs *flag.FlagSet
 
@@ -98,12 +97,10 @@ func (cfg *Config) Validate() error {
 		)
 	}
 
-	if cfg.OffCPUThreshold > support.OffCPUThresholdMax {
-		return fmt.Errorf(
-			"invalid argument for off-cpu-threshold. Value "+
-				"should be between 1 and %d, or 0 to disable off-cpu profiling",
-			support.OffCPUThresholdMax,
-		)
+	if cfg.OffCPUThreshold < 0.0 || cfg.OffCPUThreshold > 1.0 {
+		return errors.New(
+			"invalid argument for off-cpu-threshold. The value " +
+				"should be in the range [0..1]. 0 disables off-cpu profiling")
 	}
 
 	if !cfg.NoKernelVersionCheck {

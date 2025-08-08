@@ -42,20 +42,18 @@ type table struct {
 	t *lidia.Table
 }
 
-func (t *table) Lookup(addr uint64) ([]samples.SourceInfoFrame, error) {
+func (t *table) Lookup(addr uint64) (samples.SourceInfo, error) {
 	frames, err := t.t.Lookup(nil, addr)
 	if err != nil || len(frames) == 0 {
-		return nil, err
+		return samples.SourceInfo{}, err
 	}
-	res := make([]samples.SourceInfoFrame, len(frames))
-	for i := range frames {
-		res[i] = samples.SourceInfoFrame{
-			LineNumber:   libpf.SourceLineno(frames[i].LineNumber),
-			FunctionName: frames[i].FunctionName,
-			FilePath:     frames[i].FilePath,
-		}
+	f0 := frames[0]
+	si := samples.SourceInfo{
+		LineNumber:   libpf.SourceLineno(f0.LineNumber),
+		FunctionName: libpf.Intern(f0.FunctionName),
+		FilePath:     libpf.Intern(f0.FilePath),
 	}
-	return res, nil
+	return si, nil
 }
 
 func (t *table) Close() {

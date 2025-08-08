@@ -23,7 +23,7 @@ func SymbolizeNativeFrame(
 		libpf.FrameID,
 		samples.SourceInfo,
 	],
-	mappingName string,
+	mappingName libpf.String,
 	frameID libpf.FrameID,
 	symbolize func(si samples.SourceInfo),
 ) {
@@ -36,17 +36,14 @@ func SymbolizeNativeFrame(
 	}
 
 	var (
-		symbols []samples.SourceInfoFrame
-		err     error
+		si  samples.SourceInfo
+		err error
 	)
 	if mappingName != process.VdsoPathName {
-		symbols, err = resolver.ResolveAddress(fileID, uint64(addr))
+		si, err = resolver.ResolveAddress(fileID, uint64(addr))
 		if err != nil {
 			logrus.Debugf("Failed to symbolize %v %v", frameID.String(), err)
 		}
-	}
-	si := samples.SourceInfo{
-		Frames: symbols,
 	}
 	frames.Add(frameID, si)
 	symbolize(si)

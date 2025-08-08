@@ -91,7 +91,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 	type lookup struct {
 		fid         libpf.FileID
 		addr        uint64
-		expectedRes []samples.SourceInfoFrame
+		expectedRes samples.SourceInfo
 		expectedErr error
 	}
 	tests := []struct {
@@ -113,8 +113,8 @@ func TestResolver_ResolveAddress(t *testing.T) {
 				{
 					fid:  libpf.NewFileID(456, 123),
 					addr: 0x9cbb0,
-					expectedRes: []samples.SourceInfoFrame{
-						{FunctionName: "__pthread_create_2_1"},
+					expectedRes: samples.SourceInfo{
+						FunctionName: libpf.Intern("__pthread_create_2_1"),
 					},
 				},
 			},
@@ -152,8 +152,8 @@ func TestResolver_ResolveAddress(t *testing.T) {
 				{
 					fid:  libpf.NewFileID(4242, 4242),
 					addr: 0x9cbb0,
-					expectedRes: []samples.SourceInfoFrame{
-						{FunctionName: "__pthread_create_2_1"},
+					expectedRes: samples.SourceInfo{
+						FunctionName: libpf.Intern("__pthread_create_2_1"),
 					},
 				},
 			},
@@ -200,7 +200,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 				}
 			}
 			for _, l := range tt.lookups {
-				var results []samples.SourceInfoFrame
+				var results samples.SourceInfo
 				results, err = resolver.ResolveAddress(l.fid, l.addr)
 				t.Logf("resolve %s %x = %+v, %+v", l.fid.StringNoQuotes(), l.addr, results, err)
 				if l.expectedErr != nil {

@@ -30,16 +30,12 @@ func TestNativeFrameSymbols(t *testing.T) {
 	err = resolver.ObserveExecutable(fid, reference)
 	require.NoError(t, err)
 	res := samples.SourceInfo{}
-	SymbolizeNativeFrame(resolver, frames, "testmapping",
+	SymbolizeNativeFrame(resolver, frames, libpf.Intern("testmapping"),
 		libpf.NewFrameID(fid, libpf.AddressOrLineno(0x9bc7e)),
 		func(si samples.SourceInfo) {
 			res = si
 		})
 	require.Equal(t, samples.SourceInfo{
-		Frames: []samples.SourceInfoFrame{
-			{
-				FunctionName: "__GI___pthread_cond_timedwait",
-			},
-		},
+		FunctionName: libpf.Intern("__GI___pthread_cond_timedwait"),
 	}, res)
 }

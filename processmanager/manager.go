@@ -230,12 +230,13 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 	traceLen := len(trace.Frames)
 
 	newTrace = &libpf.Trace{
-		Files:      make([]libpf.FileID, 0, traceLen),
-		Linenos:    make([]libpf.AddressOrLineno, 0, traceLen),
-		FrameTypes: make([]libpf.FrameType, 0, traceLen),
+		Files:        make([]libpf.FileID, 0, traceLen),
+		Linenos:      make([]libpf.AddressOrLineno, 0, traceLen),
+		FrameTypes:   make([]libpf.FrameType, 0, traceLen),
+		CustomLabels: trace.CustomLabels,
 	}
 
-	for i := 0; i < traceLen; i++ {
+	for i := range traceLen {
 		frame := &trace.Frames[i]
 
 		if frame.Type.IsError() {
@@ -353,7 +354,7 @@ func (pm *ProcessManager) observeFile(trace *host.Trace, mapping Mapping, fileID
 		return
 	}
 	pr := process.New(trace.PID, trace.TID)
-	elfRef := pfelf.NewReference(mapping.FilePath, pr)
+	elfRef := pfelf.NewReference(mapping.FilePath.String(), pr)
 	defer elfRef.Close()
 	_ = pm.fileObserver.ObserveExecutable(fileID, elfRef)
 }

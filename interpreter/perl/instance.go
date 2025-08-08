@@ -23,12 +23,10 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/successfailurecounter"
+	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
-
-// #include "../../support/ebpf/types.h"
-import "C"
 
 type perlInstance struct {
 	interpreter.InstanceStubs
@@ -39,7 +37,7 @@ type perlInstance struct {
 
 	d    *perlData
 	rm   remotememory.RemoteMemory
-	bias C.u64
+	bias libpf.Address
 
 	// addrToHEK maps a PERL Hash Element Key (string with hash) to a Go string
 	addrToHEK *freelru.LRU[libpf.Address, string]
@@ -48,7 +46,7 @@ type perlInstance struct {
 	addrToCOP *freelru.LRU[copKey, *perlCOP]
 
 	// addrToGV maps a PERL Glob Value (GV) aka "symbol" to its name string
-	addrToGV *freelru.LRU[libpf.Address, string]
+	addrToGV *freelru.LRU[libpf.Address, libpf.String]
 
 	// memPool provides pointers to byte arrays for efficient memory reuse.
 	memPool sync.Pool
@@ -64,62 +62,62 @@ type perlInstance struct {
 // perlCOP contains information about Perl Control OPS structure
 type perlCOP struct {
 	fileID         libpf.FileID
-	sourceFileName string
+	sourceFileName libpf.String
 	line           libpf.AddressOrLineno
 }
 
 // copKey is used as cache key for Perl Control OPS structures.
 type copKey struct {
 	copAddr  libpf.Address
-	funcName string
+	funcName libpf.String
 }
 
 // hashCopKey returns a 32 bits hash of the input.
 // It's main purpose is to hash keys for caching perlCOP values.
 func hashCOPKey(k copKey) uint32 {
 	h := k.copAddr.Hash()
-	return uint32(h ^ xxhash.Sum64String(k.funcName))
+	return uint32(h ^ xxhash.Sum64String(k.funcName.String()))
 }
 
 func (i *perlInstance) UpdateTSDInfo(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	tsdInfo tpbase.TSDInfo) error {
 	d := i.d
-	stateInTSD := C.u8(0)
+	stateInTSD := uint8(0)
 	if d.stateInTSD {
 		stateInTSD = 1
 	}
 	vms := &d.vmStructs
-	data := C.PerlProcInfo{
-		version:    C.uint(d.version),
-		stateAddr:  C.u64(d.stateAddr) + i.bias,
-		stateInTSD: stateInTSD,
+	data := support.PerlProcInfo{
+		Version:    d.version,
+		StateAddr:  uint64(d.stateAddr) + uint64(i.bias),
+		StateInTSD: stateInTSD,
 
-		tsdInfo: C.TSDInfo{
-			offset:     C.s16(tsdInfo.Offset),
-			multiplier: C.u8(tsdInfo.Multiplier),
-			indirect:   C.u8(tsdInfo.Indirect),
+		TsdInfo: support.TSDInfo{
+			Offset:     tsdInfo.Offset,
+			Multiplier: tsdInfo.Multiplier,
+			Indirect:   tsdInfo.Indirect,
 		},
 
-		interpreter_curcop:       C.u16(vms.interpreter.curcop),
-		interpreter_curstackinfo: C.u16(vms.interpreter.curstackinfo),
+		Interpreter_curcop:       uint16(vms.interpreter.curcop),
+		Interpreter_curstackinfo: uint16(vms.interpreter.curstackinfo),
 
-		si_cxstack: C.u8(vms.stackinfo.si_cxstack),
-		si_next:    C.u8(vms.stackinfo.si_next),
-		si_cxix:    C.u8(vms.stackinfo.si_cxix),
-		si_type:    C.u8(vms.stackinfo.si_type),
+		Si_cxstack: uint8(vms.stackinfo.si_cxstack),
+		Si_next:    uint8(vms.stackinfo.si_next),
+		Si_cxix:    uint8(vms.stackinfo.si_cxix),
+		Si_type:    uint8(vms.stackinfo.si_type),
 
-		context_type:          C.u8(vms.context.cx_type),
-		context_blk_oldcop:    C.u8(vms.context.blk_oldcop),
-		context_blk_sub_retop: C.u8(vms.context.blk_sub_retop),
-		context_blk_sub_cv:    C.u8(vms.context.blk_sub_cv),
-		context_sizeof:        C.u8(vms.context.sizeof),
+		Context_type:          uint8(vms.context.cx_type),
+		Context_blk_oldcop:    uint8(vms.context.blk_oldcop),
+		Context_blk_sub_retop: uint8(vms.context.blk_sub_retop),
+		Context_blk_sub_cv:    uint8(vms.context.blk_sub_cv),
+		Context_sizeof:        uint8(vms.context.sizeof),
 
-		sv_flags:  C.u8(vms.sv.sv_flags),
-		sv_any:    C.u8(vms.sv.sv_any),
-		svu_gp:    C.u8(vms.sv.svu_gp),
-		xcv_flags: C.u8(vms.xpvcv.xcv_flags),
-		xcv_gv:    C.u8(vms.xpvcv.xcv_gv),
-		gp_egv:    C.u8(vms.gp.gp_egv),
+		Sv_flags:  uint8(vms.sv.sv_flags),
+		Sv_any:    uint8(vms.sv.sv_any),
+		Svu_gp:    uint8(vms.sv.svu_gp),
+		Xcv_flags: uint8(vms.xpvcv.xcv_flags),
+		Xcv_gv:    uint8(vms.xpvcv.xcv_gv),
+		Gp_egv:    uint8(vms.gp.gp_egv),
 	}
 
 	err := ebpf.UpdateProcData(libpf.Perl, pid, unsafe.Pointer(&data))
@@ -241,7 +239,7 @@ func (i *perlInstance) getHEK(addr libpf.Address) (string, error) {
 
 	defer func() {
 		// Reset memory and return it for reuse.
-		for j := uint32(0); j < hekLen; j++ {
+		for j := range hekLen {
 			(*syncPoolData)[j] = 0x0
 		}
 		i.memPool.Put(syncPoolData)
@@ -324,9 +322,9 @@ func (i *perlInstance) getHVName(hvAddr libpf.Address) (string, error) {
 	return i.getHEK(hekAddr)
 }
 
-func (i *perlInstance) getGV(gvAddr libpf.Address, nameOnly bool) (string, error) {
+func (i *perlInstance) getGV(gvAddr libpf.Address, nameOnly bool) (libpf.String, error) {
 	if gvAddr == 0 {
-		return "", nil
+		return libpf.NullString, nil
 	}
 	if value, ok := i.addrToGV.Get(gvAddr); ok {
 		return value, nil
@@ -339,14 +337,14 @@ func (i *perlInstance) getGV(gvAddr libpf.Address, nameOnly bool) (string, error
 	hekAddr := i.rm.Ptr(xpvgvAddr + libpf.Address(vms.xpvgv.xivu_namehek))
 	gvName, err := i.getHEK(hekAddr)
 	if err != nil {
-		return "", err
+		return libpf.NullString, err
 	}
 
 	if !nameOnly && gvName != "" {
 		stashAddr := i.rm.Ptr(xpvgvAddr + libpf.Address(vms.xpvgv.xgv_stash))
 		packageName, err := i.getHVName(stashAddr)
 		if err != nil {
-			return "", err
+			return libpf.NullString, err
 		}
 
 		// Build the qualified name
@@ -357,14 +355,15 @@ func (i *perlInstance) getGV(gvAddr libpf.Address, nameOnly bool) (string, error
 		gvName = packageName + "::" + gvName
 	}
 
-	i.addrToGV.Add(gvAddr, gvName)
-
-	return gvName, nil
+	value := libpf.Intern(gvName)
+	i.addrToGV.Add(gvAddr, value)
+	return value, nil
 }
 
 // getCOP reads and caches a Control OP from remote interpreter.
 // On success, the COP is returned. On error, the error.
-func (i *perlInstance) getCOP(copAddr libpf.Address, funcName string) (*perlCOP, error) {
+func (i *perlInstance) getCOP(copAddr libpf.Address, funcName libpf.String) (
+	*perlCOP, error) {
 	key := copKey{
 		copAddr:  copAddr,
 		funcName: funcName,
@@ -379,7 +378,7 @@ func (i *perlInstance) getCOP(copAddr libpf.Address, funcName string) (*perlCOP,
 		return nil, err
 	}
 
-	sourceFileName := interpreter.UnknownSourceFile
+	var sourceFileName string
 	if i.d.stateInTSD {
 		// cop_file is a pointer to nul terminated string
 		sourceFileAddr := npsr.Ptr(cop, vms.cop.cop_file)
@@ -387,15 +386,14 @@ func (i *perlInstance) getCOP(copAddr libpf.Address, funcName string) (*perlCOP,
 	} else {
 		// cop_file is a pointer to GV
 		sourceFileGVAddr := npsr.Ptr(cop, vms.cop.cop_file)
-		var err error
-		sourceFileName, err = i.getGV(sourceFileGVAddr, true)
-		if err == nil && len(sourceFileName) <= 2 {
-			err = fmt.Errorf("sourcefile gv length too small (%d)", len(sourceFileName))
+		gvName, err := i.getGV(sourceFileGVAddr, true)
+		if err == nil && len(gvName.String()) <= 2 {
+			err = fmt.Errorf("sourcefile gv length too small (%d)", len(gvName.String()))
 		}
 		if err != nil {
 			return nil, err
 		}
-		sourceFileName = sourceFileName[2:]
+		sourceFileName = gvName.String()[2:]
 	}
 	if !util.IsValidString(sourceFileName) {
 		log.Debugf("Extracted invalid source file name '%v'", []byte(sourceFileName))
@@ -411,14 +409,14 @@ func (i *perlInstance) getCOP(copAddr libpf.Address, funcName string) (*perlCOP,
 	_, _ = h.Write([]byte(sourceFileName))
 	// Unfortunately there is very little information to extract for each function
 	// from the GV. Use just the function name at this time.
-	_, _ = h.Write([]byte(funcName))
+	_, _ = h.Write([]byte(funcName.String()))
 	fileID, err := libpf.FileIDFromBytes(h.Sum(nil))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a file ID: %v", err)
 	}
 
 	c := &perlCOP{
-		sourceFileName: sourceFileName,
+		sourceFileName: libpf.Intern(sourceFileName),
 		fileID:         fileID,
 		line:           libpf.AddressOrLineno(line),
 	}
@@ -435,17 +433,12 @@ func (i *perlInstance) Symbolize(symbolReporter reporter.SymbolReporter,
 	sfCounter := successfailurecounter.New(&i.successCount, &i.failCount)
 	defer sfCounter.DefaultToFailure()
 
-	gvAddr := libpf.Address(frame.File)
-	functionName, err := i.getGV(gvAddr, false)
-	if err != nil {
-		return fmt.Errorf("failed to get Perl GV %x: %v", gvAddr, err)
-	}
-
-	// This can only happen if gvAddr is 0,
-	// which we use to denote code at the top level (e.g
-	// code in the file not inside a function).
-	if functionName == "" {
-		functionName = interpreter.TopLevelFunctionName
+	functionName := interpreter.TopLevelFunctionName
+	if gvAddr := libpf.Address(frame.File); gvAddr != 0 {
+		var err error
+		if functionName, err = i.getGV(gvAddr, false); err != nil {
+			return fmt.Errorf("failed to get Perl GV %x: %v", gvAddr, err)
+		}
 	}
 	copAddr := libpf.Address(frame.Lineno)
 	cop, err := i.getCOP(copAddr, functionName)

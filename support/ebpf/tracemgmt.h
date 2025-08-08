@@ -9,20 +9,28 @@
 #include "frametypes.h"
 #include "types.h"
 
-// MULTI_USE_FUNC generates perf event and kprobe eBPF programs
-// for a given function.
-#define MULTI_USE_FUNC(func_name)                                                                  \
-  SEC("perf_event/" #func_name)                                                                    \
-  static int EBPF_INLINE perf_##func_name(struct pt_regs *ctx)                                     \
-  {                                                                                                \
-    return func_name(ctx);                                                                         \
-  }                                                                                                \
+#if defined(TESTING_COREDUMP)
+
+  #define MULTI_USE_FUNC(func_name)
+
+#else // TESTING_COREDUMP
+
+  // MULTI_USE_FUNC generates perf event and kprobe eBPF programs
+  // for a given function.
+  #define MULTI_USE_FUNC(func_name)                                                                \
+    SEC("perf_event/" #func_name)                                                                  \
+    static int EBPF_INLINE perf_##func_name(struct pt_regs *ctx)                                   \
+    {                                                                                              \
+      return func_name(ctx);                                                                       \
+    }                                                                                              \
                                                                                                    \
-  SEC("kprobe/" #func_name)                                                                        \
-  static int EBPF_INLINE kprobe_##func_name(struct pt_regs *ctx)                                   \
-  {                                                                                                \
-    return func_name(ctx);                                                                         \
-  }
+    SEC("kprobe/" #func_name)                                                                      \
+    static int EBPF_INLINE kprobe_##func_name(struct pt_regs *ctx)                                 \
+    {                                                                                              \
+      return func_name(ctx);                                                                       \
+    }
+
+#endif // TESTING_COREDUMP
 
 // increment_metric increments the value of the given metricID by 1
 static inline EBPF_INLINE void increment_metric(u32 metricID)
@@ -173,7 +181,7 @@ static inline EBPF_INLINE bool report_pid(void *ctx, u64 pid_tgid, int ratelimit
     increment_metric(metricID_PIDEventsErr);
     return false;
   }
-  if (ratelimit_action == RATELIMIT_ACTION_RESET || errNo != 0) {
+  if (ratelimit_action == RATELIMIT_ACTION_RESET) {
     bpf_map_delete_elem(&reported_pids, &pid);
   }
 
@@ -214,6 +222,7 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
 #elif defined(__aarch64__)
   record->state.lr         = 0;
   record->state.r22        = 0;
+  record->state.r28        = 0;
   record->state.lr_invalid = false;
 #endif
   record->state.return_address             = false;
@@ -228,6 +237,7 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->unwindersDone                    = 0;
   record->tailCalls                        = 0;
   record->ratelimitAction                  = RATELIMIT_ACTION_DEFAULT;
+  record->customLabelsState.go_m_ptr       = NULL;
 
   Trace *trace           = &record->trace;
   trace->kernel_stack_id = -1;
@@ -238,6 +248,15 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi    = 0;
   trace->apm_trace_id.as_int.lo    = 0;
   trace->apm_transaction_id.as_int = 0;
+
+  trace->custom_labels.len = 0;
+  u64 *labels_space        = (u64 *)&trace->custom_labels.labels;
+  // I'm not sure this is necessary since we only increment len after
+  // we successfully write the label.
+#pragma unroll
+  for (int i = 0; i < sizeof(CustomLabel) * MAX_CUSTOM_LABELS / 8; i++) {
+    labels_space[i] = 0;
+  }
 
   return record;
 }
@@ -429,6 +448,17 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
   return ERR_OK;
 }
 
+// matches_interpreter_range checks if the given text section offset falls within
+// the valid address ranges of a known interpreter. An OffsetRange can contain up to
+// two disjoint ranges (lower_offset1-upper_offset1 and lower_offset2-upper_offset2)
+// to accommodate interpreters that may have code sections split across non-contiguous
+// memory regions. Returns true if the offset matches either range.
+static inline EBPF_INLINE bool matches_interpreter_range(u64 section_offset, OffsetRange *range)
+{
+  return ((section_offset >= range->lower_offset1) && (section_offset <= range->upper_offset1)) ||
+         ((section_offset >= range->lower_offset2) && (section_offset <= range->upper_offset2));
+}
+
 // get_next_interpreter tries to get the next interpreter unwinder from the section id.
 // If the section id happens to be within the range of a known interpreter it will
 // return the interpreter unwinder otherwise the native unwinder.
@@ -440,9 +470,7 @@ static inline EBPF_INLINE int get_next_interpreter(PerCPURecord *record)
   // Check if the section id happens to be in the interpreter map.
   OffsetRange *range = bpf_map_lookup_elem(&interpreter_offsets, &section_id);
   if (range != 0) {
-    if (
-      ((section_offset >= range->lower_offset1) && (section_offset <= range->upper_offset1)) ||
-      ((section_offset >= range->lower_offset2) && (section_offset <= range->upper_offset2))) {
+    if (matches_interpreter_range(section_offset, range)) {
       DEBUG_PRINT("interpreter_offsets match %d", range->program_index);
       if (!unwinder_is_done(record, range->program_index)) {
         increment_metric(metricID_UnwindCallInterpreter);
@@ -585,6 +613,7 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->fp  = regs->regs[29];
   state->lr  = normalize_pac_ptr(regs->regs[30]);
   state->r22 = regs->regs[22];
+  state->r28 = regs->regs[28];
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
   // https://github.com/torvalds/linux/blob/2ef5971ff3/arch/arm64/include/asm/ptrace.h#L118

@@ -27,7 +27,7 @@ var cached cachedMarker = 1
 var erroredMarker cachedMarker = 2
 
 type Table interface {
-	Lookup(addr uint64) ([]samples.SourceInfoFrame, error)
+	Lookup(addr uint64) (samples.SourceInfo, error)
 	Close()
 }
 
@@ -181,7 +181,7 @@ func (c *Resolver) ObserveExecutable(fid libpf.FileID, elfRef *pfelf.Reference) 
 	if !ok {
 		return nil
 	}
-	if elfRef.FileName() == process.VdsoPathName {
+	if elfRef.FileName() == process.VdsoPathName.String() {
 		c.cache.Add(fid, cached)
 		return nil
 	}
@@ -281,13 +281,13 @@ func (c *Resolver) tableFilePath(fid libpf.FileID) string {
 func (c *Resolver) ResolveAddress(
 	fid libpf.FileID,
 	addr uint64,
-) ([]samples.SourceInfoFrame, error) {
+) (samples.SourceInfo, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	v, known := c.cache.Get(fid)
 
 	if !known || v == erroredMarker {
-		return nil, errUnknownFile
+		return samples.SourceInfo{}, errUnknownFile
 	}
 	t, ok := c.tables[fid]
 	if ok {
@@ -298,7 +298,7 @@ func (c *Resolver) ResolveAddress(
 	if err != nil {
 		_ = os.Remove(path)
 		c.cache.Remove(fid)
-		return nil, err
+		return samples.SourceInfo{}, err
 	}
 	c.tables[fid] = t
 	return t.Lookup(addr)

@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/tpbase"
@@ -145,10 +146,16 @@ func (pm *ProcessManager) updatePidInformation(pid libpf.PID, m *Mapping) (bool,
 			}
 		}
 
+		containerID, err := extractContainerIDCached(pid)
+		if err != nil {
+			log.Debugf("Failed extracting containerID for %d: %v", pid, err)
+		}
+
 		info = &processInfo{
 			meta: ProcessMeta{
 				Name:         processName,
 				Executable:   exePath,
+				ContainerID:  containerID,
 				EnvVariables: envVarMap},
 			mappings:         make(map[libpf.Address]*Mapping),
 			mappingsByFileID: make(map[host.FileID]map[libpf.Address]*Mapping),
@@ -365,7 +372,7 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.Mappin
 		return info
 	}
 
-	baseName := path.Base(mapping.Path)
+	baseName := path.Base(mapping.Path.String())
 	if baseName == "/" {
 		// There are circumstances where there is no filename.
 		// E.g. kernel module 'bpfilter_umh' before Linux 5.9-rc1 uses
@@ -398,7 +405,7 @@ func (pm *ProcessManager) processNewExecMapping(pr process.Process, mapping *pro
 	}
 
 	// Create a Reference so we don't need to open the ELF multiple times
-	elfRef := pfelf.NewReference(mapping.Path, pr)
+	elfRef := pfelf.NewReference(mapping.Path.String(), pr)
 	defer elfRef.Close()
 
 	info := pm.getELFInfo(pr, mapping, elfRef)
@@ -676,7 +683,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	util.AtomicUpdateMaxUint32(&pm.mappingStats.maxProcParseUsec, uint32(elapsed.Microseconds()))
 	pm.mappingStats.totalProcParseUsec.Add(uint32(elapsed.Microseconds()))
 
-	if !pm.profilingEnabled(pr, mappings) {
+	if !pm.profilingEnabled(pr) {
 		log.Debugf("- PID: %d Skip profiling for", pid)
 		return
 	}
@@ -698,8 +705,19 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	}
 }
 
-func (pm *ProcessManager) profilingEnabled(pr process.Process, mappings []process.Mapping) bool {
-	enabled := pm.policy.ProfilingEnabled(pr, mappings)
+// todo create an upstream issue for this feature, without implementation suggestions
+func (pm *ProcessManager) profilingEnabled(pr process.Process) bool {
+	if _, ok := pm.policy.(dynamicprofiling.AlwaysOnPolicy); ok {
+		// Optimization: skip containerId extraction for AlwaysOnPolicy - it always returns true.
+		// This also fixes compatibility with coredump tests where containerId extraction fails.
+		return true
+	}
+
+	containerID, err := extractContainerIDCached(pr.PID())
+	if err != nil {
+		return false
+	}
+	enabled := pm.policy.ProfilingEnabled(pr, containerID)
 	if enabled {
 		return true
 	}

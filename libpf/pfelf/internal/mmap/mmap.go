@@ -8,13 +8,9 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
-)
-
-var (
-	// ErrInvalRequest indicates that the requested data exceeds the available mapped data.
-	ErrInvalRequest = errors.New("invalid request")
 )
 
 // ReaderAt reads a memory-mapped file.
@@ -22,6 +18,9 @@ var (
 // Like any io.ReaderAt, clients can execute parallel ReadAt calls, but it is
 // not safe to call Close and reading methods concurrently.
 type ReaderAt struct {
+	// refCount is the number of references
+	refCount atomic.Int32
+
 	data []byte
 	f    *os.File
 }
@@ -30,8 +29,19 @@ func (r *ReaderAt) OSFile() *os.File {
 	return r.f
 }
 
+// Take takes a reference on the data
+func (r *ReaderAt) Take() io.Closer {
+	r.refCount.Add(1)
+	return r
+}
+
 // Close closes the reader.
 func (r *ReaderAt) Close() error {
+	// Drop reference
+	if r.refCount.Add(-1) > 0 {
+		return nil
+	}
+	// No more references - unmap data
 	if r.f != nil {
 		_ = r.f.Close()
 		r.f = nil
@@ -76,8 +86,8 @@ func (r *ReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // Subslice returns a subset of the mmaped backed data.
 func (r *ReaderAt) Subslice(offset, length int) ([]byte, error) {
 	if offset+length > r.Len() {
-		return nil, fmt.Errorf("requested data %d at 0x%x exceeds %d: %w",
-			length, offset, length, ErrInvalRequest)
+		return nil, fmt.Errorf("requested data %x-%x exceeds %x: %w",
+			offset, offset+length, r.Len(), io.EOF)
 	}
 	return unsafe.Slice((*byte)(unsafe.Pointer(&r.data[offset])), length), nil
 }
@@ -119,8 +129,8 @@ func Open(filename string) (*ReaderAt, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	r := &ReaderAt{data, f}
-
+	r := &ReaderAt{data: data, f: f}
+	r.refCount.Store(1)
 	runtime.SetFinalizer(r, (*ReaderAt).Close)
 	return r, nil
 }

@@ -5,6 +5,7 @@ package php // import "go.opentelemetry.io/ebpf-profiler/interpreter/php"
 
 import (
 	"bytes"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"regexp"
@@ -32,19 +33,16 @@ const (
 	// maxPHPRODataSize is the maximum PHP RO Data segment size to scan
 	// (currently the largest seen is about 9M)
 	maxPHPRODataSize = 16 * 1024 * 1024
-
-	// unknownFunctionName is the name to be used when it cannot be read from the
-	// interpreter, or explicit function name does not exist (global code not in function)
-	unknownFunctionName = "<unknown>"
-
-	// evalCodeFunctionName is a placeholder name to show that code has been evaluated
-	// using eval in PHP.
-	evalCodeFunctionName = "<eval'd code>"
 )
 
 var (
+	// evalCodeFunctionName is a placeholder name to show that code has been evaluated
+	// using eval in PHP.
+	evalCodeFunctionName = libpf.Intern("<eval'd code>")
+
 	// regex for the interpreter executable
-	phpRegex     = regexp.MustCompile(".*/php(-cgi|-fpm)?[0-9.]*$|^php(-cgi|-fpm)?[0-9.]*$")
+	phpRegex = regexp.MustCompile(`.*/php(-cgi|-fpm)?[0-9.]*$|^php(-cgi|-fpm)?[0-9.]*$` +
+		`|.*/libphp.*\.so$`)
 	versionMatch = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
 	// compiler check to make sure the needed interfaces are satisfied
@@ -202,21 +200,23 @@ func recoverExecuteExJumpLabelAddress(ef *pfelf.File) (libpf.SymbolValue, error)
 	// executor function, has been such at least since PHP7.0. This is guaranteed
 	// to be the vm executor function in PHP JIT'd code, since the JIT is (currently)
 	// inoperable with overridden execute_ex's
-	executeExAddr, err := ef.LookupSymbolAddress("execute_ex")
-	if err != nil {
-		return libpf.SymbolValueInvalid,
-			fmt.Errorf("could not find execute_ex: %w", err)
-	}
 
 	// The address we care about varies from being 47 bytes in to about 107 bytes in,
-	// so we'll read 128 bytes. This might need to be adjusted up in future.
-	code := make([]byte, 128)
-	if _, err = ef.ReadVirtualMemory(code, int64(executeExAddr)); err != nil {
+	// so we'll cap at 128 bytes. This might need to be adjusted up in future.
+	sym, code, err := ef.SymbolData("execute_ex", 128)
+	if err != nil {
 		return libpf.SymbolValueInvalid,
-			fmt.Errorf("could not read from executeExAddr: %w", err)
+			fmt.Errorf("unable to read 'execute_ex': %w", err)
 	}
-
-	returnAddress, err := retrieveExecuteExJumpLabelAddressWrapper(code, executeExAddr)
+	var returnAddress libpf.SymbolValue
+	switch ef.Machine {
+	case elf.EM_AARCH64:
+		returnAddress, err = retrieveExecuteExJumpLabelAddressARM(code, sym.Address)
+	case elf.EM_X86_64:
+		returnAddress, err = retrieveExecuteExJumpLabelAddressX86(code, sym.Address)
+	default:
+		return returnAddress, fmt.Errorf("unsupported architecture: %s", ef.Machine)
+	}
 	if err != nil {
 		return libpf.SymbolValueInvalid,
 			fmt.Errorf("reading the return address from execute_ex failed (%w)",
@@ -233,23 +233,25 @@ func determineVMKind(ef *pfelf.File) (uint, error) {
 
 	// This is a publicly exposed function in PHP that returns the VM type
 	// This has been implemented in PHP since at least 7.2
-	vmKindAddr, err := ef.LookupSymbolAddress("zend_vm_kind")
-	if err != nil {
-		return 0, fmt.Errorf("zend_vm_kind not found: %w", err)
-	}
 
 	// We should only need around 32 bytes here, since this function should be
 	// really short (e.g a mov and a ret).
-	code := make([]byte, 32)
-	if _, err = ef.ReadVirtualMemory(code, int64(vmKindAddr)); err != nil {
-		return 0, fmt.Errorf("could not read from zend_vm_kind: %w", err)
+	_, code, err := ef.SymbolData("zend_vm_kind", 64)
+	if err != nil {
+		return 0, fmt.Errorf("unable to read 'zend_vm_kind': %w", err)
 	}
-
-	vmKind, err := retrieveZendVMKindWrapper(code)
+	var vmKind uint
+	switch ef.Machine {
+	case elf.EM_AARCH64:
+		vmKind, err = retrieveZendVMKindARM(code)
+	case elf.EM_X86_64:
+		vmKind, err = retrieveZendVMKindX86(code)
+	default:
+		return 0, fmt.Errorf("unsupported architecture: %s", ef.Machine)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("an error occurred decoding zend_vm_kind: %w", err)
 	}
-
 	return vmKind, nil
 }
 
