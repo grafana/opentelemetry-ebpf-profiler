@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
@@ -32,40 +31,6 @@ import "C"
 func sliceBuffer(buf unsafe.Pointer, sz C.int) []byte {
 	return unsafe.Slice((*byte)(buf), int(sz))
 }
-
-// symbolizationCache collects and caches the interpreter manager's symbolization
-// callbacks to be used for trace stringification.
-type symbolizationCache struct {
-	files   map[libpf.FileID]string
-	symbols map[libpf.FrameID]*reporter.FrameMetadataArgs
-}
-
-func newSymbolizationCache() *symbolizationCache {
-	return &symbolizationCache{
-		files:   make(map[libpf.FileID]string),
-		symbols: make(map[libpf.FrameID]*reporter.FrameMetadataArgs),
-	}
-}
-
-func (c *symbolizationCache) ExecutableKnown(fileID libpf.FileID) bool {
-	_, exists := c.files[fileID]
-	return exists
-}
-
-func (c *symbolizationCache) ExecutableMetadata(args *reporter.ExecutableMetadataArgs) {
-	c.files[args.FileID] = args.FileName
-}
-
-func (c *symbolizationCache) FrameKnown(frameID libpf.FrameID) bool {
-	_, exists := c.symbols[frameID]
-	return exists
-}
-
-func (c *symbolizationCache) FrameMetadata(args *reporter.FrameMetadataArgs) {
-	c.symbols[args.FrameID] = args
-}
-
-func (c *symbolizationCache) ReportFallbackSymbol(libpf.FrameID, string) {}
 
 func generateErrorMap() (map[libpf.AddressOrLineno]string, error) {
 	file, err := os.Open("../errors-codegen/errors.json")
@@ -93,35 +58,36 @@ func generateErrorMap() (map[libpf.AddressOrLineno]string, error) {
 
 var errorMap xsync.Once[map[libpf.AddressOrLineno]string]
 
-func (c *symbolizationCache) symbolize(ty libpf.FrameType, fileID libpf.FileID,
-	lineNumber libpf.AddressOrLineno) (string, error) {
-	if ty.IsError() {
+func formatFrame(frame *libpf.Frame) (string, error) {
+	if frame.Type.IsError() {
 		errMap, err := errorMap.GetOrInit(generateErrorMap)
 		if err != nil {
 			return "", fmt.Errorf("unable to construct error map: %v", err)
 		}
-		errName, ok := (*errMap)[lineNumber]
+		errName, ok := (*errMap)[frame.AddressOrLineno]
 		if !ok {
 			return "", fmt.Errorf(
-				"got invalid error code %d. forgot to `make generate`", lineNumber)
+				"got invalid error code %d. forgot to `make generate`",
+				frame.AddressOrLineno)
 		}
-		if ty == libpf.AbortFrame {
+		if frame.Type == libpf.AbortFrame {
 			return fmt.Sprintf("<unwinding aborted due to error %s>", errName), nil
 		}
 		return fmt.Sprintf("<error %s>", errName), nil
 	}
 
-	if data, ok := c.symbols[libpf.NewFrameID(fileID, lineNumber)]; ok {
+	if frame.FunctionName != libpf.NullString {
 		return fmt.Sprintf("%s+%d in %s:%d",
-			data.FunctionName, data.FunctionOffset,
-			data.SourceFile, data.SourceLine), nil
+			frame.FunctionName, frame.FunctionOffset,
+			frame.SourceFile, frame.SourceLine), nil
 	}
 
-	sourceFile, ok := c.files[fileID]
-	if !ok {
-		sourceFile = fmt.Sprintf("%08x", fileID)
+	if frame.MappingFile.Valid() {
+		return fmt.Sprintf("%s+0x%x",
+			frame.MappingFile.Value().FileName,
+			frame.AddressOrLineno), nil
 	}
-	return fmt.Sprintf("%s+0x%x", sourceFile, lineNumber), nil
+	return fmt.Sprintf("?+0x%x", frame.AddressOrLineno), nil
 }
 
 func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
@@ -170,20 +136,13 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	defer ebpfCtx.release()
 
 	coredumpEbpfMaps := ebpfMapsCoredump{ctx: ebpfCtx}
-	symCache := newSymbolizationCache()
 
 	// Instantiate managers and enable all tracers by default
 	includeTracers, _ := tracertypes.Parse("all")
 
 	manager, err := pm.New(todo, includeTracers, monitorInterval, &coredumpEbpfMaps,
-		pm.NewMapFileIDMapper(),
-		symCache,
-		elfunwindinfo.NewStackDeltaProvider(),
-		false,
-		nil,
-		dynamicprofiling.AlwaysOnPolicy{},
-		libpf.Set[string]{},
-	)
+		pm.NewMapFileIDMapper(), nil, elfunwindinfo.NewStackDeltaProvider(), false,
+		nil, dynamicprofiling.AlwaysOnPolicy{}, libpf.Set[string]{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Interpreter manager: %v", err)
 	}
@@ -207,12 +166,13 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 		// Symbolize traces with interpreter manager
 		trace := manager.ConvertTrace(&ebpfCtx.trace)
 		tinfo := ThreadInfo{LWP: thread.LWP}
-		for i := range trace.FrameTypes {
-			frame, err := symCache.symbolize(trace.FrameTypes[i], trace.Files[i], trace.Linenos[i])
+		for _, f := range trace.Frames {
+			frame := f.Value()
+			frameText, err := formatFrame(&frame)
 			if err != nil {
 				return nil, err
 			}
-			tinfo.Frames = append(tinfo.Frames, frame)
+			tinfo.Frames = append(tinfo.Frames, frameText)
 		}
 		info = append(info, tinfo)
 	}

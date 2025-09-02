@@ -4,8 +4,6 @@
 package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 
 import (
-	lru "github.com/elastic/go-freelru"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
 
@@ -15,44 +13,18 @@ type Pdata struct {
 	// samplesPerSecond is the number of samples per second.
 	samplesPerSecond int
 
-	// Executables stores metadata for executables.
-	Executables *lru.SyncedLRU[libpf.FileID, samples.ExecInfo]
-
-	// Frames maps frame information to its source location.
-	Frames *lru.SyncedLRU[libpf.FrameID, samples.SourceInfo]
-
 	// ExtraSampleAttrProd is an optional hook point for adding custom
 	// attributes to samples.
 	ExtraSampleAttrProd samples.SampleAttrProducer
 }
 
-func New(samplesPerSecond int, executablesCacheElements, framesCacheElements uint32,
-	extra samples.SampleAttrProducer,
-) (*Pdata, error) {
-	executables, err :=
-		lru.NewSynced[libpf.FileID, samples.ExecInfo](executablesCacheElements, libpf.FileID.Hash32)
-	if err != nil {
-		return nil, err
-	}
-	executables.SetLifetime(ExecutableCacheLifetime) // Allow GC to clean stale items.
-
-	frames, err :=
-		lru.NewSynced[libpf.FrameID, samples.SourceInfo](framesCacheElements, libpf.FrameID.Hash32)
-	if err != nil {
-		return nil, err
-	}
-	frames.SetLifetime(FramesCacheLifetime) // Allow GC to clean stale items.
-
+func New(samplesPerSecond int, extra samples.SampleAttrProducer) (*Pdata, error) {
 	return &Pdata{
 		samplesPerSecond:    samplesPerSecond,
-		Executables:         executables,
-		Frames:              frames,
 		ExtraSampleAttrProd: extra,
 	}, nil
 }
 
 // Purge purges all the expired data
 func (p *Pdata) Purge() {
-	p.Executables.PurgeExpired()
-	p.Frames.PurgeExpired()
 }

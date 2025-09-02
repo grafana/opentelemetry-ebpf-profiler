@@ -25,13 +25,11 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
+	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
-	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 
 	"github.com/stretchr/testify/assert"
@@ -98,8 +96,8 @@ func newTestProcess(pid libpf.PID) *dummyProcess {
 type dummyStackDeltaProvider struct{}
 
 // GetIntervalStructuresForFile fills in the expected data structure with semi random data.
-func (d *dummyStackDeltaProvider) GetIntervalStructuresForFile(_ host.FileID,
-	_ *pfelf.Reference, result *sdtypes.IntervalData) error {
+func (d *dummyStackDeltaProvider) GetIntervalStructuresForFile(_ *pfelf.Reference,
+	result *sdtypes.IntervalData) error {
 	r := rand.New(rand.NewPCG(42, 42)) //nolint:gosec
 	addr := 0x10
 	for i := 0; i < r.IntN(42); i++ {
@@ -256,116 +254,6 @@ func (mockup *ebpfMapsMockup) CollectMetrics() []metrics.Metric     { return []m
 func (mockup *ebpfMapsMockup) SupportsGenericBatchOperations() bool { return false }
 func (mockup *ebpfMapsMockup) SupportsLPMTrieBatchOperations() bool { return false }
 
-type symbolReporterMockup struct{}
-
-func (s *symbolReporterMockup) ReportFallbackSymbol(_ libpf.FrameID, _ string) {}
-
-func (s *symbolReporterMockup) ExecutableKnown(_ libpf.FileID) bool {
-	return true
-}
-
-func (s *symbolReporterMockup) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {
-}
-
-func (s *symbolReporterMockup) FrameKnown(_ libpf.FrameID) bool {
-	return true
-}
-
-func (s *symbolReporterMockup) FrameMetadata(_ *reporter.FrameMetadataArgs) {
-}
-
-var _ reporter.SymbolReporter = (*symbolReporterMockup)(nil)
-
-func TestInterpreterConvertTrace(t *testing.T) {
-	partialNativeFrameFileID := uint64(0xabcdbeef)
-	nativeFrameLineno := libpf.AddressOrLineno(0x1234)
-
-	pythonAndNativeTrace := &host.Trace{
-		Frames: []host.Frame{{
-			// This represents a native frame
-			File:   host.FileID(partialNativeFrameFileID),
-			Lineno: nativeFrameLineno,
-			Type:   libpf.NativeFrame,
-		}, {
-			File:   host.FileID(42),
-			Lineno: libpf.AddressOrLineno(0x13e1bb8e), // same as runForeverTrace
-			Type:   libpf.PythonFrame,
-		}},
-	}
-
-	tests := map[string]struct {
-		trace  *host.Trace
-		expect *libpf.Trace
-	}{
-		"Convert Trace": {
-			trace: pythonAndNativeTrace,
-			expect: getExpectedTrace(pythonAndNativeTrace,
-				[]libpf.AddressOrLineno{0, 1}),
-		},
-	}
-
-	for name, testcase := range tests {
-		t.Run(name, func(t *testing.T) {
-			mapper := NewMapFileIDMapper()
-			for i := range testcase.trace.Frames {
-				mapper.Set(testcase.trace.Frames[i].File, testcase.expect.Files[i])
-			}
-
-			// For this test do not include interpreters.
-			noIinterpreters, _ := tracertypes.Parse("")
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			// To test ConvertTrace we do not require all parts of processmanager.
-			manager, err := New(ctx,
-				noIinterpreters,
-				1*time.Second,
-				nil,
-				nil,
-				&symbolReporterMockup{},
-				nil,
-				true,
-				nil,
-				dynamicprofiling.AlwaysOnPolicy{},
-				libpf.Set[string]{},
-			)
-			require.NoError(t, err)
-
-			newTrace := manager.ConvertTrace(testcase.trace)
-
-			testcase.expect.Hash = traceutil.HashTrace(testcase.expect)
-			if testcase.expect.Hash == newTrace.Hash {
-				assert.Equal(t, testcase.expect.Linenos, newTrace.Linenos)
-				assert.Equal(t, testcase.expect.Files, newTrace.Files)
-			}
-		})
-	}
-}
-
-// getExpectedTrace returns a new libpf trace that is based on the provided host trace, but
-// with the linenos replaced by the provided values. This function is for generating an expected
-// trace for tests below.
-func getExpectedTrace(origTrace *host.Trace, linenos []libpf.AddressOrLineno) *libpf.Trace {
-	newTrace := &libpf.Trace{
-		Hash: libpf.NewTraceHash(uint64(origTrace.Hash), uint64(origTrace.Hash)),
-	}
-
-	for _, frame := range origTrace.Frames {
-		newTrace.Files = append(newTrace.Files, libpf.NewFileID(uint64(frame.File), 0))
-		newTrace.FrameTypes = append(newTrace.FrameTypes, frame.Type)
-		if linenos == nil {
-			newTrace.Linenos = append(newTrace.Linenos, frame.Lineno)
-		}
-	}
-
-	if linenos != nil {
-		newTrace.Linenos = linenos
-	}
-
-	return newTrace
-}
-
 func TestNewMapping(t *testing.T) {
 	tests := map[string]struct {
 		// newMapping holds the arguments that are passed to NewMapping() in the test.
@@ -398,12 +286,11 @@ func TestNewMapping(t *testing.T) {
 			// so we replace the stack delta provider.
 			dummyProvider := dummyStackDeltaProvider{}
 			ebpfMockup := &ebpfMapsMockup{}
-			symRepMockup := &symbolReporterMockup{}
 
 			// For this test do not include interpreters.
 			noInterpreters, _ := tracertypes.Parse("")
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			manager, err := New(ctx,
@@ -411,7 +298,7 @@ func TestNewMapping(t *testing.T) {
 				1*time.Second,
 				ebpfMockup,
 				NewMapFileIDMapper(),
-				symRepMockup,
+				nil,
 				&dummyProvider,
 				true,
 				nil,
@@ -587,19 +474,18 @@ func TestProcExit(t *testing.T) {
 			// so we replace the stack delta provider.
 			dummyProvider := dummyStackDeltaProvider{}
 			ebpfMockup := &ebpfMapsMockup{}
-			repMockup := &symbolReporterMockup{}
 
 			// For this test do not include interpreters.
 			noInterpreters, _ := tracertypes.Parse("")
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 
 			manager, err := New(ctx,
 				noInterpreters,
 				1*time.Second,
 				ebpfMockup,
 				NewMapFileIDMapper(),
-				repMockup,
+				nil,
 				&dummyProvider,
 				true,
 				nil,
@@ -641,7 +527,6 @@ func (t *testPolicy) ProfilingEnabled(_ process.Process, _ string) bool {
 func TestDynamicProfilingPolicy(t *testing.T) {
 	dummyProvider := dummyStackDeltaProvider{}
 	ebpfMockup := &ebpfMapsMockup{}
-	symRepMockup := &symbolReporterMockup{}
 
 	noInterpreters, _ := tracertypes.Parse("")
 
@@ -654,7 +539,7 @@ func TestDynamicProfilingPolicy(t *testing.T) {
 		1*time.Second,
 		ebpfMockup,
 		NewMapFileIDMapper(),
-		symRepMockup,
+		nil,
 		&dummyProvider,
 		true,
 		nil,

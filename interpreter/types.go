@@ -140,18 +140,16 @@ type Instance interface {
 	// SynchronizeMappings is called when the processmanager has reread process memory
 	// mappings. Interpreters not needing to process these events can simply ignore them
 	// by just returning a nil.
-	SynchronizeMappings(ebpf EbpfHandler, symbolReporter reporter.SymbolReporter,
+	SynchronizeMappings(ebpf EbpfHandler, exeReporter reporter.ExecutableReporter,
 		pr process.Process, mappings []process.Mapping) error
 
 	// UpdateTSDInfo is called when the process C-library Thread Specific Data related
 	// introspection data has been updated.
 	UpdateTSDInfo(ebpf EbpfHandler, pid libpf.PID, info tpbase.TSDInfo) error
 
-	// Symbolize requests symbolization of the given frame, and dispatches this symbolization
-	// to the collection agent. The frame's contents (frame type, file ID and line number)
-	// are appended to newTrace.
-	Symbolize(symbolReporter reporter.SymbolReporter, frame *host.Frame,
-		trace *libpf.Trace) error
+	// Symbolize converts one ebpf frame to one or more (if inlining was expanded) libpf.Frame.
+	// The resulting libpf.Frame values are appended to frames.
+	Symbolize(ebpfFrame *host.Frame, frames *libpf.Frames) error
 
 	// GetAndResetMetrics collects the metrics from the Instance and resets
 	// the counters to their initial value.

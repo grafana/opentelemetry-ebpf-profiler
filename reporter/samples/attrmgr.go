@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pprofile"
+	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -32,9 +33,9 @@ type SampleAttrProducer interface {
 }
 
 type NativeSymbolResolver interface {
-	ExecutableKnown(id libpf.FileID) bool
-	ObserveExecutable(id libpf.FileID, ref *pfelf.Reference) error
-	ResolveAddress(file libpf.FileID, addr uint64) (SourceInfo, error)
+	ExecutableKnown(id host.FileID) bool
+	ObserveExecutable(id host.FileID, ref *pfelf.Reference) error
+	ResolveAddress(file host.FileID, addr uint64) (SourceInfo, error)
 	Cleanup()
 }
 

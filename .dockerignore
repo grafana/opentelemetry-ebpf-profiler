@@ -1,3 +1,5 @@
 .cache
+.git
 go
-target/
+tools/coredump/gdb-sysroot
+tools/coredump/modulecache

@@ -34,6 +34,8 @@ type Config struct {
 	VerboseMode            bool
 	Version                bool
 	OffCPUThreshold        float64
+	UProbeLinks            []string
+	LoadProbe              bool
 
 	Policy       dynamicprofiling.Policy
 	FileObserver samples.NativeSymbolResolver
