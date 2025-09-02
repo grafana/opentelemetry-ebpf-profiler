@@ -3,9 +3,9 @@ package irsymcache
 import (
 	"testing"
 
-	lru "github.com/elastic/go-freelru"
 	"github.com/grafana/pyroscope/lidia"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/ebpf-profiler/host"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -19,19 +19,20 @@ func TestNativeFrameSymbols(t *testing.T) {
 		Path:        t.TempDir(),
 	})
 	require.NoError(t, err)
-	frames, err := lru.NewSynced[
-		libpf.FrameID, samples.SourceInfo,
-	](
-		1024, libpf.FrameID.Hash32)
-	require.NoError(t, err)
 
 	reference := testElfRef(testLibcFIle)
-	fid := libpf.NewFileID(1, 3)
+	fid := host.FileID(1)
 	err = resolver.ObserveExecutable(fid, reference)
 	require.NoError(t, err)
 	res := samples.SourceInfo{}
-	SymbolizeNativeFrame(resolver, frames, libpf.Intern("testmapping"),
-		libpf.NewFrameID(fid, libpf.AddressOrLineno(0x9bc7e)),
+	frame := host.Frame{
+		File:          fid,
+		Lineno:        libpf.AddressOrLineno(0x9bc7e),
+		Type:          0,
+		ReturnAddress: false,
+	}
+	SymbolizeNativeFrame(resolver, libpf.Intern("testmapping"),
+		frame,
 		func(si samples.SourceInfo) {
 			res = si
 		})

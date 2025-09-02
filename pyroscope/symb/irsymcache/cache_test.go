@@ -1,11 +1,13 @@
 package irsymcache
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/grafana/pyroscope/lidia"
 	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/host"
 
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
@@ -85,11 +87,11 @@ func TestResolver_ResolveAddress(t *testing.T) {
 	})
 	type observe struct {
 		filepath    string
-		fid         libpf.FileID
+		fid         host.FileID
 		expectedErr string
 	}
 	type lookup struct {
-		fid         libpf.FileID
+		fid         host.FileID
 		addr        uint64
 		expectedRes samples.SourceInfo
 		expectedErr error
@@ -106,12 +108,12 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			observes: []observe{
 				{
 					filepath: testLibcFIle,
-					fid:      libpf.NewFileID(456, 123),
+					fid:      host.FileID(456),
 				},
 			},
 			lookups: []lookup{
 				{
-					fid:  libpf.NewFileID(456, 123),
+					fid:  host.FileID(456),
 					addr: 0x9cbb0,
 					expectedRes: samples.SourceInfo{
 						FunctionName: libpf.Intern("__pthread_create_2_1"),
@@ -124,7 +126,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			cacheSize: 1024,
 			lookups: []lookup{
 				{
-					fid:         libpf.NewFileID(456, 123),
+					fid:         host.FileID(456),
 					addr:        0x9cbb0,
 					expectedErr: errUnknownFile,
 				},
@@ -136,21 +138,21 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			observes: []observe{
 				{
 					filepath: testLibcFIle,
-					fid:      libpf.NewFileID(456, 123),
+					fid:      host.FileID(456),
 				},
 				{
 					filepath: testLibcFIle,
-					fid:      libpf.NewFileID(4242, 4242),
+					fid:      host.FileID(4242),
 				},
 			},
 			lookups: []lookup{
 				{
-					fid:         libpf.NewFileID(456, 123),
+					fid:         host.FileID(456),
 					addr:        0x9cbb0,
 					expectedErr: errUnknownFile,
 				},
 				{
-					fid:  libpf.NewFileID(4242, 4242),
+					fid:  host.FileID(4242),
 					addr: 0x9cbb0,
 					expectedRes: samples.SourceInfo{
 						FunctionName: libpf.Intern("__pthread_create_2_1"),
@@ -164,7 +166,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			observes: []observe{
 				{
 					filepath:    "unknown/file/path/that/should/fail",
-					fid:         libpf.NewFileID(456, 123),
+					fid:         host.FileID(456),
 					expectedErr: "no such file or directory",
 				},
 			},
@@ -231,7 +233,7 @@ func TestResolver_Cleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	elfRef := testElfRef(testLibcFIle)
-	fid := libpf.NewFileID(456, 123)
+	fid := host.FileID(456)
 	err = resolver.ObserveExecutable(fid, elfRef)
 	require.NoError(t, err)
 
@@ -253,7 +255,7 @@ func TestResolver_Close(t *testing.T) {
 	require.NoError(t, err)
 
 	elfRef := testElfRef(testLibcFIle)
-	fid := libpf.NewFileID(456, 123)
+	fid := host.FileID(456)
 	err = resolver.ObserveExecutable(fid, elfRef)
 	require.NoError(t, err)
 
@@ -269,7 +271,7 @@ func BenchmarkCache(b *testing.B) {
 		Path:        b.TempDir(),
 		SizeEntries: 2048,
 	})
-	loop := func(b *testing.B, resolver *Resolver, fid libpf.FileID) {
+	loop := func(b *testing.B, resolver *Resolver, fid host.FileID) {
 		for i := 0; i < b.N; i++ {
 			if resolver.ExecutableKnown(fid) {
 				continue
@@ -283,11 +285,57 @@ func BenchmarkCache(b *testing.B) {
 	}
 
 	require.NoError(b, err)
-	fid := libpf.NewFileID(456, 123)
+	fid := host.FileID(456)
 
 	elfRef := testElfRef(testLibcFIle)
 	err = resolver.ObserveExecutable(fid, elfRef)
 	require.NoError(b, err)
 	b.ResetTimer()
 	loop(b, resolver, fid)
+}
+
+func TestFileIDFromStringNoQuotes(t *testing.T) {
+	testCases := []host.FileID{
+		host.FileID(0),
+		host.FileID(1),
+		host.FileID(0x123456789abcdef0),
+		host.FileID(0xffffffffffffffff),
+		host.FileID(0x8000000000000000),
+		host.FileID(456), // Same value used elsewhere in tests
+	}
+
+	for _, original := range testCases {
+		t.Run(fmt.Sprintf("FileID_%d", original), func(t *testing.T) {
+			// Convert FileID to string
+			str := original.StringNoQuotes()
+			require.Equal(t, 32, len(str), "StringNoQuotes should return 32-character string")
+
+			// Parse it back
+			parsed, err := FileIDFromStringNoQuotes(str)
+			require.NoError(t, err)
+
+			// Should be identical
+			assert.Equal(t, original, parsed)
+		})
+	}
+
+	// Test error cases
+	t.Run("error_cases", func(t *testing.T) {
+		errorCases := []struct {
+			name  string
+			input string
+		}{
+			{"too_short", "123456789abcdef"},
+			{"too_long", "123456789abcdef0123456789abcdef012"},
+			{"invalid_hex", "123456789abcdefg123456789abcdef01"},
+			{"empty", ""},
+		}
+
+		for _, tc := range errorCases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := FileIDFromStringNoQuotes(tc.input)
+				require.Error(t, err)
+			})
+		}
+	})
 }

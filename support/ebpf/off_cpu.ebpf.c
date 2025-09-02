@@ -20,7 +20,7 @@ bpf_map_def SEC("maps") sched_times = {
 
 // tracepoint__sched_switch serves as entry point for off cpu profiling.
 SEC("tracepoint/sched/sched_switch")
-int tracepoint__sched_switch(void *ctx)
+int tracepoint__sched_switch(UNUSED void *ctx)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
@@ -51,10 +51,10 @@ int tracepoint__sched_switch(void *ctx)
   return 0;
 }
 
-// dummy is never loaded or called. It just makes sure kprobe_progs is
+// kprobe__dummy is never loaded or called. It just makes sure kprobe_progs is
 // referenced and make the compiler and linker happy.
 SEC("kprobe/dummy")
-int dummy(struct pt_regs *ctx)
+int kprobe__dummy(struct pt_regs *ctx)
 {
   bpf_tail_call(ctx, &kprobe_progs, 0);
   return 0;

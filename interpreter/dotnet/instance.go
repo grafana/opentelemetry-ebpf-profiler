@@ -5,8 +5,6 @@ package dotnet // import "go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 
 import (
 	"fmt"
-	"hash/fnv"
-	"path"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -134,8 +132,6 @@ type dotnetInstance struct {
 	// bias is the ELF DSO load bias
 	bias libpf.Address
 
-	codeTypeMethodIDs [codeReadyToRun]libpf.AddressOrLineno
-
 	// Internal class instance pointers
 	codeRangeListPtr                 libpf.Address
 	precodeStubManagerPtr            libpf.Address
@@ -159,24 +155,11 @@ type dotnetInstance struct {
 	addrToMethod *freelru.LRU[libpf.Address, *dotnetMethod]
 }
 
-// calculateAndSymbolizeStubID calculates a stub LineID, and symbolizes it if needed
-func (i *dotnetInstance) insertAndSymbolizeStubFrame(symbolReporter reporter.SymbolReporter,
-	trace *libpf.Trace, codeType uint) {
-	name := "[stub: " + codeName[codeType] + "]"
-	lineID := i.codeTypeMethodIDs[codeType]
-	if lineID == 0 {
-		h := fnv.New128a()
-		_, _ = h.Write([]byte(name))
-		nameHash := h.Sum(nil)
-		lineID = libpf.AddressOrLineno(npsr.Uint64(nameHash, 0))
-		i.codeTypeMethodIDs[codeType] = lineID
-	}
-
-	frameID := libpf.NewFrameID(stubsFileID, lineID)
-	trace.AppendFrameID(libpf.DotnetFrame, frameID)
-	symbolReporter.FrameMetadata(&reporter.FrameMetadataArgs{
-		FrameID:      frameID,
-		FunctionName: libpf.Intern(name),
+// appendStubFrame appends a stub frame of given type
+func (i *dotnetInstance) appendStubFrame(frames *libpf.Frames, codeType uint) {
+	frames.Append(&libpf.Frame{
+		Type:         libpf.DotnetFrame,
+		FunctionName: libpf.Intern("[stub: " + codeName[codeType] + "]"),
 	})
 }
 
@@ -559,7 +542,7 @@ func (i *dotnetInstance) getDacSlotPtr(slot uint) libpf.Address {
 }
 
 func (i *dotnetInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	symbolReporter reporter.SymbolReporter, pr process.Process,
+	exeReporter reporter.ExecutableReporter, pr process.Process,
 	mappings []process.Mapping) error {
 	// find pointer to codeRangeList if needed
 	vms := &i.d.vmStructs
@@ -617,25 +600,13 @@ func (i *dotnetInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 			return info.err
 		}
 
-		log.Debugf("%x = %v -> %v guid %v",
-			info.fileID, m.Path,
-			info.simpleName, info.guid)
+		log.Debugf("%v -> %v guid %v", m.Path, info.simpleName, info.guid)
 
-		if !symbolReporter.ExecutableKnown(info.fileID) {
-			open := func() (process.ReadAtCloser, error) {
-				return pr.OpenMappingFile(m)
-			}
-			symbolReporter.ExecutableMetadata(
-				&reporter.ExecutableMetadataArgs{
-					FileID:            info.fileID,
-					FileName:          path.Base(m.Path.String()),
-					GnuBuildID:        info.guid,
-					DebuglinkFileName: "",
-					Interp:            libpf.Dotnet,
-					Open:              open,
-				},
-			)
-		}
+		exeReporter.ReportExecutable(&reporter.ExecutableMetadata{
+			MappingFile: info.file,
+			Process:     pr,
+			Mapping:     m,
+		})
 
 		dotnetMappings = append(dotnetMappings, dotnetMapping{
 			start: m.Vaddr,
@@ -736,8 +707,7 @@ func (i *dotnetInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
 	}, nil
 }
 
-func (i *dotnetInstance) Symbolize(symbolReporter reporter.SymbolReporter,
-	frame *host.Frame, trace *libpf.Trace) error {
+func (i *dotnetInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
 	if !frame.Type.IsInterpType(libpf.Dotnet) {
 		return interpreter.ErrMismatchInterpreterType
 	}
@@ -761,25 +731,25 @@ func (i *dotnetInstance) Symbolize(symbolReporter reporter.SymbolReporter,
 		// PC is executing:
 		// - on non-leaf frames, it is the return address
 		// - on leaf frames, it is the address after the CALL machine opcode
-		lineID := libpf.AddressOrLineno(pcOffset)
-		frameID := libpf.NewFrameID(module.fileID, lineID)
-		trace.AppendFrameID(libpf.DotnetFrame, frameID)
-		if !symbolReporter.FrameKnown(frameID) {
-			methodName := module.resolveR2RMethodName(pcOffset)
-			symbolReporter.FrameMetadata(&reporter.FrameMetadataArgs{
-				FrameID:      frameID,
-				FunctionName: methodName,
-				SourceFile:   module.simpleName,
-			})
-		}
+		frames.Append(&libpf.Frame{
+			Type:            libpf.DotnetFrame,
+			AddressOrLineno: libpf.AddressOrLineno(pcOffset),
+			FunctionName:    module.resolveR2RMethodName(pcOffset),
+			SourceFile:      module.simpleName,
+			MappingFile:     module.file,
+		})
 	case codeJIT:
 		// JITted frame in anonymous mapping
 		method, err := i.getMethod(codeHeaderPtr)
 		if err != nil {
 			return err
 		}
+		if method.index == 0 || method.classification == mcDynamic {
+			i.appendStubFrame(frames, codeDynamic)
+			break
+		}
+
 		ilOffset := method.mapPCOffsetToILOffset(pcOffset, frame.ReturnAddress)
-		fileID := method.module.fileID
 
 		// The Line ID format is:
 		//  4 bits  Set to 0xf to indicate JIT frame.
@@ -788,25 +758,18 @@ func (i *dotnetInstance) Symbolize(symbolReporter reporter.SymbolReporter,
 		//          pointing to CALL instruction if the debug info was accurate.
 		lineID := libpf.AddressOrLineno(0xf0000000+method.index)<<32 +
 			libpf.AddressOrLineno(ilOffset)
-
-		if method.index == 0 || method.classification == mcDynamic {
-			i.insertAndSymbolizeStubFrame(symbolReporter, trace, codeDynamic)
-		} else {
-			frameID := libpf.NewFrameID(fileID, lineID)
-			trace.AppendFrameID(libpf.DotnetFrame, frameID)
-			if !symbolReporter.FrameKnown(frameID) {
-				methodName := method.module.resolveMethodName(method.index)
-				symbolReporter.FrameMetadata(&reporter.FrameMetadataArgs{
-					FrameID:        frameID,
-					SourceFile:     method.module.simpleName,
-					FunctionName:   methodName,
-					FunctionOffset: ilOffset,
-				})
-			}
-		}
+		methodName := method.module.resolveMethodName(method.index)
+		frames.Append(&libpf.Frame{
+			Type:            libpf.DotnetFrame,
+			AddressOrLineno: lineID,
+			SourceFile:      method.module.simpleName,
+			FunctionName:    methodName,
+			FunctionOffset:  ilOffset,
+			MappingFile:     method.module.file,
+		})
 	default:
 		// Stub code
-		i.insertAndSymbolizeStubFrame(symbolReporter, trace, frameType)
+		i.appendStubFrame(frames, frameType)
 	}
 
 	sfCounter.ReportSuccess()

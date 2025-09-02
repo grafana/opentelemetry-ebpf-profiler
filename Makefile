@@ -1,6 +1,8 @@
-.PHONY: all all-common clean ebpf generate test test-deps protobuf docker-image agent legal \
-	integration-test-binaries codespell lint linter-version debug debug-agent ebpf-profiler \
-	format-ebpf rust-components rust-targets rust-tests vanity-import-check vanity-import-fix
+.PHONY: all all-common clean ebpf generate test test-deps \
+	test-junit protobuf docker-image agent legal integration-test-binaries \
+	codespell lint linter-version ebpf-profiler format-ebpf pprof-execs \
+	pprof_1_23 pprof_1_24 pprof_1_24_cgo \
+	rust-components rust-targets rust-tests vanity-import-check vanity-import-fix
 
 SHELL := /usr/bin/env bash
 
@@ -50,19 +52,16 @@ GO_FLAGS := -buildvcs=false -ldflags="$(LDFLAGS)"
 
 MAKEFLAGS += -j$(shell nproc)
 
-all: ebpf-profiler
+JUNIT_OUT_DIR ?= /tmp/testresults
 
-debug: GO_TAGS := $(GO_TAGS),debugtracer
-debug: EBPF_FLAGS += debug
-debug: all
+all: ebpf-profiler
 
 # Removes the go build cache and binaries in the current project
 clean:
 	@go clean -cache -i
 	@$(MAKE) -s -C support/ebpf clean
-	@rm -f support/*.test
 	@chmod -Rf u+w go/ || true
-	@rm -rf go .cache
+	@rm -rf go .cache support/*.test interpreter/golabels/integrationtests/pprof_1_*
 	@cargo clean
 
 generate:
@@ -85,7 +84,7 @@ rust-tests: rust-targets
 	cargo test
 
 GOLANGCI_LINT_VERSION = "v2.1.6"
-lint: generate vanity-import-check
+lint: generate vanity-import-check pprof-execs
 	$(MAKE) lint -C support/ebpf
 	docker run --rm -t -v $$(pwd):/app -w /app golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) sh -c "golangci-lint version && golangci-lint config verify && golangci-lint run --max-issues-per-linter -1 --max-same-issues -1"
 
@@ -97,20 +96,20 @@ linter-version:
 
 vanity-import-check:
 	@go install github.com/jcchavezs/porto/cmd/porto@latest
-	@porto --include-internal -l . || ( echo "(run: make vanity-import-fix)"; exit 1 )
+	@porto --skip-dirs "^(LICENSES|go|target).*" --include-internal -l . || ( echo "(run: make vanity-import-fix)"; exit 1 )
 
 vanity-import-fix: $(PORTO)
 	@go install github.com/jcchavezs/porto/cmd/porto@latest
-	@porto --include-internal -w .
+	@porto --skip-dirs "^(LICENSES|go|target).*" --include-internal -w .
 
 test: generate ebpf test-deps
 	# tools/coredump tests build ebpf C-code using CGO to test it against coredumps
 	CGO_ENABLED=1 go test $(GO_FLAGS) -tags $(GO_TAGS) ./...
 
-# This target isn't called from CI, it doesn't work for cross compile (ie TARGET_ARCH=arm64 on
-# amd64) and the CI kernel tests run them already. Useful for local testing.
-sudo-golabels-test: integration-test-binaries
-	(cd support && sudo ./interpreter_golabels_test.test -test.v)
+test-junit: generate ebpf test-deps
+	mkdir -p $(JUNIT_OUT_DIR)
+	go install gotest.tools/gotestsum@latest
+	CGO_ENABLED=1 gotestsum --junitfile $(JUNIT_OUT_DIR)/junit.xml -- $(GO_FLAGS) -tags $(GO_TAGS) ./...
 
 TESTDATA_DIRS:= \
 	nativeunwind/elfunwindinfo/testdata \
@@ -122,19 +121,20 @@ test-deps:
 		($(MAKE) -C "$(testdata_dir)") || exit ; \
 	)
 
-TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support interpreter/golabels/test
+TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support interpreter/golabels/integrationtests
 
-# These binaries are named ".test" to get included into bluebox initramfs
-support/golbls_1_23.test: ./interpreter/golabels/test/main.go
-	CGO_ENABLED=0 GOTOOLCHAIN=go1.23.7 go build -tags $(GO_TAGS),nocgo -o $@ $<
+pprof-execs: pprof_1_23 pprof_1_24 pprof_1_24_cgo
 
-support/golbls_1_24.test: ./interpreter/golabels/test/main.go
-	CGO_ENABLED=0 GOTOOLCHAIN=go1.24.1 go build -tags $(GO_TAGS),nocgo -o $@ $<
+pprof_1_23:
+	CGO_ENABLED=0 GOTOOLCHAIN=go1.23.7 go test -C ./interpreter/golabels/integrationtests/pprof -c -trimpath -tags $(GO_TAGS),nocgo,integration -o ./../$@
 
-support/golbls_cgo.test: ./interpreter/golabels/test/main-cgo.go
-	CGO_ENABLED=1 GOTOOLCHAIN=go1.24.1 go build -ldflags '-extldflags "-static"' -tags $(GO_TAGS),usecgo  -o $@ $<
+pprof_1_24:
+	CGO_ENABLED=0 GOTOOLCHAIN=go1.24.6 go test -C ./interpreter/golabels/integrationtests/pprof -c -trimpath -tags $(GO_TAGS),nocgo,integration -o ./../$@
 
-integration-test-binaries: generate ebpf rust-components support/golbls_1_23.test support/golbls_1_24.test support/golbls_cgo.test
+pprof_1_24_cgo:
+	CGO_ENABLED=1 GOTOOLCHAIN=go1.24.6 go test -C ./interpreter/golabels/integrationtests/pprof -c -ldflags '-extldflags "-static"' -trimpath -tags $(GO_TAGS),withcgo,integration -o ./../$@
+
+integration-test-binaries: generate ebpf pprof-execs
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \
 		(go test -ldflags='-extldflags=-static' -trimpath -c \
 			-tags $(GO_TAGS),static_build,integration \
@@ -148,10 +148,6 @@ docker-image:
 agent:
 	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) otel/opentelemetry-ebpf-profiler-dev:latest \
 	   "make TARGET_ARCH=$(TARGET_ARCH) VERSION=$(VERSION) REVISION=$(REVISION) BUILD_TIMESTAMP=$(BUILD_TIMESTAMP)"
-
-debug-agent:
-	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) otel/opentelemetry-ebpf-profiler-dev:latest \
-	   "make TARGET_ARCH=$(TARGET_ARCH) VERSION=$(VERSION) REVISION=$(REVISION) BUILD_TIMESTAMP=$(BUILD_TIMESTAMP) debug"
 
 legal:
 	@go install github.com/google/go-licenses@latest

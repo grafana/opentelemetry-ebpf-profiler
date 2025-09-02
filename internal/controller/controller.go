@@ -85,14 +85,13 @@ func (c *Controller) Start(ctx context.Context) error {
 
 	// Load the eBPF code and map definitions
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
-		Reporter:               c.reporter,
 		Intervals:              intervals,
 		IncludeTracers:         includeTracers,
 		FilterErrorFrames:      !c.config.SendErrorFrames,
 		SamplesPerSecond:       c.config.SamplesPerSecond,
 		MapScaleFactor:         int(c.config.MapScaleFactor),
 		KernelVersionCheck:     !c.config.NoKernelVersionCheck,
-		DebugTracer:            c.config.VerboseMode,
+		VerboseMode:            c.config.VerboseMode,
 		BPFVerifierLogLevel:    uint32(c.config.BpfVerifierLogLevel),
 		ProbabilisticInterval:  c.config.ProbabilisticInterval,
 		ProbabilisticThreshold: c.config.ProbabilisticThreshold,
@@ -100,6 +99,8 @@ func (c *Controller) Start(ctx context.Context) error {
 		Policy:                 c.config.Policy,
 		FileObserver:           c.config.FileObserver,
 		IncludeEnvVars:         envVars,
+		UProbeLinks:            c.config.UProbeLinks,
+		LoadProbe:              c.config.LoadProbe,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)
@@ -125,6 +126,13 @@ func (c *Controller) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to start off-cpu profiling: %v", err)
 		}
 		log.Printf("Enabled off-cpu profiling with p=%f", c.config.OffCPUThreshold)
+	}
+
+	if len(c.config.UProbeLinks) > 0 {
+		if err := trc.AttachUProbes(c.config.UProbeLinks); err != nil {
+			return fmt.Errorf("failed to attach uprobes: %v", err)
+		}
+		log.Printf("Attached uprobes")
 	}
 
 	if c.config.ProbabilisticThreshold < tracer.ProbabilisticThresholdMax {

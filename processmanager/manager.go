@@ -21,10 +21,9 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
-	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
+	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -59,6 +58,8 @@ var (
 	errUnknownMapping = errors.New("unknown memory mapping")
 	// errUnknownPID indicates that the process is not known to the process manager.
 	errUnknownPID = errors.New("unknown process")
+	// errPIDGone indicates that a process is no longer managed by the process manager.
+	errPIDGone = errors.New("interpreter process gone")
 )
 
 // New creates a new ProcessManager which is responsible for keeping track of loading
@@ -68,14 +69,15 @@ var (
 // fileIDMapper and symbolReporter. Specify nil for fileIDMapper to use the default
 // implementation.
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
-	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
+	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, exeReporter reporter.ExecutableReporter,
 	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool,
 	fo samples.NativeSymbolResolver,
 	policy dynamicprofiling.Policy,
 	includeEnvVars libpf.Set[string],
 ) (*ProcessManager, error) {
 	if policy == nil {
-		return nil, errors.New("no dynamicprofiling Policy provided")
+		policy = dynamicprofiling.AlwaysOnPolicy{}
+		log.Warn("No policy specified, using AlwaysOnPolicy")
 	}
 	if fileIDMapper == nil {
 		var err error
@@ -83,6 +85,9 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize file ID mapping: %v", err)
 		}
+	}
+	if exeReporter == nil {
+		exeReporter = executableReporterStub{}
 	}
 
 	elfInfoCache, err := lru.New[util.OnDiskFileIdentifier, elfInfo](elfInfoCacheSize,
@@ -108,7 +113,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		ebpf:                     ebpf,
 		FileIDMapper:             fileIDMapper,
 		elfInfoCache:             elfInfoCache,
-		reporter:                 symbolReporter,
+		exeReporter:              exeReporter,
 		metricsAddSlice:          metrics.AddSlice,
 		filterErrorFrames:        filterErrorFrames,
 		fileObserver:             fo,
@@ -130,20 +135,18 @@ func metricSummaryToSlice(summary metrics.Summary) []metrics.Metric {
 	return result
 }
 
-// updateMetricSummary gets the metrics from the provided interpreter instance and updaates the
+// updateMetricSummary gets the metrics from the provided interpreter instance and updates the
 // provided summary by aggregating the new metrics into the summary.
 // The caller is responsible to hold the lock on the interpreter.Instance to avoid race conditions.
 func updateMetricSummary(ii interpreter.Instance, summary metrics.Summary) error {
 	instanceMetrics, err := ii.GetAndResetMetrics()
-	if err != nil {
-		return err
-	}
-
+	// Update metrics even if there was an error, because it's possible ii is a MultiInstance
+	// and some of the instances may have returned metrics.
 	for _, metric := range instanceMetrics {
 		summary[metric.ID] += metric.Value
 	}
 
-	return nil
+	return err
 }
 
 // collectInterpreterMetrics starts a goroutine that periodically fetches and reports interpreter
@@ -157,8 +160,8 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		summary := make(map[metrics.MetricID]metrics.MetricValue)
 
 		for pid := range pm.interpreters {
-			for addr := range pm.interpreters[pid] {
-				if err := updateMetricSummary(pm.interpreters[pid][addr], summary); err != nil {
+			for addr, ii := range pm.interpreters[pid] {
+				if err := updateMetricSummary(ii, summary); err != nil {
 					log.Errorf("Failed to get/reset metrics for PID %d at 0x%x: %v",
 						pid, addr, err)
 				}
@@ -201,23 +204,22 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 func (pm *ProcessManager) Close() {
 }
 
-func (pm *ProcessManager) symbolizeFrame(frame int, trace *host.Trace,
-	newTrace *libpf.Trace) error {
+func (pm *ProcessManager) symbolizeFrame(frame int, trace *host.Trace, frames *libpf.Frames) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
 	if len(pm.interpreters[trace.PID]) == 0 {
-		return errors.New("interpreter process gone")
+		return errPIDGone
 	}
 
 	for _, instance := range pm.interpreters[trace.PID] {
-		if err := instance.Symbolize(pm.reporter, &trace.Frames[frame], newTrace); err != nil {
+		if err := instance.Symbolize(&trace.Frames[frame], frames); err != nil {
 			if errors.Is(err, interpreter.ErrMismatchInterpreterType) {
 				// The interpreter type of instance did not match the type of frame.
 				// So continue with the next interpreter instance for this PID.
 				continue
 			}
-			return fmt.Errorf("symbolization failed: %w", err)
+			return err
 		}
 		return nil
 	}
@@ -228,20 +230,22 @@ func (pm *ProcessManager) symbolizeFrame(frame int, trace *host.Trace,
 
 func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace) {
 	traceLen := len(trace.Frames)
-
+	kernelFramesLen := len(trace.KernelFrames)
 	newTrace = &libpf.Trace{
-		Files:        make([]libpf.FileID, 0, traceLen),
-		Linenos:      make([]libpf.AddressOrLineno, 0, traceLen),
-		FrameTypes:   make([]libpf.FrameType, 0, traceLen),
+		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+traceLen),
 		CustomLabels: trace.CustomLabels,
 	}
+	copy(newTrace.Frames, trace.KernelFrames)
 
 	for i := range traceLen {
 		frame := &trace.Frames[i]
 
 		if frame.Type.IsError() {
 			if !pm.filterErrorFrames {
-				newTrace.AppendFrame(frame.Type, libpf.UnsymbolizedFileID, frame.Lineno)
+				newTrace.Frames.Append(&libpf.Frame{
+					Type:            frame.Type,
+					AddressOrLineno: frame.Lineno,
+				})
 			}
 			continue
 		}
@@ -276,18 +280,22 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 
 			// Attempt symbolization of native frames. It is best effort and
 			// provides non-symbolized frames if no native symbolizer is active.
-			if err := pm.symbolizeFrame(i, trace, newTrace); err == nil {
+			if err := pm.symbolizeFrame(i, trace, &newTrace.Frames); err == nil {
 				continue
 			}
 
-			fileID, ok := pm.FileIDMapper.Get(frame.File)
+			mappingFile, ok := pm.FileIDMapper.Get(frame.File)
 			if !ok {
 				log.Debugf(
 					"file ID lookup failed for PID %d, frame %d/%d, frame type %d",
 					trace.PID, i, traceLen, frame.Type)
 
-				newTrace.AppendFrameFull(frame.Type, libpf.UnsymbolizedFileID,
-					libpf.AddressOrLineno(0), mappingStart, mappingEnd, fileOffset)
+				newTrace.Frames.Append(&libpf.Frame{
+					Type:              frame.Type,
+					MappingStart:      mappingStart,
+					MappingEnd:        mappingEnd,
+					MappingFileOffset: fileOffset,
+				})
 				continue
 			}
 
@@ -296,20 +304,27 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
 					mappingEnd = mappingStart + libpf.Address(mapping.Length)
 					fileOffset = mapping.FileOffset
-					pm.observeFile(trace, mapping, fileID)
+					pm.observeFile(trace, mapping, frame.File)
 				}
 			}
-
-			newTrace.AppendFrameFull(frame.Type, fileID,
-				relativeRIP, mappingStart, mappingEnd, fileOffset)
+			newTrace.Frames.Append(&libpf.Frame{
+				Type:              frame.Type,
+				AddressOrLineno:   relativeRIP,
+				MappingStart:      mappingStart,
+				MappingEnd:        mappingEnd,
+				MappingFileOffset: fileOffset,
+				MappingFile:       mappingFile,
+			})
 		default:
-			err := pm.symbolizeFrame(i, trace, newTrace)
+			err := pm.symbolizeFrame(i, trace, &newTrace.Frames)
 			if err != nil {
 				log.Debugf(
 					"symbolization failed for PID %d, frame %d/%d, frame type %d: %v",
 					trace.PID, i, traceLen, frame.Type, err)
 
-				newTrace.AppendFrame(frame.Type, libpf.UnsymbolizedFileID, libpf.AddressOrLineno(0))
+				newTrace.Frames.Append(&libpf.Frame{
+					Type: frame.Type,
+				})
 			}
 		}
 	}
@@ -346,7 +361,7 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 	return serviceName
 }
 
-func (pm *ProcessManager) observeFile(trace *host.Trace, mapping Mapping, fileID libpf.FileID) {
+func (pm *ProcessManager) observeFile(trace *host.Trace, mapping Mapping, fileID host.FileID) {
 	if pm.fileObserver == nil {
 		return
 	}
@@ -357,14 +372,4 @@ func (pm *ProcessManager) observeFile(trace *host.Trace, mapping Mapping, fileID
 	elfRef := pfelf.NewReference(mapping.FilePath.String(), pr)
 	defer elfRef.Close()
 	_ = pm.fileObserver.ObserveExecutable(fileID, elfRef)
-}
-
-// AddSynthIntervalData adds synthetic stack deltas to the manager. This is useful for cases where
-// populating the information via the stack delta provider isn't viable, for example because the
-// `.eh_frame` section for a binary is broken. If `AddSynthIntervalData` was called for a given
-// file ID, the stack delta provider will not be consulted and the manually added stack deltas take
-// precedence.
-func (pm *ProcessManager) AddSynthIntervalData(fileID host.FileID,
-	data sdtypes.IntervalData) error {
-	return pm.eim.AddSynthIntervalData(fileID, data)
 }

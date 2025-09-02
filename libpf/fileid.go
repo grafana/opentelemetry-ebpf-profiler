@@ -23,20 +23,12 @@ type FileID struct {
 	basehash.Hash128
 }
 
-// UnsymbolizedFileID is used as 128-bit FileID when symbolization fails.
-var UnsymbolizedFileID = NewFileID(math.MaxUint64, math.MaxUint64)
-
 // UnknownKernelFileID is used as 128-bit FileID when the host agent isn't able to derive a FileID
 // for a kernel frame.
 var UnknownKernelFileID = NewFileID(math.MaxUint64-2, math.MaxUint64-2)
 
 func NewFileID(hi, lo uint64) FileID {
 	return FileID{basehash.New128(hi, lo)}
-}
-
-// NewStubFileID returns a FrameType specific stub FileID.
-func NewStubFileID(typ FrameType) FileID {
-	return FileID{basehash.New128(0x578b, uint64(0x1d00|typ))}
 }
 
 // FileIDFromBytes parses a byte slice into the internal data representation for a file ID.

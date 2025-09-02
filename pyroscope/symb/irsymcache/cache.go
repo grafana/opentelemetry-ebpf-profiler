@@ -2,19 +2,21 @@ package irsymcache // import "go.opentelemetry.io/ebpf-profiler/pyroscope/symb/i
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
+	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 	"github.com/sirupsen/logrus"
 
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
@@ -45,12 +47,12 @@ type Resolver struct {
 	logger   *logrus.Entry
 	f        TableFactory
 	cacheDir string
-	cache    *lru.SyncedLRU[libpf.FileID, cachedMarker]
+	cache    *lru.SyncedLRU[host.FileID, cachedMarker]
 	jobs     chan convertJob
 	wg       sync.WaitGroup
 
 	mutex    sync.Mutex
-	tables   map[libpf.FileID]Table
+	tables   map[host.FileID]Table
 	shutdown chan struct{}
 }
 
@@ -90,7 +92,7 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 		cacheDir: opt.Path,
 		jobs:     make(chan convertJob, 1),
 		shutdown: shutdown,
-		tables:   make(map[libpf.FileID]Table),
+		tables:   make(map[host.FileID]Table),
 	}
 	res.cacheDir = filepath.Join(res.cacheDir, impl.Name())
 
@@ -98,13 +100,13 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 		return nil, err
 	}
 
-	cache, err := lru.NewSynced[libpf.FileID, cachedMarker](
+	cache, err := lru.NewSynced[host.FileID, cachedMarker](
 		opt.SizeEntries,
-		func(id libpf.FileID,
+		func(id host.FileID,
 		) uint32 {
-			return id.Hash32()
+			return uint32(id)
 		})
-	cache.SetOnEvict(func(id libpf.FileID, marker cachedMarker) {
+	cache.SetOnEvict(func(id host.FileID, marker cachedMarker) {
 		if marker == erroredMarker {
 			return
 		}
@@ -129,7 +131,7 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 			return nil
 		}
 		filename := filepath.Base(path)
-		id, err := libpf.FileIDFromString(filename)
+		id, err := FileIDFromStringNoQuotes(filename)
 		if err != nil {
 			return nil
 		}
@@ -171,12 +173,12 @@ func convertLoop(res *Resolver, shutdown <-chan struct{}) {
 	}
 }
 
-func (c *Resolver) ExecutableKnown(id libpf.FileID) bool {
+func (c *Resolver) ExecutableKnown(id host.FileID) bool {
 	_, known := c.cache.Get(id)
 	return known
 }
 
-func (c *Resolver) ObserveExecutable(fid libpf.FileID, elfRef *pfelf.Reference) error {
+func (c *Resolver) ObserveExecutable(fid host.FileID, elfRef *pfelf.Reference) error {
 	o, ok := elfRef.ELFOpener.(pfelf.RootFSOpener)
 	if !ok {
 		return nil
@@ -213,7 +215,7 @@ func (c *Resolver) ObserveExecutable(fid libpf.FileID, elfRef *pfelf.Reference) 
 
 func (c *Resolver) convert(
 	l *logrus.Entry,
-	fid libpf.FileID,
+	fid host.FileID,
 	elfRef *pfelf.Reference,
 	o pfelf.RootFSOpener,
 ) error {
@@ -274,12 +276,12 @@ func (c *Resolver) convertSync(src, dst *os.File) error {
 	return c.f.ConvertTable(src, dst)
 }
 
-func (c *Resolver) tableFilePath(fid libpf.FileID) string {
+func (c *Resolver) tableFilePath(fid host.FileID) string {
 	return filepath.Join(c.cacheDir, fid.StringNoQuotes())
 }
 
 func (c *Resolver) ResolveAddress(
-	fid libpf.FileID,
+	fid host.FileID,
 	addr uint64,
 ) (samples.SourceInfo, error) {
 	c.mutex.Lock()
@@ -322,4 +324,18 @@ func (c *Resolver) Close() error {
 	}
 	clear(c.tables)
 	return nil
+}
+
+func FileIDFromStringNoQuotes(s string) (host.FileID, error) {
+	if len(s) != 32 {
+		return host.FileID(0), fmt.Errorf("invalid length for FileID string '%s': %d (expected 32)", s, len(s))
+	}
+
+	// Parse the first 16 hex characters as uint64
+	val, err := strconv.ParseUint(s[:16], 16, 64)
+	if err != nil {
+		return host.FileID(0), fmt.Errorf("failed to parse FileID string '%s': %v", s, err)
+	}
+
+	return host.FileID(val), nil
 }

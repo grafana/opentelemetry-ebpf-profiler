@@ -6,7 +6,6 @@
 package tracer_test
 
 import (
-	"context"
 	"math"
 	"runtime"
 	"sync"
@@ -24,10 +23,15 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/rlimit"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
+
+type mockIntervals struct{}
+
+func (mockIntervals) MonitorInterval() time.Duration    { return 1 * time.Second }
+func (mockIntervals) TracePollInterval() time.Duration  { return 250 * time.Millisecond }
+func (mockIntervals) PIDCleanupInterval() time.Duration { return 1 * time.Second }
 
 // forceContextSwitch makes sure two Go threads are running concurrently
 // and that there will be a context switch between those two.
@@ -75,13 +79,13 @@ func runKernelFrameProbe(t *testing.T, tr *tracer.Tracer) {
 	require.NoError(t, err)
 }
 
-func validateTrace(t *testing.T, numKernelFrames int, expected, returned *host.Trace) {
+func validateTrace(t *testing.T, expected, returned *host.Trace) {
 	t.Helper()
 
-	assert.Equal(t, len(expected.Frames), len(returned.Frames)-numKernelFrames)
+	require.Len(t, returned.Frames, len(expected.Frames))
 
 	for i, expFrame := range expected.Frames {
-		retFrame := returned.Frames[numKernelFrames+i]
+		retFrame := returned.Frames[i]
 		assert.Equal(t, expFrame.File, retFrame.File)
 		assert.Equal(t, expFrame.Lineno, retFrame.Lineno)
 		assert.Equal(t, expFrame.Type, retFrame.Type)
@@ -101,13 +105,12 @@ func generateMaxLengthTrace() host.Trace {
 }
 
 func TestTraceTransmissionAndParsing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	enabledTracers, _ := tracertypes.Parse("")
 	enabledTracers.Enable(tracertypes.PythonTracer)
 	tr, err := tracer.NewTracer(ctx, &tracer.Config{
-		Reporter:               &testutils.MockReporter{},
-		Intervals:              &testutils.MockIntervals{},
+		Intervals:              &mockIntervals{},
 		IncludeTracers:         enabledTracers,
 		FilterErrorFrames:      false,
 		SamplesPerSecond:       20,
@@ -118,7 +121,7 @@ func TestTraceTransmissionAndParsing(t *testing.T) {
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
 		OffCPUThreshold:        1 * math.MaxUint32,
-		DebugTracer:            true,
+		VerboseMode:            true,
 	})
 	require.NoError(t, err)
 
@@ -205,14 +208,9 @@ Loop:
 			trace, ok := traces[testcase.id]
 			require.Truef(t, ok, "trace ID %d not received", testcase.id)
 
-			var numKernelFrames int
-			for _, frame := range trace.Frames {
-				if frame.Type == support.FrameMarkerKernel {
-					numKernelFrames++
-				}
-			}
+			numKernelFrames := len(trace.KernelFrames)
+			userspaceFrameCount := len(trace.Frames)
 
-			userspaceFrameCount := len(trace.Frames) - numKernelFrames
 			assert.Equal(t, len(testcase.userSpaceTrace.Frames), userspaceFrameCount)
 			assert.False(t, !testcase.hasKernelFrames && numKernelFrames > 0,
 				"unexpected kernel frames")
@@ -229,12 +227,20 @@ Loop:
 			t.Logf("Received %d user frames and %d kernel frames",
 				userspaceFrameCount, numKernelFrames)
 
-			validateTrace(t, numKernelFrames, &testcase.userSpaceTrace, trace)
+			validateTrace(t, &testcase.userSpaceTrace, trace)
 		})
 	}
 }
 
 func TestAllTracers(t *testing.T) {
-	_, _ = testutils.StartTracer(context.Background(), t, tracertypes.AllTracers(),
-		&testutils.MockReporter{})
+	_, err := tracer.NewTracer(t.Context(), &tracer.Config{
+		Intervals:              &mockIntervals{},
+		IncludeTracers:         tracertypes.AllTracers(),
+		SamplesPerSecond:       20,
+		ProbabilisticInterval:  100,
+		ProbabilisticThreshold: 100,
+		OffCPUThreshold:        uint32(math.MaxUint32 / 100),
+		VerboseMode:            true,
+	})
+	require.NoError(t, err)
 }
