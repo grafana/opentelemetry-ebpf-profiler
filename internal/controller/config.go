@@ -42,10 +42,6 @@ type Config struct {
 
 	Reporter reporter.Reporter
 
-	PyroscopeDynamicProfilingPolicy bool
-	SymbCachePath                   string
-	SymbCacheSizeEntries            int
-
 	Fs *flag.FlagSet
 
 	IncludeEnvVars string
