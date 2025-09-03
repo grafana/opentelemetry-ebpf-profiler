@@ -3,7 +3,7 @@
 
 package controller // import "go.opentelemetry.io/ebpf-profiler/pyroscope/internalshim/controller"
 
-// This file is a copy if the cli_flags.go file in the main package for use in alloy to get
+// This file is a copy of the cli_flags.go file in the main package for use in alloy to get
 // the same default configuration values
 
 import (
