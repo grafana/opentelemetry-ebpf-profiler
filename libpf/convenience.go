@@ -44,3 +44,13 @@ func SliceFrom(data any) []byte {
 	}
 	return s
 }
+
+func SliceFromSlice[T any](data []T) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	return unsafe.Slice(
+		(*byte)(unsafe.Pointer(&data[0])),
+		len(data)*int(unsafe.Sizeof(data[0])),
+	)
+}

@@ -24,14 +24,17 @@ import (
 )
 
 var (
-	////go:embed pprof_1_23
-	//pprof_1_23 []byte
+	//go:embed pprof_1_23
+	pprof_1_23 []byte
 
 	//go:embed pprof_1_24
 	pprof_1_24 []byte
 
 	//go:embed pprof_1_24_cgo
 	pprof_1_24_cgo []byte
+
+	//go:embed pprof_1_24_cgo_pie
+	pprof_1_24_cgo_pie []byte
 )
 
 type mockIntervals struct{}
@@ -52,9 +55,10 @@ func Test_Golabels(t *testing.T) {
 	tests := map[string]struct {
 		bin []byte
 	}{
-		//"pprof_1_23":     {bin: pprof_1_23},
-		"pprof_1_24":     {bin: pprof_1_24},
-		"pprof_1_24_cgo": {bin: pprof_1_24_cgo},
+		"pprof_1_23":         {bin: pprof_1_23},
+		"pprof_1_24":         {bin: pprof_1_24},
+		"pprof_1_24_cgo":     {bin: pprof_1_24_cgo},
+		"pprof_1_24_cgo_pie": {bin: pprof_1_24_cgo_pie},
 	}
 
 	for name, tc := range tests {
@@ -115,7 +119,12 @@ func Test_Golabels(t *testing.T) {
 
 			go func() {
 				if err := exec.CommandContext(ctx, exe.Name()).Run(); err != nil {
-					t.Log(err)
+					select {
+					case <-ctx.Done():
+						// Context is canceled, meaning the test is done.
+					default:
+						t.Log(err)
+					}
 				}
 			}()
 
