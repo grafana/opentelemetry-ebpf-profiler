@@ -11,6 +11,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3"
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
@@ -79,6 +80,7 @@ var (
 
 func parseArgs() (*controller.Config, error) {
 	args := new(controller.Config)
+	args.Policy = dynamicprofiling.AlwaysOnPolicy{}
 
 	fs := flag.NewFlagSet("ebpf-profiler", flag.ExitOnError)
 
