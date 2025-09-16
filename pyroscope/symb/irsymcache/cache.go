@@ -1,6 +1,7 @@
 package irsymcache // import "go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 
 import (
+	"debug/elf"
 	"errors"
 	"fmt"
 	"os"
@@ -202,7 +203,7 @@ func (c *Resolver) ObserveExecutable(fid host.FileID, elfRef *pfelf.Reference) e
 	if err != nil {
 		c.cache.Add(fid, erroredMarker)
 		l = l.WithError(err).WithField("duration", time.Since(t1))
-		if !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, elf.ErrNoSymbols) {
 			l.Error("conversion failed")
 		} else {
 			l.Debug("conversion failed")
