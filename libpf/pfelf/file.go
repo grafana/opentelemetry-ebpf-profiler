@@ -34,8 +34,11 @@ import (
 	"syscall"
 	"unsafe"
 
+	log "github.com/sirupsen/logrus"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf/internal/mmap"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 )
 
@@ -202,7 +205,7 @@ func newFile(r io.ReaderAt, closer io.Closer,
 	}
 
 	hdr := &f.elfHeader
-	if _, err := r.ReadAt(libpf.SliceFrom(hdr), 0); err != nil {
+	if _, err := r.ReadAt(pfunsafe.FromPointer(hdr), 0); err != nil {
 		return nil, err
 	}
 	if !bytes.Equal(hdr.Ident[0:4], []byte{0x7f, 'E', 'L', 'F'}) {
@@ -226,7 +229,7 @@ func newFile(r io.ReaderAt, closer io.Closer,
 	}
 
 	progs := make([]elf.Prog64, hdr.Phnum)
-	if _, err := r.ReadAt(libpf.SliceFrom(progs), int64(hdr.Phoff)); err != nil {
+	if _, err := r.ReadAt(pfunsafe.FromSlice(progs), int64(hdr.Phoff)); err != nil {
 		return nil, err
 	}
 
@@ -303,7 +306,7 @@ func newFile(r io.ReaderAt, closer io.Closer,
 				bias = int64(f.bias)
 			}
 			for {
-				if _, err := rdr.Read(libpf.SliceFrom(&dyn)); err != nil {
+				if _, err := rdr.Read(pfunsafe.FromPointer(&dyn)); err != nil {
 					break
 				}
 				adjustedVal := int64(dyn.Val)
@@ -389,7 +392,7 @@ func (f *File) LoadSections() error {
 
 	// Load section headers
 	sections := make([]elf.Section64, hdr.Shnum)
-	if _, err := f.elfReader.ReadAt(libpf.SliceFrom(sections), int64(hdr.Shoff)); err != nil {
+	if _, err := f.elfReader.ReadAt(pfunsafe.FromSlice(sections), int64(hdr.Shoff)); err != nil {
 		return err
 	}
 
@@ -702,7 +705,7 @@ func (f *File) insertTLSDescriptorsForSection(descs map[string]libpf.Address,
 		sym := elf.Sym64{}
 		symSz := int64(unsafe.Sizeof(sym))
 		symNo := int64(rela.Info >> 32)
-		n, err := symtabSection.ReadAt(libpf.SliceFrom(&sym), symNo*symSz)
+		n, err := symtabSection.ReadAt(pfunsafe.FromPointer(&sym), symNo*symSz)
 		if err != nil || n != int(symSz) {
 			return fmt.Errorf("failed to read relocation symbol: %w", err)
 		}
@@ -922,6 +925,15 @@ func (sh *Section) Data(maxSize uint) ([]byte, error) {
 	return p, err
 }
 
+// SetDontNeed sets the flag MADV_DONTNEED on the mmaped data.
+func (f *File) SetDontNeed() {
+	if mapping, ok := f.elfReader.(*mmap.ReaderAt); ok {
+		if err := mapping.SetMadvDontNeed(); err != nil {
+			log.Errorf("Failed to set MADV_DONTNEED: %v", err)
+		}
+	}
+}
+
 // ReadAt reads bytes from given virtual address
 func (f *File) ReadAt(p []byte, addr int64) (int, error) {
 	return f.ReadVirtualMemory(p, addr)
@@ -941,7 +953,7 @@ func (f *File) readAndMatchSymbol(n uint32, name libpf.SymbolName) (libpf.Symbol
 
 	// Read symbol descriptor and expected name
 	symSz := int64(unsafe.Sizeof(sym))
-	if _, err := f.ReadVirtualMemory(libpf.SliceFrom(&sym),
+	if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(&sym),
 		f.symbolsAddr+int64(n)*symSz); err != nil {
 		return libpf.Symbol{}, false
 	}
@@ -952,7 +964,7 @@ func (f *File) readAndMatchSymbol(n uint32, name libpf.SymbolName) (libpf.Symbol
 	}
 
 	// Verify that name matches
-	if sname[slen] != 0 || unsafe.String(unsafe.SliceData(sname), slen) != string(name) {
+	if sname[slen] != 0 || pfunsafe.ToString(sname[:slen]) != string(name) {
 		return libpf.Symbol{}, false
 	}
 
@@ -989,7 +1001,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 		// blog link (on top of this file) for details how this works.
 		hdr := &f.gnuHash.header
 		if hdr.numBuckets == 0 {
-			if _, err := f.ReadVirtualMemory(libpf.SliceFrom(hdr), f.gnuHash.addr); err != nil {
+			if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(hdr), f.gnuHash.addr); err != nil {
 				return nil, err
 			}
 			if hdr.numBuckets == 0 || hdr.bloomSize == 0 {
@@ -1003,7 +1015,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 		var bloom uint
 		h := calcGNUHash(symbol)
 		offs := f.gnuHash.addr + int64(unsafe.Sizeof(gnuHashHeader{}))
-		if _, err := f.ReadVirtualMemory(libpf.SliceFrom(&bloom), offs+
+		if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(&bloom), offs+
 			ptrSize*int64((h/ptrSizeBits)%hdr.bloomSize)); err != nil {
 			return nil, err
 		}
@@ -1016,7 +1028,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 		// Read the initial symbol index to start looking from
 		offs += int64(hdr.bloomSize) * int64(unsafe.Sizeof(bloom))
 		var i uint32
-		if _, err := f.ReadVirtualMemory(libpf.SliceFrom(&i),
+		if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(&i),
 			offs+4*int64(h%hdr.numBuckets)); err != nil {
 			return nil, err
 		}
@@ -1029,7 +1041,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 		h |= 1
 		for {
 			var h2 uint32
-			if _, err := f.ReadVirtualMemory(libpf.SliceFrom(&h2), offs); err != nil {
+			if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(&h2), offs); err != nil {
 				return nil, err
 			}
 			// Do a full match of the symbol if the symbol hash matches
@@ -1049,7 +1061,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 		// Normal ELF symbol lookup. Refer to ELF spec, part 2 "Hash Table" (2-19)
 		hdr := &f.sysvHash.header
 		if hdr.numBuckets == 0 {
-			if _, err := f.ReadVirtualMemory(libpf.SliceFrom(hdr), f.sysvHash.addr); err != nil {
+			if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(hdr), f.sysvHash.addr); err != nil {
 				return nil, err
 			}
 			if hdr.numBuckets == 0 {
@@ -1060,7 +1072,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 		offs := f.sysvHash.addr + int64(unsafe.Sizeof(*hdr))
 		h := calcSysvHash(symbol)
 		bucket := int64(h % hdr.numBuckets)
-		if _, err := f.ReadVirtualMemory(libpf.SliceFrom(&i), offs+4*bucket); err != nil {
+		if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(&i), offs+4*bucket); err != nil {
 			return nil, err
 		}
 		offs += 4 * int64(hdr.numBuckets)
@@ -1068,7 +1080,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 			if s, ok := f.readAndMatchSymbol(i, symbol); ok {
 				return &s, nil
 			}
-			if _, err := f.ReadVirtualMemory(libpf.SliceFrom(&i), offs+4*int64(i)); err != nil {
+			if _, err := f.ReadVirtualMemory(pfunsafe.FromPointer(&i), offs+4*int64(i)); err != nil {
 				return nil, err
 			}
 		}
