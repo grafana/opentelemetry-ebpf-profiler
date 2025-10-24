@@ -21,6 +21,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
@@ -109,7 +110,7 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 		var addrs [2]string
 		var devs [2]string
 
-		line := stringutil.ByteSlice2String(scanner.Bytes())
+		line := pfunsafe.ToString(scanner.Bytes())
 		if stringutil.FieldsN(line, fields[:]) < 5 {
 			numParseErrors++
 			continue
@@ -263,10 +264,12 @@ func (sp *systemProcess) GetMappings() ([]Mapping, uint32, error) {
 		}
 	}
 
-	fileToMapping := make(map[string]*Mapping, len(mappings))
+	fileToMapping := make(map[string]*Mapping)
 	for idx := range mappings {
 		m := &mappings[idx]
-		fileToMapping[m.Path.String()] = m
+		if m.Path != libpf.NullString {
+			fileToMapping[m.Path.String()] = m
+		}
 	}
 	sp.fileToMapping = fileToMapping
 	return mappings, numParseErrors, nil
