@@ -358,3 +358,10 @@ func testFileId(i uint64) libpf.FileID {
 		Hash128: basehash.New128(i, uint64(0)),
 	}
 }
+
+func TestFileID(t *testing.T) {
+	id := libpf.NewFileID(0xcafebabedeadbeef, 0xbebacaca12345678)
+	quotes, err := FileIDFromStringNoQuotes(id.StringNoQuotes())
+	require.NoError(t, err)
+	assert.Equal(t, id, quotes)
+}
