@@ -22,22 +22,22 @@ import (
 	"github.com/elastic/go-perf"
 	log "github.com/sirupsen/logrus"
 	"github.com/zeebo/xxh3"
-	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/rlimit"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
-	"go.opentelemetry.io/ebpf-profiler/tracehandler"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
@@ -54,6 +54,13 @@ const (
 const (
 	probProfilingEnable  = 1
 	probProfilingDisable = -1
+)
+
+// Names of tracepoint hooks for sched_process_free. There are two hooks
+// as the tracepoint format has changed for kernel versions 6.16+.
+const (
+	schedProcessFreeV1 = "tracepoint__sched_process_free_pre616"
+	schedProcessFreeV2 = "tracepoint__sched_process_free"
 )
 
 // Intervals is a subset of config.IntervalsAndTimers.
@@ -115,6 +122,8 @@ type Config struct {
 	// ExecutableReporter allows to configure a ExecutableReporter to hook seen executables.
 	// NOTE: This is used by external implementations embedding opentelemtry-ebpf-profiler.
 	ExecutableReporter reporter.ExecutableReporter
+	// TraceReporter is the interface to report traces with.
+	TraceReporter reporter.TraceReporter
 	// Intervals provides access to globally configured timers and counters.
 	Intervals Intervals
 	// IncludeTracers holds information about which tracers are enabled.
@@ -172,7 +181,17 @@ func goString(cstr []byte) string {
 	if index < 0 {
 		index = len(cstr)
 	}
-	return strings.Clone(unsafe.String(unsafe.SliceData(cstr), index))
+	return strings.Clone(pfunsafe.ToString(cstr[:index]))
+}
+
+// schedProcessFreeHookName returns the name of the tracepoint hook to use.
+// This function requires that only one of (schedProcessFreeV1, schedProcessFreeV2)
+// be present in progNames.
+func schedProcessFreeHookName(progNames libpf.Set[string]) string {
+	if _, ok := progNames[schedProcessFreeV1]; ok {
+		return schedProcessFreeV1
+	}
+	return schedProcessFreeV2
 }
 
 // NewTracer loads eBPF code and map definitions from the ELF module at the configured path.
@@ -201,7 +220,8 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	hasBatchOperations := ebpfHandler.SupportsGenericBatchOperations()
 
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
-		ebpfHandler, nil, cfg.ExecutableReporter, elfunwindinfo.NewStackDeltaProvider(),
+		ebpfHandler, nil, cfg.TraceReporter, cfg.ExecutableReporter,
+		elfunwindinfo.NewStackDeltaProvider(),
 		cfg.FilterErrorFrames, cfg.Policy, cfg.IncludeEnvVars)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
@@ -283,15 +303,26 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	// References to eBPF maps in the eBPF programs are just placeholders that need to be
 	// replaced by the actual loaded maps later on with RewriteMaps before loading the
 	// programs into the kernel.
+	major, minor, patch, err := GetCurrentKernelVersion()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get kernel version: %v", err)
+	}
+
 	coll, err := support.LoadCollectionSpec()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load specification for tracers: %v", err)
 	}
 
-	if cfg.VerboseMode {
-		if err = coll.Variables["with_debug_output"].Set(uint32(1)); err != nil {
-			return nil, nil, fmt.Errorf("failed to set debug output: %v", err)
-		}
+	if major > 6 || (major == 6 && minor >= 16) {
+		// Tracepoint format for sched_process_free has changed in v6.16+.
+		delete(coll.Programs, schedProcessFreeV1)
+	} else {
+		delete(coll.Programs, schedProcessFreeV2)
+	}
+
+	// Initialize eBPF variables before loading programs and maps.
+	if err = loadRodataVars(coll, kmod, cfg); err != nil {
+		return nil, nil, fmt.Errorf("failed to set RODATA variables: %v", err)
 	}
 
 	err = buildStackDeltaTemplates(coll)
@@ -317,11 +348,6 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	}
 
 	if cfg.KernelVersionCheck {
-		var major, minor, patch uint32
-		major, minor, patch, err = GetCurrentKernelVersion()
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get kernel version: %v", err)
-		}
 		if hasProbeReadBug(major, minor, patch) {
 			if err = checkForMaccessPatch(coll, ebpfMaps, kmod); err != nil {
 				return nil, nil, fmt.Errorf("your kernel version %d.%d.%d may be "+
@@ -435,11 +461,6 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		}
 	}
 
-	if err = loadSystemConfig(coll, ebpfMaps, kmod, cfg.IncludeTracers,
-		cfg.OffCPUThreshold, cfg.FilterErrorFrames); err != nil {
-		return nil, nil, fmt.Errorf("failed to load system config: %v", err)
-	}
-
 	if err = removeTemporaryMaps(ebpfMaps); err != nil {
 		return nil, nil, fmt.Errorf("failed to remove temporary maps: %v", err)
 	}
@@ -541,9 +562,11 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 
 	progs := make([]progLoaderHelper, len(tailCallProgs)+2)
 	copy(progs, tailCallProgs)
+
+	schedProcessFree := schedProcessFreeHookName(libpf.MapKeysToSet(coll.Programs))
 	progs = append(progs,
 		progLoaderHelper{
-			name:             "tracepoint__sched_process_free",
+			name:             schedProcessFree,
 			noTailCallTarget: true,
 			enable:           true,
 		},
@@ -1162,7 +1185,6 @@ func (t *Tracer) AttachUProbes(uprobes []string) error {
 	return nil
 }
 
-// TraceProcessor gets the trace processor.
-func (t *Tracer) TraceProcessor() tracehandler.TraceProcessor {
-	return t.processManager
+func (t *Tracer) HandleTrace(bpfTrace *host.Trace) {
+	t.processManager.HandleTrace(bpfTrace)
 }

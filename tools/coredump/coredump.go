@@ -19,12 +19,14 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 // #include <stdlib.h>
 // #include "../../support/ebpf/types.h"
 // int unwind_traces(u64 id, int debug, u64 tp_base, void *ctx);
+// void initialize_rodata_variables(u64 new_inv_pac_mask);
 import "C"
 
 // sliceBuffer creates a Go slice from C buffer
@@ -90,6 +92,25 @@ func formatFrame(frame *libpf.Frame) (string, error) {
 	return fmt.Sprintf("?+0x%x", frame.AddressOrLineno), nil
 }
 
+type traceReporter struct {
+	frames []string
+}
+
+func (t *traceReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
+	t.frames = nil
+	frames := make([]string, 0, len(trace.Frames))
+	for _, f := range trace.Frames {
+		frame := f.Value()
+		frameText, err := formatFrame(&frame)
+		if err != nil {
+			return err
+		}
+		frames = append(frames, frameText)
+	}
+	t.frames = frames
+	return nil
+}
+
 func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	lwpFilter libpf.Set[libpf.PID]) ([]ThreadInfo, error) {
 	todo, cancel := context.WithCancel(ctx)
@@ -135,14 +156,18 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	ebpfCtx := newEBPFContext(pr)
 	defer ebpfCtx.release()
 
+	inverse_pac_mask := ^(pr.GetMachineData().CodePACMask)
+	C.initialize_rodata_variables(C.u64(inverse_pac_mask))
+
 	coredumpEbpfMaps := ebpfMapsCoredump{ctx: ebpfCtx}
+	traceReporter := traceReporter{}
 
 	// Instantiate managers and enable all tracers by default
 	includeTracers, _ := tracertypes.Parse("all")
 
 	manager, err := pm.New(todo, includeTracers, monitorInterval, &coredumpEbpfMaps,
-		pm.NewMapFileIDMapper(), nil, elfunwindinfo.NewStackDeltaProvider(), false,
-		dynamicprofiling.AlwaysOnPolicy{}, libpf.Set[string]{})
+		pm.NewMapFileIDMapper(), &traceReporter, nil,
+		elfunwindinfo.NewStackDeltaProvider(), false, dynamicprofiling.AlwaysOnPolicy{}, libpf.Set[string]{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Interpreter manager: %v", err)
 	}
@@ -164,17 +189,11 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 			return nil, fmt.Errorf("failed to unwind lwp %v: %v", thread.LWP, rc)
 		}
 		// Symbolize traces with interpreter manager
-		trace := manager.ConvertTrace(&ebpfCtx.trace)
-		tinfo := ThreadInfo{LWP: thread.LWP}
-		for _, f := range trace.Frames {
-			frame := f.Value()
-			frameText, err := formatFrame(&frame)
-			if err != nil {
-				return nil, err
-			}
-			tinfo.Frames = append(tinfo.Frames, frameText)
-		}
-		info = append(info, tinfo)
+		manager.HandleTrace(&ebpfCtx.trace)
+		info = append(info, ThreadInfo{
+			LWP:    thread.LWP,
+			Frames: traceReporter.frames,
+		})
 	}
 
 	return info, nil

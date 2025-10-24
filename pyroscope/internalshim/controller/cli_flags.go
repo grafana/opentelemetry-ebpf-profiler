@@ -13,6 +13,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3"
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
@@ -81,11 +82,12 @@ var (
 
 func ParseArgs() (*controller.Config, error) {
 	args := new(controller.Config)
+	args.Policy = dynamicprofiling.AlwaysOnPolicy{}
 
 	fs := flag.NewFlagSet("ebpf-profiler", flag.ExitOnError)
 
 	// Please keep the parameters ordered alphabetically in the source-code.
-	fs.UintVar(&args.BpfVerifierLogLevel, "bpf-log-level", 0, bpfVerifierLogLevelHelp)
+	fs.UintVar(&args.BPFVerifierLogLevel, "bpf-log-level", 0, bpfVerifierLogLevelHelp)
 
 	fs.StringVar(&args.CollAgentAddr, "collection-agent", "", collAgentAddrHelp)
 	fs.BoolVar(&args.Copyright, "copyright", false, copyrightHelp)
