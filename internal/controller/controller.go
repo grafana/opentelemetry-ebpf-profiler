@@ -97,7 +97,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		ProbabilisticThreshold: c.config.ProbabilisticThreshold,
 		OffCPUThreshold:        uint32(c.config.OffCPUThreshold * float64(math.MaxUint32)),
 		Policy:                 c.config.Policy,
-		FileObserver:           c.config.FileObserver,
+		ExecutableReporter:     c.config.ExecutableReporter,
 		IncludeEnvVars:         envVars,
 		UProbeLinks:            c.config.UProbeLinks,
 		LoadProbe:              c.config.LoadProbe,

@@ -7,18 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
-	"go.opentelemetry.io/ebpf-profiler/host"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-
 	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
 
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
 
@@ -30,7 +27,7 @@ var cached cachedMarker = 1
 var erroredMarker cachedMarker = 2
 
 type Table interface {
-	Lookup(addr uint64) (samples.SourceInfo, error)
+	Lookup(addr uint64) (SourceInfo, error)
 	Close()
 }
 
@@ -44,17 +41,33 @@ func NewTableFactory() TableFactory {
 	return TableTableFactory{}
 }
 
+var _ reporter.ExecutableReporter = (*Resolver)(nil)
+
 type Resolver struct {
 	logger   *logrus.Entry
 	f        TableFactory
 	cacheDir string
-	cache    *lru.SyncedLRU[host.FileID, cachedMarker]
+	cache    *lru.SyncedLRU[libpf.FileID, cachedMarker]
 	jobs     chan convertJob
 	wg       sync.WaitGroup
 
 	mutex    sync.Mutex
-	tables   map[host.FileID]Table
+	tables   map[libpf.FileID]Table
 	shutdown chan struct{}
+}
+
+func (c *Resolver) ReportExecutable(md *reporter.ExecutableMetadata) {
+	if !md.MappingFile.Valid() {
+		return
+	}
+	m := md.MappingFile.Value()
+	if c.ExecutableKnown(m.FileID) {
+		return
+	}
+	err := c.ObserveExecutable(m.FileID, md)
+	if err != nil {
+		c.logger.WithError(err).Error("failed to observe executable")
+	}
 }
 
 func (c *Resolver) Cleanup() {
@@ -93,7 +106,7 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 		cacheDir: opt.Path,
 		jobs:     make(chan convertJob, 1),
 		shutdown: shutdown,
-		tables:   make(map[host.FileID]Table),
+		tables:   make(map[libpf.FileID]Table),
 	}
 	res.cacheDir = filepath.Join(res.cacheDir, impl.Name())
 
@@ -101,13 +114,13 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 		return nil, err
 	}
 
-	cache, err := lru.NewSynced[host.FileID, cachedMarker](
+	cache, err := lru.NewSynced[libpf.FileID, cachedMarker](
 		opt.SizeEntries,
-		func(id host.FileID,
+		func(id libpf.FileID,
 		) uint32 {
-			return uint32(id)
+			return id.Hash32()
 		})
-	cache.SetOnEvict(func(id host.FileID, marker cachedMarker) {
+	cache.SetOnEvict(func(id libpf.FileID, marker cachedMarker) {
 		if marker == erroredMarker {
 			return
 		}
@@ -174,32 +187,27 @@ func convertLoop(res *Resolver, shutdown <-chan struct{}) {
 	}
 }
 
-func (c *Resolver) ExecutableKnown(id host.FileID) bool {
+func (c *Resolver) ExecutableKnown(id libpf.FileID) bool {
 	_, known := c.cache.Get(id)
 	return known
 }
 
-func (c *Resolver) ObserveExecutable(fid host.FileID, elfRef *pfelf.Reference) error {
-	o, ok := elfRef.ELFOpener.(pfelf.RootFSOpener)
-	if !ok {
-		return nil
+func (c *Resolver) ObserveExecutable(fid libpf.FileID, md *reporter.ExecutableMetadata) error {
+	if !md.MappingFile.Valid() {
+		return fmt.Errorf("invalid mapping file")
 	}
-	if elfRef.FileName() == process.VdsoPathName.String() {
+	if md.MappingFile.Value().FileName == process.VdsoPathName {
 		c.cache.Add(fid, cached)
 		return nil
 	}
-
-	pid := 0
-	if pp, ok := elfRef.ELFOpener.(process.Process); ok {
-		pid = int(pp.PID())
-	}
+	pid := md.Process.PID()
 	l := c.logger.WithFields(logrus.Fields{
 		"fid": fid.StringNoQuotes(),
-		"elf": elfRef.FileName(),
+		"elf": md.MappingFile.Value().FileName.String(),
 		"pid": pid,
 	})
 	t1 := time.Now()
-	err := c.convert(l, fid, elfRef, o)
+	err := c.convert(l, fid, md)
 	if err != nil {
 		c.cache.Add(fid, erroredMarker)
 		l = l.WithError(err).WithField("duration", time.Since(t1))
@@ -216,9 +224,8 @@ func (c *Resolver) ObserveExecutable(fid host.FileID, elfRef *pfelf.Reference) e
 
 func (c *Resolver) convert(
 	l *logrus.Entry,
-	fid host.FileID,
-	elfRef *pfelf.Reference,
-	o pfelf.RootFSOpener,
+	fid libpf.FileID,
+	md *reporter.ExecutableMetadata,
 ) error {
 	var err error
 	var dst *os.File
@@ -230,14 +237,9 @@ func (c *Resolver) convert(
 		return nil
 	}
 
-	elf, err := elfRef.GetELF()
-	if err != nil {
-		return err
-	}
-	defer elf.Close()
-	debugLinkFileName := elf.DebuglinkFileName(elfRef.FileName(), elfRef)
-	if debugLinkFileName != "" {
-		src, err = o.OpenRootFSFile(debugLinkFileName)
+	if md.DebuglinkFileName != "" {
+		debuglinkFileName, _ := md.Process.ExtractAsFile(md.DebuglinkFileName)
+		src, err = os.Open(debuglinkFileName)
 		if err != nil {
 			l.WithError(err).Debug("open debug file")
 		} else {
@@ -245,7 +247,12 @@ func (c *Resolver) convert(
 		}
 	}
 	if src == nil {
-		src = elf.OSFile()
+		mf, err := md.Process.OpenMappingFile(md.Mapping)
+		if err != nil {
+			return err
+		}
+		defer mf.Close()
+		src, _ = mf.(*os.File)
 	}
 	if src == nil {
 		return errors.New("failed to open elf os file")
@@ -277,20 +284,20 @@ func (c *Resolver) convertSync(src, dst *os.File) error {
 	return c.f.ConvertTable(src, dst)
 }
 
-func (c *Resolver) tableFilePath(fid host.FileID) string {
+func (c *Resolver) tableFilePath(fid libpf.FileID) string {
 	return filepath.Join(c.cacheDir, fid.StringNoQuotes())
 }
 
 func (c *Resolver) ResolveAddress(
-	fid host.FileID,
+	fid libpf.FileID,
 	addr uint64,
-) (samples.SourceInfo, error) {
+) (SourceInfo, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	v, known := c.cache.Get(fid)
 
 	if !known || v == erroredMarker {
-		return samples.SourceInfo{}, errUnknownFile
+		return SourceInfo{}, errUnknownFile
 	}
 	t, ok := c.tables[fid]
 	if ok {
@@ -301,7 +308,7 @@ func (c *Resolver) ResolveAddress(
 	if err != nil {
 		_ = os.Remove(path)
 		c.cache.Remove(fid)
-		return samples.SourceInfo{}, err
+		return SourceInfo{}, err
 	}
 	c.tables[fid] = t
 	return t.Lookup(addr)
@@ -327,16 +334,6 @@ func (c *Resolver) Close() error {
 	return nil
 }
 
-func FileIDFromStringNoQuotes(s string) (host.FileID, error) {
-	if len(s) != 32 {
-		return host.FileID(0), fmt.Errorf("invalid length for FileID string '%s': %d (expected 32)", s, len(s))
-	}
-
-	// Parse the first 16 hex characters as uint64
-	val, err := strconv.ParseUint(s[:16], 16, 64)
-	if err != nil {
-		return host.FileID(0), fmt.Errorf("failed to parse FileID string '%s': %v", s, err)
-	}
-
-	return host.FileID(val), nil
+func FileIDFromStringNoQuotes(s string) (libpf.FileID, error) {
+	return libpf.FileIDFromString(s)
 }

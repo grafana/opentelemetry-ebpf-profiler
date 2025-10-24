@@ -5,10 +5,7 @@ import (
 
 	"github.com/grafana/pyroscope/lidia"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/ebpf-profiler/host"
-
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
 
 func TestNativeFrameSymbols(t *testing.T) {
@@ -21,22 +18,19 @@ func TestNativeFrameSymbols(t *testing.T) {
 	require.NoError(t, err)
 
 	reference := testElfRef(testLibcFIle)
-	fid := host.FileID(1)
+	fid := testFileId(1)
 	err = resolver.ObserveExecutable(fid, reference)
 	require.NoError(t, err)
-	res := samples.SourceInfo{}
-	frame := host.Frame{
-		File:          fid,
-		Lineno:        libpf.AddressOrLineno(0x9bc7e),
-		Type:          0,
-		ReturnAddress: false,
-	}
+	res := SourceInfo{}
+	addr := libpf.AddressOrLineno(0x9bc7e)
+
 	SymbolizeNativeFrame(resolver, libpf.Intern("testmapping"),
-		frame,
-		func(si samples.SourceInfo) {
+		addr,
+		fid,
+		func(si SourceInfo) {
 			res = si
 		})
-	require.Equal(t, samples.SourceInfo{
+	require.Equal(t, SourceInfo{
 		FunctionName: libpf.Intern("__GI___pthread_cond_timedwait"),
 	}, res)
 }

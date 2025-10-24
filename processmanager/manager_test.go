@@ -301,7 +301,6 @@ func TestNewMapping(t *testing.T) {
 				nil,
 				&dummyProvider,
 				true,
-				nil,
 				dynamicprofiling.AlwaysOnPolicy{},
 				libpf.Set[string]{},
 			)
@@ -488,7 +487,6 @@ func TestProcExit(t *testing.T) {
 				nil,
 				&dummyProvider,
 				true,
-				nil,
 				dynamicprofiling.AlwaysOnPolicy{},
 				libpf.Set[string]{},
 			)
@@ -542,7 +540,6 @@ func TestDynamicProfilingPolicy(t *testing.T) {
 		nil,
 		&dummyProvider,
 		true,
-		nil,
 		policy, nil)
 	require.NoError(t, err)
 	defer manager.Close()

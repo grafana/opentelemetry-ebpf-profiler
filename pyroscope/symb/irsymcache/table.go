@@ -6,7 +6,6 @@ import (
 
 	"github.com/grafana/pyroscope/lidia"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
 
 type TableTableFactory struct {
@@ -42,13 +41,13 @@ type table struct {
 	t *lidia.Table
 }
 
-func (t *table) Lookup(addr uint64) (samples.SourceInfo, error) {
+func (t *table) Lookup(addr uint64) (SourceInfo, error) {
 	frames, err := t.t.Lookup(nil, addr)
 	if err != nil || len(frames) == 0 {
-		return samples.SourceInfo{}, err
+		return SourceInfo{}, err
 	}
 	f0 := frames[0]
-	si := samples.SourceInfo{
+	si := SourceInfo{
 		LineNumber:   libpf.SourceLineno(f0.LineNumber),
 		FunctionName: libpf.Intern(f0.FunctionName),
 		FilePath:     libpf.Intern(f0.FilePath),
