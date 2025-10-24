@@ -2,36 +2,24 @@ package irsymcache
 
 import (
 	"fmt"
-	"os"
+	"path"
 	"testing"
 
 	"github.com/grafana/pyroscope/lidia"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/host"
-
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/libpf/basehash"
+	"go.opentelemetry.io/ebpf-profiler/process"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 )
 
 var tf = TableTableFactory{[]lidia.Option{
 	lidia.WithFiles(), lidia.WithLines(), lidia.WithCRC(),
 }}
-
-type testElfOpener struct {
-}
-
-func (t testElfOpener) OpenELF(file string) (*pfelf.File, error) {
-	return pfelf.Open(file)
-}
-
-func (t testElfOpener) OpenRootFSFile(file string) (*os.File, error) {
-	return os.Open(file)
-}
 
 func TestNewFSCache(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -87,13 +75,13 @@ func TestResolver_ResolveAddress(t *testing.T) {
 	})
 	type observe struct {
 		filepath    string
-		fid         host.FileID
+		fid         libpf.FileID
 		expectedErr string
 	}
 	type lookup struct {
-		fid         host.FileID
+		fid         libpf.FileID
 		addr        uint64
-		expectedRes samples.SourceInfo
+		expectedRes SourceInfo
 		expectedErr error
 	}
 	tests := []struct {
@@ -108,14 +96,14 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			observes: []observe{
 				{
 					filepath: testLibcFIle,
-					fid:      host.FileID(456),
+					fid:      testFileId(456),
 				},
 			},
 			lookups: []lookup{
 				{
-					fid:  host.FileID(456),
+					fid:  testFileId(456),
 					addr: 0x9cbb0,
-					expectedRes: samples.SourceInfo{
+					expectedRes: SourceInfo{
 						FunctionName: libpf.Intern("__pthread_create_2_1"),
 					},
 				},
@@ -126,7 +114,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			cacheSize: 1024,
 			lookups: []lookup{
 				{
-					fid:         host.FileID(456),
+					fid:         testFileId(456),
 					addr:        0x9cbb0,
 					expectedErr: errUnknownFile,
 				},
@@ -138,23 +126,23 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			observes: []observe{
 				{
 					filepath: testLibcFIle,
-					fid:      host.FileID(456),
+					fid:      testFileId(456),
 				},
 				{
 					filepath: testLibcFIle,
-					fid:      host.FileID(4242),
+					fid:      testFileId(4242),
 				},
 			},
 			lookups: []lookup{
 				{
-					fid:         host.FileID(456),
+					fid:         testFileId(456),
 					addr:        0x9cbb0,
 					expectedErr: errUnknownFile,
 				},
 				{
-					fid:  host.FileID(4242),
+					fid:  testFileId(4242),
 					addr: 0x9cbb0,
-					expectedRes: samples.SourceInfo{
+					expectedRes: SourceInfo{
 						FunctionName: libpf.Intern("__pthread_create_2_1"),
 					},
 				},
@@ -166,7 +154,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			observes: []observe{
 				{
 					filepath:    "unknown/file/path/that/should/fail",
-					fid:         host.FileID(456),
+					fid:         testFileId(456),
 					expectedErr: "no such file or directory",
 				},
 			},
@@ -185,9 +173,9 @@ func TestResolver_ResolveAddress(t *testing.T) {
 			require.NoError(t, err)
 
 			for _, o := range tt.observes {
-				reference := testElfRef(o.filepath)
-				elfRef := reference
-				err = resolver.ObserveExecutable(o.fid, elfRef)
+				md := testElfRef(o.filepath)
+
+				err = resolver.ObserveExecutable(o.fid, md)
 				if o.expectedErr != "" {
 					require.Error(t, err)
 					assert.Contains(t, err.Error(), o.expectedErr)
@@ -202,7 +190,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 				}
 			}
 			for _, l := range tt.lookups {
-				var results samples.SourceInfo
+				var results SourceInfo
 				results, err = resolver.ResolveAddress(l.fid, l.addr)
 				t.Logf("resolve %s %x = %+v, %+v", l.fid.StringNoQuotes(), l.addr, results, err)
 				if l.expectedErr != nil {
@@ -219,8 +207,33 @@ func TestResolver_ResolveAddress(t *testing.T) {
 	}
 }
 
-func testElfRef(filepath string) *pfelf.Reference {
-	return pfelf.NewReference(filepath, testElfOpener{})
+func testElfRef(filepath string) (md *reporter.ExecutableMetadata) {
+	m := libpf.FrameMappingFileData{
+		FileID:     libpf.NewFileID(123, 2323),
+		FileName:   libpf.Intern(path.Base(filepath)),
+		GnuBuildID: "",
+		GoBuildID:  "",
+	}
+
+	md = &reporter.ExecutableMetadata{
+		MappingFile: libpf.NewFrameMappingFile(m),
+		Process: &dummyProcess{
+			pid:           123,
+			mappings:      nil,
+			mappingsError: nil,
+		},
+		Mapping: &process.Mapping{
+			Vaddr:      0,
+			Length:     0,
+			Flags:      0,
+			FileOffset: 0,
+			Device:     0,
+			Inode:      0,
+			Path:       libpf.Intern(filepath),
+		},
+		DebuglinkFileName: "",
+	}
+	return md
 }
 
 func TestResolver_Cleanup(t *testing.T) {
@@ -232,9 +245,9 @@ func TestResolver_Cleanup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	elfRef := testElfRef(testLibcFIle)
-	fid := host.FileID(456)
-	err = resolver.ObserveExecutable(fid, elfRef)
+	md := testElfRef(testLibcFIle)
+	fid := testFileId(456)
+	err = resolver.ObserveExecutable(fid, md)
 	require.NoError(t, err)
 
 	resolver.Cleanup()
@@ -254,9 +267,9 @@ func TestResolver_Close(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	elfRef := testElfRef(testLibcFIle)
-	fid := host.FileID(456)
-	err = resolver.ObserveExecutable(fid, elfRef)
+	md := testElfRef(testLibcFIle)
+	fid := testFileId(456)
+	err = resolver.ObserveExecutable(fid, md)
 	require.NoError(t, err)
 
 	err = resolver.Close()
@@ -271,7 +284,7 @@ func BenchmarkCache(b *testing.B) {
 		Path:        b.TempDir(),
 		SizeEntries: 2048,
 	})
-	loop := func(b *testing.B, resolver *Resolver, fid host.FileID) {
+	loop := func(b *testing.B, resolver *Resolver, fid libpf.FileID) {
 		for i := 0; i < b.N; i++ {
 			if resolver.ExecutableKnown(fid) {
 				continue
@@ -285,7 +298,7 @@ func BenchmarkCache(b *testing.B) {
 	}
 
 	require.NoError(b, err)
-	fid := host.FileID(456)
+	fid := testFileId(456)
 
 	elfRef := testElfRef(testLibcFIle)
 	err = resolver.ObserveExecutable(fid, elfRef)
@@ -295,13 +308,13 @@ func BenchmarkCache(b *testing.B) {
 }
 
 func TestFileIDFromStringNoQuotes(t *testing.T) {
-	testCases := []host.FileID{
-		host.FileID(0),
-		host.FileID(1),
-		host.FileID(0x123456789abcdef0),
-		host.FileID(0xffffffffffffffff),
-		host.FileID(0x8000000000000000),
-		host.FileID(456), // Same value used elsewhere in tests
+	testCases := []libpf.FileID{
+		testFileId(0),
+		testFileId(1),
+		testFileId(0x123456789abcdef0),
+		testFileId(0xffffffffffffffff),
+		testFileId(0x8000000000000000),
+		testFileId(456), // Same value used elsewhere in tests
 	}
 
 	for _, original := range testCases {
@@ -338,4 +351,10 @@ func TestFileIDFromStringNoQuotes(t *testing.T) {
 			})
 		}
 	})
+}
+
+func testFileId(i uint64) libpf.FileID {
+	return libpf.FileID{
+		Hash128: basehash.New128(i, uint64(0)),
+	}
 }

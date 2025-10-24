@@ -11,7 +11,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
@@ -37,8 +36,8 @@ type Config struct {
 	UProbeLinks            []string
 	LoadProbe              bool
 
-	Policy       dynamicprofiling.Policy
-	FileObserver samples.NativeSymbolResolver
+	Policy             dynamicprofiling.Policy
+	ExecutableReporter reporter.ExecutableReporter
 
 	Reporter reporter.Reporter
 

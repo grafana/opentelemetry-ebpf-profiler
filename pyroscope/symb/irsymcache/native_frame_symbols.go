@@ -2,25 +2,31 @@ package irsymcache // import "go.opentelemetry.io/ebpf-profiler/pyroscope/symb/i
 
 import (
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/host"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
 
+type NativeSymbolResolver interface {
+	ResolveAddress(file libpf.FileID, addr uint64) (SourceInfo, error)
+	Cleanup()
+}
+type SourceInfo struct {
+	LineNumber   libpf.SourceLineno
+	FunctionName libpf.String
+	FilePath     libpf.String
+}
+
 func SymbolizeNativeFrame(
-	resolver samples.NativeSymbolResolver,
+	resolver NativeSymbolResolver,
 
 	mappingName libpf.String,
-	frame host.Frame,
-	symbolize func(si samples.SourceInfo),
+	addr libpf.AddressOrLineno,
+	fileID libpf.FileID,
+	symbolize func(si SourceInfo),
 ) {
-	fileID := frame.File
-	addr := frame.Lineno
-
 	var (
-		si  samples.SourceInfo
+		si  SourceInfo
 		err error
 	)
 	if mappingName != process.VdsoPathName {

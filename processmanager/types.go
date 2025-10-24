@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	lru "github.com/elastic/go-freelru"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -101,8 +100,6 @@ type ProcessManager struct {
 	filterErrorFrames bool
 
 	policy dynamicprofiling.Policy
-
-	fileObserver samples.NativeSymbolResolver
 
 	// includeEnvVars holds a list of env vars that should be captured from processes
 	includeEnvVars libpf.Set[string]
