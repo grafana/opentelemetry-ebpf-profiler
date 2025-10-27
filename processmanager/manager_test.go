@@ -51,6 +51,14 @@ func (d *dummyProcess) GetMachineData() process.MachineData {
 	return process.MachineData{}
 }
 
+func (d *dummyProcess) GetProcessMeta(_ process.MetaConfig) process.ProcessMeta {
+	return process.ProcessMeta{}
+}
+
+func (d *dummyProcess) GetExe() (string, error) {
+	return "", errors.New("not implemented")
+}
+
 func (d *dummyProcess) GetMappings() ([]process.Mapping, uint32, error) {
 	return d.mappings, 0, d.mappingsError
 }

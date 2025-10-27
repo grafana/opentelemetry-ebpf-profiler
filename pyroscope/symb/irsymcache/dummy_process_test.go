@@ -17,6 +17,15 @@ type dummyProcess struct {
 	mappingsError error
 }
 
+func (d *dummyProcess) GetProcessMeta(config process.MetaConfig) process.ProcessMeta {
+	panic("implement me")
+}
+
+func (d *dummyProcess) GetExe() (string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (d *dummyProcess) PID() libpf.PID {
 	return d.pid
 }
