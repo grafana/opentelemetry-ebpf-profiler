@@ -64,10 +64,7 @@ func (c *Resolver) ReportExecutable(md *reporter.ExecutableMetadata) {
 	if c.ExecutableKnown(m.FileID) {
 		return
 	}
-	err := c.ObserveExecutable(m.FileID, md)
-	if err != nil {
-		c.logger.WithError(err).Error("failed to observe executable")
-	}
+	_ = c.ObserveExecutable(m.FileID, md)
 }
 
 func (c *Resolver) Cleanup() {
