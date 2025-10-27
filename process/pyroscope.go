@@ -1,4 +1,4 @@
-package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanager"
+package process // import "go.opentelemetry.io/ebpf-profiler/process"
 
 import (
 	"time"
@@ -29,7 +29,7 @@ func init() {
 	}
 }
 
-func extractContainerIDCached(pid libpf.PID) (string, error) {
+func ExtractContainerIDCached(pid libpf.PID) (string, error) {
 	res, ok := containerIDCache.GetAndRefresh(pid, time.Hour)
 	if ok {
 		return res.t, res.err
