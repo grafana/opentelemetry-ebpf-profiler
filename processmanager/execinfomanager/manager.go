@@ -11,6 +11,7 @@ import (
 
 	lru "github.com/elastic/go-freelru"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/symtab"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -127,6 +128,9 @@ func NewExecutableInfoManager(
 	}
 	if includeTracers.Has(types.GoTracer) {
 		interpreterLoaders = append(interpreterLoaders, golang.Loader)
+	}
+	if includeTracers.Has(types.Symtab) {
+		interpreterLoaders = append(interpreterLoaders, symtab.Loader)
 	}
 
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)

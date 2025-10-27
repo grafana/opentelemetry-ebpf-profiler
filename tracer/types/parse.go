@@ -24,6 +24,7 @@ const (
 	DotnetTracer
 	GoTracer
 	Labels
+	Symtab
 
 	// maxTracers indicates the max. number of different tracers
 	maxTracers
@@ -39,6 +40,7 @@ var tracerTypeToName = map[tracerType]string{
 	DotnetTracer:  "dotnet",
 	GoTracer:      "go",
 	Labels:        "labels",
+	Symtab:        "symtab",
 }
 
 var tracerNameToType = make(map[string]tracerType, maxTracers)
