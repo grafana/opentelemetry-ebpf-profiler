@@ -6,7 +6,7 @@
 //   - optimized for speed (and supports only ELF files for current CPU architecture)
 //   - loads only portions of the ELF really needed and accessed (minimizing CPU/RSS)
 //   - can handle partial ELF files without sections present
-//   - implements fast symbol lookup using gnu/sysv hashes
+//   - implements fast symbols lookup using gnu/sysv hashes
 //   - coredump notes parsing
 
 // The Executable and Linking Format (ELF) specification is available at:

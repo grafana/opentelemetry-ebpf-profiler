@@ -55,6 +55,10 @@ func (i *LoaderInfo) GetSymbolAsRanges(symbol libpf.SymbolName) ([]util.Range, e
 	}, nil
 }
 
+func (i *LoaderInfo) Reference() *pfelf.Reference {
+	return i.elfRef
+}
+
 // FileID returns the fileID  element of the LoaderInfo struct.
 func (i *LoaderInfo) FileID() host.FileID {
 	return i.fileID

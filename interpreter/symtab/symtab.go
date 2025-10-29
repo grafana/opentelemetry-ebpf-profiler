@@ -19,25 +19,32 @@ import (
 
 func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (
 	interpreter.Data, error) {
-	ef, err := info.GetELF()
+	name := fmt.Sprintf("%s %s", info.FileName(), info.FileID().StringNoQuotes())
+
+	return load(info.Reference(), name)
+}
+
+func load(ref *pfelf.Reference, name string) (interpreter.Data, error) {
+	ef, err := ref.GetELF()
 	if err != nil {
 		return nil, err
 	}
 
-	name := fmt.Sprintf("%s %s", info.FileName(), info.FileID().StringNoQuotes())
-
-	return load(ef, name)
-}
-
-func load(ef *pfelf.File, name string) (interpreter.Data, error) {
-	var err error
+	debugFileName := ef.DebuglinkFileName(ref.FileName(), ref)
+	if debugFileName != "" {
+		debugElf, err := ref.OpenELF(debugFileName)
+		if err == nil {
+			ef = debugElf
+			defer debugElf.Close()
+		}
+	}
 	if err = ef.LoadSections(); err != nil {
 		return nil, err
 	}
-
 	if ef.IsGolang() {
 		return nil, nil
 	}
+
 	tables := make([]*symtab, 0, 2)
 	for i, s := range ef.Sections {
 		if s.Type == elf.SHT_SYMTAB || s.Type == elf.SHT_DYNSYM {
@@ -129,7 +136,7 @@ func (d *data) symbolize(addr uint64) string {
 		if n == "" {
 			continue
 		}
-		fmt.Printf("symbolize %s %x %s\n", d.name, addr, n)
+		//fmt.Printf("symbolize %s %x %s\n", d.name, addr, n)
 		break
 	}
 	return n
@@ -181,6 +188,7 @@ func (it *symtab) init() {
 	it.idx = it.idx[:n]
 	sort.Sort(&sortPC{it.pc, it.idx})
 	loaded.Add(int64(n))
+	fmt.Printf("loaded %s %d symbol. total %d bytes\n", it.name, n, loaded.Load()*4*2)
 }
 
 type sortPC struct {
