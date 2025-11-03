@@ -136,6 +136,7 @@ func Parse(tracers string) (IncludedTracers, error) {
 			if runtime.GOARCH == "arm64" {
 				result.Disable(DotnetTracer)
 			}
+			result.Disable(Symtab)
 		case "native":
 			log.Warn("Enabling the `native` tracer explicitly is deprecated (it's always-on)")
 		default:
