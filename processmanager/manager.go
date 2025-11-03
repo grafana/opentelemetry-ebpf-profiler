@@ -425,11 +425,13 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 	}
 
 	// Release resources that were used to symbolize this stack.
+	pm.mu.RLock() // tmp race fix until mmap/ReleaseResources is removed
 	for _, instance := range pm.interpreters[pid] {
 		if err := instance.ReleaseResources(); err != nil {
 			log.Warnf("Failed to release resources for %d: %v", pid, err)
 		}
 	}
+	pm.mu.RUnlock() // tmp race fix until mmap/ReleaseResources is removed
 
 	trace.Hash = traceutil.HashTrace(trace)
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
