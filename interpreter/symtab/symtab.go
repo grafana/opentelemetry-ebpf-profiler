@@ -1,4 +1,4 @@
-package symtab
+package symtab // import "go.opentelemetry.io/ebpf-profiler/interpreter/symtab"
 
 import (
 	"bytes"
