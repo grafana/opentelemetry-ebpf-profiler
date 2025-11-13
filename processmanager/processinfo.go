@@ -598,6 +598,11 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		return
 	}
 
+	if !pm.profilingEnabled(pr) {
+		log.Debugf("- PID: %d Skip profiling for", pid)
+		return
+	}
+
 	pm.mappingStats.numProcAttempts.Add(1)
 	start := time.Now()
 	mappings, numParseErrors, err := pr.GetMappings()
@@ -640,11 +645,6 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 
 	util.AtomicUpdateMaxUint32(&pm.mappingStats.maxProcParseUsec, uint32(elapsed.Microseconds()))
 	pm.mappingStats.totalProcParseUsec.Add(uint32(elapsed.Microseconds()))
-
-	if !pm.profilingEnabled(pr) {
-		log.Debugf("- PID: %d Skip profiling for", pid)
-		return
-	}
 
 	if pm.synchronizeMappings(pr, mappings) {
 		log.Debugf("+ PID: %v", pid)
