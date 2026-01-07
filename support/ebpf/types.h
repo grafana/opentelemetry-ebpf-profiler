@@ -335,6 +335,7 @@ typedef enum TracePrograms {
   PROG_UNWIND_V8,
   PROG_UNWIND_DOTNET,
   PROG_GO_LABELS,
+  PROG_UNWIND_BEAM,
   NUM_TRACER_PROGS,
 } TracePrograms;
 
@@ -344,55 +345,27 @@ typedef enum TraceOrigin {
   TRACE_UNKNOWN,
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
-  TRACE_UPROBE,
+  TRACE_PROBE,
 } TraceOrigin;
-
-// MAX_FRAME_UNWINDS defines the maximum number of frames per
-// Trace we can unwind and respect the limit of eBPF instructions,
-// limit of tail calls and limit of stack size per eBPF program.
-#define MAX_FRAME_UNWINDS 256
-
-// MAX_NON_ERROR_FRAME_UNWINDS defines the maximum number of frames
-// to be pushed by unwinders while still leaving space for an error frame.
-// This is used to make sure that there is always space for an error
-// frame reporting that we ran out of stack space.
-#define MAX_NON_ERROR_FRAME_UNWINDS (MAX_FRAME_UNWINDS - 1)
 
 // Maximum number of unique stack deltas needed on a system. This is based on
 // normal desktop /usr/bin/* and /usr/lib/*.so having about 9700 unique deltas.
 // Can be increased up to 2^15, see also STACK_DELTA_COMMAND_FLAG.
 #define UNWIND_INFO_MAX_ENTRIES 16384
 
-// Type to represent a globally-unique file id to be used as key for a BPF hash map
-typedef u64 FileID;
-
-// Individual frame in a stack-trace.
-typedef struct Frame {
-  // IDs that uniquely identify a file combination
-  FileID file_id;
-  // For PHP this is the line numbers, corresponding to the files in `stack`.
-  // For Python, each value provides information to allow for the recovery of
-  // the line number associated with its corresponding offset in `stack`.
-  // The lower 32 bits provide the co_firstlineno value and the upper 32 bits
-  // provide the f_lasti value. Other interpreter handlers use the field in
-  // a similarly domain-specific fashion.
-  u64 addr_or_line;
-  // Indicates the type of the frame (Python, PHP, native etc.).
-  u8 kind;
-  // Indicates that the address is a return address.
-  u8 return_address;
-  // Explicit padding bytes that the compiler would have inserted anyway.
-  // Here to make it clear to readers that there are spare bytes that could
-  // be put to work without extra cost in case an interpreter needs it.
-  u8 pad[6];
-} Frame;
-
-_Static_assert(sizeof(Frame) == 3 * 8, "frame padding not working as expected");
-
 // TSDInfo contains data needed to extract Thread Specific Data (TSD) values
 typedef struct TSDInfo {
+  // Offset is the pointer difference from "tpbase" pointer to the C-library
+  // specific struct pthread's member containing the thread specific data:
+  // .tsd (musl) or .specific (glibc).
+  // Note: on x86_64 it's positive value, and arm64 it is negative value as
+  // "tpbase" register has different purpose and pointer value per platform ABI.
   s16 offset;
+  // Multiplier is the TSD specific value array element size.
+  // Typically 8 bytes on 64bit musl and 16 bytes on 64bit glibc
   u8 multiplier;
+  // Indirect is a flag indicating if the "tpbase + Offset" points to a member
+  // which is a pointer the array (musl) and not the array itself (glibc).
   u8 indirect;
 } TSDInfo;
 
@@ -429,6 +402,7 @@ typedef struct PyProcInfo {
   u8 PyCodeObject_co_flags, PyCodeObject_co_firstlineno;
   u8 PyCodeObject_sizeof;
   u8 continue_with_next_unwinder;
+  u8 lasti_is_codeunit, frame_is_cframe;
 } PyProcInfo;
 
 // PHPProcInfo is a container for the data needed to build a stack trace for a PHP process.
@@ -455,13 +429,16 @@ typedef struct HotspotProcInfo {
   u8 codeblob_codestart, codeblob_codeend;
   u8 codeblob_framecomplete, codeblob_framesize;
   u8 heapblock_size, method_constmethod, cmethod_size;
-  u8 jvm_version, segment_shift, nmethod_uses_offsets;
+  u8 jvm_version, new_bcp_slot, segment_shift, nmethod_uses_offsets;
 } HotspotProcInfo;
 
 // RubyProcInfo is a container for the data needed to build a stack trace for a Ruby process.
 typedef struct RubyProcInfo {
   // version of the Ruby interpreter.
   u32 version;
+
+  // tls_offset holds TLS base + ruby_current_ec tls symbol, as an offset from tpbase
+  u64 current_ec_tpbase_tls_offset;
 
   // current_ctx_ptr holds the address of the symbol ruby_current_execution_context_ptr.
   u64 current_ctx_ptr;
@@ -495,10 +472,22 @@ typedef struct V8ProcInfo {
   // Introspection data
   u16 type_JSFunction_first, type_JSFunction_last, type_Code, type_SharedFunctionInfo;
   u8 off_HeapObject_map, off_Map_instancetype, off_JSFunction_code, off_JSFunction_shared;
+  u8 code_instructions_is_pointer;
   u8 off_Code_instruction_start, off_Code_instruction_size, off_Code_flags;
   u8 fp_marker, fp_function, fp_bytecode_offset;
   u8 codekind_shift, codekind_mask, codekind_baseline;
 } V8ProcInfo;
+
+// BEAMProcInfo is a container for the data needed to build a stack trace for a BEAM process.
+typedef struct BEAMProcInfo {
+  u64 bias;
+  u64 r;
+  u64 the_active_code_index;
+  u64 beam_normal_exit;
+  bool frame_pointers_enabled;
+  // Introspection Struct Offsets
+  u8 ranges_sizeof;
+} BEAMProcInfo;
 
 // COMM_LEN defines the maximum length we will receive for the comm of a task.
 #define COMM_LEN 16
@@ -572,8 +561,10 @@ typedef struct Trace {
   CustomLabelsArray custom_labels;
   // The kernel stack ID.
   s32 kernel_stack_id;
-  // The number of frames in the stack.
-  u32 stack_len;
+  // The number of frame_data elements present.
+  u16 frame_data_len;
+  // The number of frames present.
+  u16 num_frames;
 
   // origin indicates the source of the trace.
   TraceOrigin origin;
@@ -581,13 +572,21 @@ typedef struct Trace {
   // offtime stores the nanoseconds that the trace was off-cpu for.
   u64 offtime;
 
-  // The frames of the stack trace.
-  Frame frames[MAX_FRAME_UNWINDS];
+  // The frame data of the stack trace. Each frame is variable length.
+  // Frame is currently 2-3 entries long. This array size limits the
+  // number of frames we can unwind, but also increases the memory
+  // needed for buffering everything. The 3kB entries here is chosen
+  // to allow about 1024 frames in a trace to be sent.
+  u64 frame_data[3072];
 
-  // NOTE: both send_trace in BPF and loadBpfTrace in UM code require `frames`
-  // to be the last item in the struct. Do not add new members here without also
-  // adjusting the UM code.
+  // NOTE: both send_trace in BPF and loadBpfTrace in UM code require `frame_data`
+  // to be the last item in the struct. When sending as a perf event, only the
+  // 'frame_data_len' elements of 'frame_data' are sent.
 } Trace;
+
+// Trace is sent as a perf raw event. As all perf events are contained within
+// struct perf_event_header with 'u16 size', this limits the size of Trace.
+_Static_assert(sizeof(struct Trace) < 63 * 1024, "Trace too large");
 
 // Container for unwinding state
 typedef struct UnwindState {
@@ -603,7 +602,7 @@ typedef struct UnwindState {
   u64 rax, r9, r11, r13, r15;
 #elif defined(__aarch64__)
   // Current register values for named registers
-  u64 lr, r22, r28;
+  u64 lr, r20, r22, r28;
 #endif
 
   // The executable ID/hash associated with PC
@@ -779,6 +778,9 @@ typedef struct PerCPURecord {
   // ratelimitAction determines the PID event rate limiting mode
   u8 ratelimitAction;
 } PerCPURecord;
+
+// https://github.com/torvalds/linux/blob/e9a6fb0bcdd7609be6969112f3fbfcce3b1d4a7c/include/linux/percpu.h#L24C39-L24C47
+_Static_assert(sizeof(struct PerCPURecord) <= (32 << 10), "Per CPU record too large");
 
 // UnwindInfo contains the unwind information needed to unwind one frame
 // from a specific address.

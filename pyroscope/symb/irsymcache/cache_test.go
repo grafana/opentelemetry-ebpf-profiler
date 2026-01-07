@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/grafana/pyroscope/lidia"
-	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/libpf/basehash"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -68,11 +67,6 @@ func TestNewFSCache(t *testing.T) {
 const testLibcFIle = "../testdata/64b17fbac799e68da7ebd9985ddf9b5cb375e6.debug"
 
 func TestResolver_ResolveAddress(t *testing.T) {
-	origLevel := logrus.GetLevel()
-	logrus.SetLevel(logrus.DebugLevel)
-	t.Cleanup(func() {
-		logrus.SetLevel(origLevel)
-	})
 	type observe struct {
 		filepath    string
 		fid         libpf.FileID

@@ -4,12 +4,11 @@
 package interpreter // import "go.opentelemetry.io/ebpf-profiler/interpreter"
 
 import (
-	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
-	"go.opentelemetry.io/ebpf-profiler/tpbase"
 )
 
 // InstanceStubs provides empty implementations of Instance hooks that are
@@ -22,11 +21,11 @@ func (is *InstanceStubs) SynchronizeMappings(EbpfHandler, reporter.ExecutableRep
 	return nil
 }
 
-func (is *InstanceStubs) UpdateTSDInfo(EbpfHandler, libpf.PID, tpbase.TSDInfo) error {
+func (is *InstanceStubs) UpdateLibcInfo(EbpfHandler, libpf.PID, libc.LibcInfo) error {
 	return nil
 }
 
-func (is *InstanceStubs) Symbolize(*host.Frame, *libpf.Frames) error {
+func (is *InstanceStubs) Symbolize(libpf.EbpfFrame, *libpf.Frames) error {
 	return ErrMismatchInterpreterType
 }
 

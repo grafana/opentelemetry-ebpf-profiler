@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
 
@@ -103,10 +103,10 @@ func (d *phpData) String() string {
 }
 
 func (d *phpData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,
-	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
-	addrToFunction, err :=
-		freelru.New[libpf.Address, *phpFunction](interpreter.LruFunctionCacheSize,
-			libpf.Address.Hash32)
+	rm remotememory.RemoteMemory,
+) (interpreter.Instance, error) {
+	addrToFunction, err := freelru.New[libpf.Address, *phpFunction](interpreter.LruFunctionCacheSize,
+		libpf.Address.Hash32)
 	if err != nil {
 		return nil, err
 	}
@@ -271,9 +271,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, err
 	}
 
-	// Only tested on PHP7.3-PHP8.3. Other similar versions probably only require
+	// Only tested on PHP7.3-PHP8.4. Other similar versions probably only require
 	// tweaking the offsets.
-	var minVer, maxVer = phpVersion(7, 3, 0), phpVersion(8, 4, 0)
+	minVer, maxVer := phpVersion(7, 3, 0), phpVersion(8, 5, 0)
 	if version < minVer || version >= maxVer {
 		return nil, fmt.Errorf("PHP version %d.%d.%d (need >= %d.%d and < %d.%d)",
 			(version>>16)&0xff, (version>>8)&0xff, version&0xff,
@@ -343,6 +343,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	vms.zend_string.val = 24
 	vms.zend_op.lineno = 24
 	switch {
+	case version >= phpVersion(8, 4, 0):
+		vms.zend_function.op_array_filename = 168
+		vms.zend_function.op_array_linestart = 176
+		vms.zend_function.Sizeof = 184
 	case version >= phpVersion(8, 3, 0):
 		vms.zend_function.op_array_filename = 144
 		vms.zend_function.op_array_linestart = 152

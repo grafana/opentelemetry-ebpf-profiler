@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	//nolint:gosec
@@ -22,7 +23,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/vc"
 	"go.opentelemetry.io/otel/metric/noop"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // Short copyright / license text for eBPF code
@@ -76,7 +77,7 @@ func mainWithExitCode() exitCode {
 	}
 
 	if cfg.VerboseMode {
-		log.SetLevel(log.DebugLevel)
+		log.SetLevel(slog.LevelDebug)
 		// Dump the arguments in debug mode.
 		cfg.Dump()
 	}

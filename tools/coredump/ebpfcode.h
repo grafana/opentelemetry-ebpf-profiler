@@ -31,6 +31,7 @@ void bpf_log(const char *fmt, ...)
   }
 }
 
+#include "../../support/ebpf/beam_tracer.ebpf.c"
 #include "../../support/ebpf/dotnet_tracer.ebpf.c"
 #include "../../support/ebpf/go_labels.ebpf.c"
 #include "../../support/ebpf/hotspot_tracer.ebpf.c"
@@ -65,20 +66,11 @@ int unwind_traces(u64 id, int debug, u64 tp_base, void *ctx)
   return cgoctx.ret;
 }
 
-// We don't want to call the actual `unwind_stop` function because it'd
-// require us to properly emulate all the maps required for sending frames
-// to usermode.
-int coredump_unwind_stop(UNUSED struct bpf_perf_event_data *ctx)
+int bpf_perf_event_output(
+  UNUSED void *ctx, UNUSED void *map, UNUSED unsigned long long flags, void *data, UNUSED int size)
 {
-  (void)unwind_stop;
-  PerCPURecord *record = get_per_cpu_record();
-  if (!record)
-    return -1;
-
-  if (record->state.unwind_error) {
-    push_error(&record->trace, record->state.unwind_error);
-  }
-
+  void __bpf_copy_frame(u64, void *);
+  __bpf_copy_frame(__cgo_ctx->id, data);
   return 0;
 }
 
@@ -86,7 +78,7 @@ int bpf_tail_call(void *ctx, UNUSED void *map, int index)
 {
   int rc = 0;
   switch (index) {
-  case PROG_UNWIND_STOP: rc = coredump_unwind_stop(ctx); break;
+  case PROG_UNWIND_STOP: rc = unwind_stop(ctx); break;
   case PROG_UNWIND_NATIVE: rc = unwind_native(ctx); break;
   case PROG_UNWIND_PERL: rc = unwind_perl(ctx); break;
   case PROG_UNWIND_PHP: rc = unwind_php(ctx); break;
@@ -95,6 +87,7 @@ int bpf_tail_call(void *ctx, UNUSED void *map, int index)
   case PROG_UNWIND_RUBY: rc = unwind_ruby(ctx); break;
   case PROG_UNWIND_V8: rc = unwind_v8(ctx); break;
   case PROG_UNWIND_DOTNET: rc = unwind_dotnet(ctx); break;
+  case PROG_UNWIND_BEAM: rc = unwind_beam(ctx); break;
   case PROG_GO_LABELS: rc = go_labels(ctx); break;
   default: return -1;
   }

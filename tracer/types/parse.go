@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // tracerType values identify tracers, such as the native code tracer, or PHP tracer
@@ -24,6 +24,7 @@ const (
 	DotnetTracer
 	GoTracer
 	Labels
+	BEAMTracer
 
 	// maxTracers indicates the max. number of different tracers
 	maxTracers
@@ -39,6 +40,7 @@ var tracerTypeToName = map[tracerType]string{
 	DotnetTracer:  "dotnet",
 	GoTracer:      "go",
 	Labels:        "labels",
+	BEAMTracer:    "beam",
 }
 
 var tracerNameToType = make(map[string]tracerType, maxTracers)

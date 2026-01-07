@@ -14,11 +14,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: 'false'
-      - name: Set up environment
-        uses: ./.github/workflows/env
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Check for changes in licenses of dependencies
         run: |
           make legal
@@ -34,40 +37,60 @@ jobs:
         target_arch: [amd64, arm64]
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: 'false'
       - name: Set up environment
         uses: ./.github/workflows/env
-      - name: Get linter version
-        id: linter-version
-        run: (echo -n "version="; make linter-version) >> "$GITHUB_OUTPUT"
+        with:
+          target_arch: ${{ matrix.target_arch }}
       - name: linter
         env:
           GOARCH: ${{ matrix.target-arch }}
           CGO_ENABLED: 1
-        run: |
-          sudo apt update
-          sudo apt install -y clang-format-17
-          make lint
+        run: make lint
 
-  test:
-    name: Test (${{ matrix.target_arch }})
+  format:
+    name: Format Go and C code
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        target_arch: [amd64, arm64]
+        target_arch: [amd64]
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: 'false'
       - name: Set up environment
         uses: ./.github/workflows/env
         with:
-          skip_rust: true
+          target_arch: ${{ matrix.target_arch }}
+      - name: formatter
+        env:
+          CGO_ENABLED: 1
+        run: |
+          make format
+          git diff --exit-code || (echo 'Code base is not Go or C formatted, please run "make format" and commit the changes in this PR.'; exit 1)
+
+  test:
+    name: Test (${{ matrix.target_arch }}${{ matrix.go_flags }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - { target_arch: amd64, go_flags: "" }
+          - { target_arch: amd64, go_flags: "-race" }
+          - { target_arch: arm64, go_flags: "" }
+          # - { target_arch: arm64, go_flags: "-race" } # seem to not work under qemu
+    steps:
+      - name: Clone code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - name: Set up environment
+        uses: ./.github/workflows/env
+        with:
+          target_arch: ${{ matrix.target_arch }}
       - name: Cache coredump modules
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: tools/coredump/modulecache
           key: coredumps-${{ matrix.target_arch }}-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -75,53 +98,7 @@ jobs:
             coredumps-${{ matrix.target_arch }}
             coredumps-
       - name: Tests
-        run: make test TARGET_ARCH=${{ matrix.target_arch }}
-
-  rust-test:
-    name: Rust Tests (${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target_arch: [amd64, arm64]
-    steps:
-      - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Set up environment
-        uses: ./.github/workflows/env
-      - name: Tests
-        run: make rust-tests
-
-  check-binary-blobs:
-    name: Check for differences in the eBPF binary blobs
-    runs-on: ubuntu-24.04
-    container: otel/opentelemetry-ebpf-profiler-dev:latest@sha256:6ab9b5ff6c2a457be97a389887caf9f3cd5344f760fdab0101b9965236bbb2db
-    defaults:
-      run:
-        shell: bash --login {0}
-    steps:
-      - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: 'false'
-      - name: Hash binary blobs
-        run: |
-          sha256sum support/ebpf/tracer.ebpf.* > binary-blobs.hash
-      - name: Rebuild eBPF blobs
-        run: |
-          rm support/ebpf/tracer.ebpf.*
-          make amd64 -C support/ebpf
-          make arm64 -C support/ebpf
-      - name: Check for differences
-        run: |
-          if ! sha256sum --check binary-blobs.hash; then
-            echo "Please rebuild and commit the updated binary blobs."
-            exit 1
-          fi
-      - if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: binary-blobs
-          path: support/ebpf/tracer.ebpf.*
+        run: make test TARGET_ARCH=${{ matrix.target_arch }} GO_FLAGS="${{ matrix.go_flags }}"
 
   build-integration-test-binaries:
     name: Build integration test binaries (${{ matrix.target_arch }})
@@ -132,16 +109,18 @@ jobs:
         target_arch: [amd64, arm64]
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: 'false'
       - name: Set up environment
         uses: ./.github/workflows/env
+        with:
+          target_arch: ${{ matrix.target_arch }}
       - name: Prepare integration test binaries for qemu tests
         run: make integration-test-binaries TARGET_ARCH=${{ matrix.target_arch }}
       - run: ls -ltr support
       - name: Upload integration test binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: integration-test-binaries-${{ matrix.target_arch }}
           path: support/*.test
@@ -151,14 +130,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       - name: Set up Go
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Cache coredump modules
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: tools/coredump/modulecache
           key: coredumps-arm64-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -199,22 +178,26 @@ jobs:
           # fixed in qemu 9.2
           #- { target_arch: arm64, kernel: 6.16 }
     steps:
+      - name: Disable man-db
+        run: |
+          echo "set man-db/auto-update false" | sudo debconf-communicate
+          sudo dpkg-reconfigure man-db
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: 'false'
       - name: Install dependencies
         run: |
           sudo apt-get update -y && sudo apt-get -y install file
           case "${{ matrix.target_arch }}" in
-            amd64) sudo apt-get -y install qemu-system-x86;;
-            arm64) sudo apt-get -y install qemu-system-arm;;
+            amd64) sudo apt-get -y --no-install-recommends --no-install-suggests install qemu-system-x86 ;;
+            arm64) sudo apt-get -y --no-install-recommends --no-install-suggests install qemu-system-arm ipxe-qemu ;;
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
           go install github.com/florianl/bluebox@v0.0.1
           sudo mv ~/go/bin/bluebox /usr/local/bin/.
       - name: Fetch integration test binaries
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with: { name: "integration-test-binaries-${{ matrix.target_arch }}" }
       - name: Fetch precompiled kernel
         run: |

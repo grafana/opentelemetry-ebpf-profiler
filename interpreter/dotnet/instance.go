@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
 
@@ -165,7 +165,8 @@ func (i *dotnetInstance) appendStubFrame(frames *libpf.Frames, codeType uint) {
 
 // addRange inserts a known memory mapping along with the needed data of it to ebpf maps
 func (i *dotnetInstance) addRange(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	lowAddress, highAddress, mapBase libpf.Address, stubTypeOrHdrMap uint64) {
+	lowAddress, highAddress, mapBase libpf.Address, stubTypeOrHdrMap uint64,
+) {
 	// Inform the unwinder about this range
 	prefixes, err := lpm.CalculatePrefixList(uint64(lowAddress), uint64(highAddress))
 	if err != nil {
@@ -196,7 +197,8 @@ func (i *dotnetInstance) addRange(ebpf interpreter.EbpfHandler, pid libpf.PID,
 
 // walkRangeList processes stub ranges from a RangeList
 func (i *dotnetInstance) walkRangeList(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	headPtr libpf.Address, codeType uint) {
+	headPtr libpf.Address, codeType uint,
+) {
 	// This hardcodes the layout of RangeList, Range and RangeListBlock from
 	// https://github.com/dotnet/runtime/blob/v7.0.15/src/coreclr/inc/utilcode.h#L3556-L3579
 	const numRangesInBlock = 10
@@ -234,7 +236,8 @@ func (i *dotnetInstance) walkRangeList(ebpf interpreter.EbpfHandler, pid libpf.P
 
 // addRangeSection processes a RangeSection structure and calls addRange as needed
 func (i *dotnetInstance) addRangeSection(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	rangeSection []byte) error {
+	rangeSection []byte,
+) error {
 	// Extract interesting fields
 	vms := &i.d.vmStructs
 	lowAddress := npsr.Ptr(rangeSection, vms.RangeSection.LowAddress)
@@ -318,7 +321,8 @@ func (i *dotnetInstance) walkRangeSectionList(ebpf interpreter.EbpfHandler, pid 
 // walkRangeSectionMapFragments walks a RangeSectionMap::RangeSectionFragment list and processes
 // the RangeSections from it.
 func (i *dotnetInstance) walkRangeSectionMapFragments(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	fragmentPtr libpf.Address) error {
+	fragmentPtr libpf.Address,
+) error {
 	// https://github.com/dotnet/runtime/blob/v8.0.4/src/coreclr/vm/codeman.h#L974
 	vms := &i.d.vmStructs
 	fragment := make([]byte, 4*8)
@@ -347,7 +351,8 @@ func (i *dotnetInstance) walkRangeSectionMapFragments(ebpf interpreter.EbpfHandl
 
 // walkRangeSectionMapLevel walks recursively a level index of a RangeSectionMap.
 func (i *dotnetInstance) walkRangeSectionMapLevel(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	levelMapPtr libpf.Address, level uint) error {
+	levelMapPtr libpf.Address, level uint,
+) error {
 	// https://github.com/dotnet/runtime/blob/v8.0.4/src/coreclr/vm/codeman.h#L999-L1002
 	const maxLevel = 5
 	const entriesInLevel = 256
@@ -426,7 +431,8 @@ func (i *dotnetInstance) getPEInfoByModulePtr(modulePtr libpf.Address) (*peInfo,
 }
 
 func (i *dotnetInstance) readMethod(methodDescPtr libpf.Address,
-	debugInfoPtr libpf.Address) (*dotnetMethod, error) {
+	debugInfoPtr libpf.Address,
+) (*dotnetMethod, error) {
 	vms := &i.d.vmStructs
 
 	// Extract MethodDesc data
@@ -543,7 +549,8 @@ func (i *dotnetInstance) getDacSlotPtr(slot uint) libpf.Address {
 
 func (i *dotnetInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	exeReporter reporter.ExecutableReporter, pr process.Process,
-	mappings []process.Mapping) error {
+	mappings []process.Mapping,
+) error {
 	// find pointer to codeRangeList if needed
 	vms := &i.d.vmStructs
 	if i.codeRangeListPtr == 0 {
@@ -603,7 +610,7 @@ func (i *dotnetInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 		log.Debugf("%v -> %v guid %v", m.Path, info.simpleName, info.guid)
 
 		exeReporter.ReportExecutable(&reporter.ExecutableMetadata{
-			MappingFile: info.file,
+			MappingFile: info.mapping.Value().File,
 			Process:     pr,
 			Mapping:     m,
 		})
@@ -707,20 +714,20 @@ func (i *dotnetInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
 	}, nil
 }
 
-func (i *dotnetInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
-	if !frame.Type.IsInterpType(libpf.Dotnet) {
+func (i *dotnetInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames) error {
+	if !ef.Type().IsInterpType(libpf.Dotnet) {
 		return interpreter.ErrMismatchInterpreterType
 	}
 
 	sfCounter := successfailurecounter.New(&i.successCount, &i.failCount)
 	defer sfCounter.DefaultToFailure()
 
-	codeHeaderAndType := frame.File
-	frameType := uint(codeHeaderAndType & 0x1f)
+	codeHeaderAndType := ef.Variable(0)
+	subframeType := uint(codeHeaderAndType & 0x1f)
 	codeHeaderPtr := libpf.Address(codeHeaderAndType >> 5)
-	pcOffset := uint32(frame.Lineno)
+	pcOffset := uint32(ef.Data())
 
-	switch frameType {
+	switch subframeType {
 	case codeReadyToRun:
 		// Ready to Run (Non-JIT) frame running directly code from a PE file
 		module, err := i.getPEInfoByAddress(uint64(codeHeaderPtr))
@@ -736,7 +743,7 @@ func (i *dotnetInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) erro
 			AddressOrLineno: libpf.AddressOrLineno(pcOffset),
 			FunctionName:    module.resolveR2RMethodName(pcOffset),
 			SourceFile:      module.simpleName,
-			MappingFile:     module.file,
+			Mapping:         module.mapping,
 		})
 	case codeJIT:
 		// JITted frame in anonymous mapping
@@ -749,7 +756,7 @@ func (i *dotnetInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) erro
 			break
 		}
 
-		ilOffset := method.mapPCOffsetToILOffset(pcOffset, frame.ReturnAddress)
+		ilOffset := method.mapPCOffsetToILOffset(pcOffset, ef.Flags().ReturnAddress())
 
 		// The Line ID format is:
 		//  4 bits  Set to 0xf to indicate JIT frame.
@@ -765,11 +772,11 @@ func (i *dotnetInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) erro
 			SourceFile:      method.module.simpleName,
 			FunctionName:    methodName,
 			FunctionOffset:  ilOffset,
-			MappingFile:     method.module.file,
+			Mapping:         method.module.mapping,
 		})
 	default:
 		// Stub code
-		i.appendStubFrame(frames, frameType)
+		i.appendStubFrame(frames, subframeType)
 	}
 
 	sfCounter.ReportSuccess()

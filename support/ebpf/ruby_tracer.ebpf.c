@@ -2,6 +2,7 @@
 
 #include "bpfdefs.h"
 #include "tracemgmt.h"
+#include "tsd.h"
 #include "types.h"
 
 // Map from Ruby process IDs to a structure containing addresses of variables
@@ -25,9 +26,15 @@ struct ruby_procs_t {
 #define RUBY_FRAME_FLAG_LAMBDA  0x0100
 
 // Record a Ruby frame
-static EBPF_INLINE ErrorCode push_ruby(Trace *trace, u64 file, u64 line)
+static EBPF_INLINE ErrorCode push_ruby(UnwindState *state, Trace *trace, u64 file, u64 line)
 {
-  return _push(trace, file, line, FRAME_MARKER_RUBY);
+  u64 *data = push_frame(state, trace, FRAME_MARKER_RUBY, FRAME_FLAG_PID_SPECIFIC, 0, 2);
+  if (!data) {
+    return ERR_STACK_LENGTH_EXCEEDED;
+  }
+  data[0] = file;
+  data[1] = line;
+  return ERR_OK;
 }
 
 // walk_ruby_stack processes a Ruby VM stack, extracts information from the individual frames and
@@ -199,7 +206,7 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
     // For symbolization of the frame we forward the information about the instruction sequence
     // and program counter to user space.
     // From this we can then extract information like file or function name and line number.
-    ErrorCode error = push_ruby(trace, (u64)iseq_body, pc);
+    ErrorCode error = push_ruby(&record->state, trace, (u64)iseq_body, pc);
     if (error) {
       DEBUG_PRINT("ruby: failed to push frame");
       return error;
@@ -248,12 +255,33 @@ static EBPF_INLINE int unwind_ruby(struct pt_regs *ctx)
   // Pointer for an address to a rb_execution_context_struct struct.
   void *current_ctx_addr = NULL;
 
-  if (rubyinfo->version >= 0x30000) {
+  if (rubyinfo->current_ec_tpbase_tls_offset != 0) {
     // With Ruby 3.x and its internal change of the execution model, we can no longer
-    // access rb_execution_context_struct directly. Therefore we have to first lookup
-    // ruby_single_main_ractor and get access to the current execution context via
-    // the offset to running_ec.
+    // access rb_execution_context_struct directly. We will look up the
+    // ruby_current_ec from thread local storage, analogous to how it is done
+    // in ruby itself
+    // https://github.com/ruby/ruby/blob/6c0315d99a93bdea947f821bd337000420ab41d1/vm_core.h#L2024
 
+    u64 tsd_base;
+    if (tsd_get_base((void **)&tsd_base) != 0) {
+      DEBUG_PRINT("ruby: failed to get TSD base for TLS symbol lookup");
+      error = ERR_RUBY_READ_TSD_BASE;
+      goto exit;
+    }
+
+    u64 tls_current_ec_addr = tsd_base + rubyinfo->current_ec_tpbase_tls_offset;
+    DEBUG_PRINT(
+      "ruby: got TLS EC symbol addr 0x%llx from 0x%llx",
+      (u64)tls_current_ec_addr,
+      tls_current_ec_addr);
+
+    if (bpf_probe_read_user(
+          &current_ctx_addr, sizeof(current_ctx_addr), (void *)(tls_current_ec_addr))) {
+      goto exit;
+    }
+
+    DEBUG_PRINT("ruby: EC from TLS: 0x%llx", (u64)current_ctx_addr);
+  } else if (rubyinfo->version >= 0x30000) {
     void *single_main_ractor = NULL;
     if (bpf_probe_read_user(
           &single_main_ractor, sizeof(single_main_ractor), (void *)rubyinfo->current_ctx_ptr)) {

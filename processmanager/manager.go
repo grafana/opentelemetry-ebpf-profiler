@@ -8,16 +8,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"slices"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
@@ -34,10 +36,6 @@ import (
 )
 
 const (
-	// lruFileIDCacheSize is the LRU size for caching 64-bit and 128-bit file IDs.
-	// This should reflect the number of hot file IDs that are seen often in a trace.
-	lruFileIDCacheSize = 32768
-
 	// Maximum size of the LRU cache holding the executables' ELF information.
 	elfInfoCacheSize = 16384
 
@@ -51,42 +49,24 @@ const (
 	frameCacheLifetime = 5 * time.Minute
 )
 
-var (
-	// dummyPrefix is the LPM prefix installed to indicate the process is known
-	dummyPrefix = lpm.Prefix{Key: 0, Length: 64}
-)
+// dummyPrefix is the LPM prefix installed to indicate the process is known
+var dummyPrefix = lpm.Prefix{Key: 0, Length: 64}
 
 var (
 	errSymbolizationNotSupported = errors.New("symbolization not supported")
-	// errUnknownMapping indicates that the memory mapping is not known to
-	// the process manager.
-	errUnknownMapping = errors.New("unknown memory mapping")
-	// errUnknownPID indicates that the process is not known to the process manager.
-	errUnknownPID = errors.New("unknown process")
 	// errPIDGone indicates that a process is no longer managed by the process manager.
 	errPIDGone = errors.New("interpreter process gone")
 )
 
 // New creates a new ProcessManager which is responsible for keeping track of loading
 // and unloading of symbols for processes.
-//
-// Three external interfaces are used to access the processes and related resources: ebpf,
-// fileIDMapper and symbolReporter. Specify nil for fileIDMapper to use the default
-// implementation.
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
-	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, traceReporter reporter.TraceReporter,
+	ebpf pmebpf.EbpfHandler, traceReporter reporter.TraceReporter,
 	exeReporter reporter.ExecutableReporter, sdp nativeunwind.StackDeltaProvider,
 	filterErrorFrames bool, policy dynamicprofiling.Policy, includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
 	if policy == nil {
 		policy = dynamicprofiling.AlwaysOnPolicy{}
 		log.Warn("No policy specified, using AlwaysOnPolicy")
-	}
-	if fileIDMapper == nil {
-		var err error
-		fileIDMapper, err = newFileIDMapper(lruFileIDCacheSize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize file ID mapping: %v", err)
-		}
 	}
 	if exeReporter == nil {
 		exeReporter = executableReporterStub{}
@@ -119,7 +99,6 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		exitEvents:               make(map[libpf.PID]times.KTime),
 		pidToProcessInfo:         make(map[libpf.PID]*processInfo),
 		ebpf:                     ebpf,
-		FileIDMapper:             fileIDMapper,
 		elfInfoCache:             elfInfoCache,
 		frameCache:               frameCache,
 		traceReporter:            traceReporter,
@@ -161,7 +140,8 @@ func updateMetricSummary(ii interpreter.Instance, summary metrics.Summary) error
 // collectInterpreterMetrics starts a goroutine that periodically fetches and reports interpreter
 // metrics.
 func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
-	monitorInterval time.Duration) {
+	monitorInterval time.Duration,
+) {
 	periodiccaller.Start(ctx, monitorInterval, func() {
 		pm.mu.RLock()
 		defer pm.mu.RUnlock()
@@ -177,33 +157,21 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 			}
 		}
 
-		summary[metrics.IDHashmapPidPageToMappingInfo] =
-			metrics.MetricValue(pm.pidPageToMappingInfoSize)
+		summary[metrics.IDHashmapPidPageToMappingInfo] = metrics.MetricValue(pm.pidPageToMappingInfoSize)
 
-		summary[metrics.IDELFInfoCacheHit] =
-			metrics.MetricValue(pm.elfInfoCacheHit.Swap(0))
-		summary[metrics.IDELFInfoCacheMiss] =
-			metrics.MetricValue(pm.elfInfoCacheMiss.Swap(0))
+		summary[metrics.IDELFInfoCacheHit] = metrics.MetricValue(pm.elfInfoCacheHit.Swap(0))
+		summary[metrics.IDELFInfoCacheMiss] = metrics.MetricValue(pm.elfInfoCacheMiss.Swap(0))
 
-		summary[metrics.IDTraceCacheHit] =
-			metrics.MetricValue(pm.frameCacheHit.Swap(0))
-		summary[metrics.IDTraceCacheMiss] =
-			metrics.MetricValue(pm.frameCacheMiss.Swap(0))
+		summary[metrics.IDTraceCacheHit] = metrics.MetricValue(pm.frameCacheHit.Swap(0))
+		summary[metrics.IDTraceCacheMiss] = metrics.MetricValue(pm.frameCacheMiss.Swap(0))
 
-		summary[metrics.IDErrProcNotExist] =
-			metrics.MetricValue(pm.mappingStats.errProcNotExist.Swap(0))
-		summary[metrics.IDErrProcESRCH] =
-			metrics.MetricValue(pm.mappingStats.errProcESRCH.Swap(0))
-		summary[metrics.IDErrProcPerm] =
-			metrics.MetricValue(pm.mappingStats.errProcPerm.Swap(0))
-		summary[metrics.IDNumProcAttempts] =
-			metrics.MetricValue(pm.mappingStats.numProcAttempts.Swap(0))
-		summary[metrics.IDMaxProcParseUsec] =
-			metrics.MetricValue(pm.mappingStats.maxProcParseUsec.Swap(0))
-		summary[metrics.IDTotalProcParseUsec] =
-			metrics.MetricValue(pm.mappingStats.totalProcParseUsec.Swap(0))
-		summary[metrics.IDErrProcParse] =
-			metrics.MetricValue(pm.mappingStats.numProcParseErrors.Swap(0))
+		summary[metrics.IDErrProcNotExist] = metrics.MetricValue(pm.mappingStats.errProcNotExist.Swap(0))
+		summary[metrics.IDErrProcESRCH] = metrics.MetricValue(pm.mappingStats.errProcESRCH.Swap(0))
+		summary[metrics.IDErrProcPerm] = metrics.MetricValue(pm.mappingStats.errProcPerm.Swap(0))
+		summary[metrics.IDNumProcAttempts] = metrics.MetricValue(pm.mappingStats.numProcAttempts.Swap(0))
+		summary[metrics.IDMaxProcParseUsec] = metrics.MetricValue(pm.mappingStats.maxProcParseUsec.Swap(0))
+		summary[metrics.IDTotalProcParseUsec] = metrics.MetricValue(pm.mappingStats.totalProcParseUsec.Swap(0))
+		summary[metrics.IDErrProcParse] = metrics.MetricValue(pm.mappingStats.numProcParseErrors.Swap(0))
 
 		mapsMetrics := pm.ebpf.CollectMetrics()
 		for _, metric := range mapsMetrics {
@@ -218,7 +186,7 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 func (pm *ProcessManager) Close() {
 }
 
-func (pm *ProcessManager) symbolizeFrame(pid libpf.PID, bpfFrame *host.Frame, frames *libpf.Frames) error {
+func (pm *ProcessManager) symbolizeFrame(pid libpf.PID, data []uint64, frames *libpf.Frames) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -227,7 +195,7 @@ func (pm *ProcessManager) symbolizeFrame(pid libpf.PID, bpfFrame *host.Frame, fr
 	}
 
 	for _, instance := range pm.interpreters[pid] {
-		if err := instance.Symbolize(bpfFrame, frames); err != nil {
+		if err := instance.Symbolize(data, frames); err != nil {
 			if errors.Is(err, interpreter.ErrMismatchInterpreterType) {
 				// The interpreter type of instance did not match the type of frame.
 				// So continue with the next interpreter instance for this PID.
@@ -244,12 +212,18 @@ func (pm *ProcessManager) symbolizeFrame(pid libpf.PID, bpfFrame *host.Frame, fr
 
 // convertFrame converts one host Frame to one or more libpf.Frames. It returns true
 // if non-trivial cacheable conversion was done.
-func (pm *ProcessManager) convertFrame(pid libpf.PID, frame *host.Frame, dst *libpf.Frames) bool {
-	switch frame.Type.Interpreter() {
-	case libpf.UnknownInterp:
-		log.Errorf("Unexpected frame type 0x%02X (neither error nor interpreter frame)",
-			uint8(frame.Type))
-	case libpf.Native, libpf.Kernel:
+func (pm *ProcessManager) convertFrame(pid libpf.PID, ef libpf.EbpfFrame, dst *libpf.Frames) bool {
+	switch ef.Type().Interpreter() {
+	case libpf.UnknownInterp, libpf.Kernel:
+		log.Errorf("Unexpected frame type 0x%02X (neither error nor usermode frame)",
+			uint8(ef.Type()))
+	case libpf.Native:
+		// Attempt symbolization of native frames. It is best effort and
+		// provides non-symbolized frames if no native symbolizer is active.
+		if err := pm.symbolizeFrame(pid, ef, dst); err == nil {
+			return true
+		}
+
 		// The BPF code classifies whether an address is a return address or not.
 		// Return addresses are where execution resumes when returning to the stack
 		// frame and point to the **next instruction** after the call instruction
@@ -264,75 +238,47 @@ func (pm *ProcessManager) convertFrame(pid libpf.PID, frame *host.Frame, dst *li
 		// Optimally we'd subtract the size of the call instruction here instead
 		// of doing `- 1`, but disassembling backwards is quite difficult for
 		// variable length instruction sets like X86.
-		relativeRIP := frame.Lineno
-		if frame.ReturnAddress {
+		fileID := host.FileID(ef.Variable(0))
+		lineno := libpf.Address(ef.Data())
+		relativeRIP := lineno
+		if ef.Flags().ReturnAddress() {
 			relativeRIP--
 		}
 
 		// Locate mapping info for the frame.
-		var mappingStart, mappingEnd libpf.Address
-		var fileOffset uint64
-		if frame.Type.Interpreter() == libpf.Native {
-			if mapping, ok := pm.findMappingForTrace(pid, frame.File, frame.Lineno); ok {
-				mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
-				mappingEnd = mappingStart + libpf.Address(mapping.Length)
-				fileOffset = mapping.FileOffset
-			}
-		}
-
-		// Attempt symbolization of native frames. It is best effort and
-		// provides non-symbolized frames if no native symbolizer is active.
-		if err := pm.symbolizeFrame(pid, frame, dst); err == nil {
-			return true
-		}
-
-		if mappingFile, ok := pm.FileIDMapper.Get(frame.File); ok {
-			dst.Append(&libpf.Frame{
-				Type:              frame.Type,
-				AddressOrLineno:   relativeRIP,
-				MappingStart:      mappingStart,
-				MappingEnd:        mappingEnd,
-				MappingFileOffset: fileOffset,
-				MappingFile:       mappingFile,
-			})
-		} else {
-			log.Debugf(
-				"file ID lookup failed for PID %d, frame type %d",
-				pid, frame.Type)
-
-			dst.Append(&libpf.Frame{
-				Type:              frame.Type,
-				MappingStart:      mappingStart,
-				MappingEnd:        mappingEnd,
-				MappingFileOffset: fileOffset,
-			})
-		}
+		mapping := pm.findMappingForTrace(pid, fileID, lineno)
+		dst.Append(&libpf.Frame{
+			Type:            ef.Type(),
+			AddressOrLineno: libpf.AddressOrLineno(relativeRIP),
+			Mapping:         mapping,
+		})
 	default:
-		err := pm.symbolizeFrame(pid, frame, dst)
+		err := pm.symbolizeFrame(pid, ef, dst)
 		if err == nil {
 			return true
 		}
 		log.Debugf("symbolization failed for PID %d, frame type %d: %v",
-			pid, frame.Type, err)
-		dst.Append(&libpf.Frame{Type: frame.Type})
+			pid, ef.Type(), err)
+		dst.Append(&libpf.Frame{Type: ef.Type()})
 	}
 	return false
 }
 
 func (pm *ProcessManager) maybeNotifyAPMAgent(
-	rawTrace *host.Trace, umTraceHash libpf.TraceHash, count uint16) string {
+	rawTrace *libpf.EbpfTrace, umTraceHash libpf.TraceHash, count uint16,
+) string {
 	pm.mu.RLock()
+	// Keeping the lock until end of the function is needed because inner map can be modified
+	// concurrently (by synchronizeMappings/newFrameMapping).
+	defer pm.mu.RUnlock()
 	pidInterp, ok := pm.interpreters[rawTrace.PID]
-	pm.mu.RUnlock()
 	if !ok {
 		return ""
 	}
-
 	var serviceName string
 	for _, mapping := range pidInterp {
 		if apm, ok := mapping.(*apmint.Instance); ok {
 			apm.NotifyAPMAgent(rawTrace.PID, rawTrace, umTraceHash, count)
-
 			if serviceName != "" {
 				log.Warnf("Overwriting APM service name from '%s' to '%s' for PID %d",
 					serviceName,
@@ -349,16 +295,18 @@ func (pm *ProcessManager) maybeNotifyAPMAgent(
 }
 
 func hashFrameCacheKey(fk frameCacheKey) uint32 {
-	return uint32(uint64(fk.Frame.File) + uint64(fk.Frame.Lineno))
+	h := fnv.New32a()
+	h.Write(pfunsafe.FromSlice(fk.data[:]))
+	return h.Sum32()
 }
 
 // HandleTrace processes and reports the given host.Trace. This function
 // is not re-entrant due to frameCache not being synced. If the tracer is
 // later updated to distribute trace handling to goroutine pool, the caching
 // strategy needs to be updated accordingly.
-func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
+func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	meta := &samples.TraceEventMeta{
-		Timestamp:      libpf.UnixTime64(bpfTrace.KTime.UnixNano()),
+		Timestamp:      libpf.UnixTime64(times.KTime(bpfTrace.KTime).UnixNano()),
 		Comm:           bpfTrace.Comm,
 		PID:            bpfTrace.PID,
 		TID:            bpfTrace.TID,
@@ -375,7 +323,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 	pid := bpfTrace.PID
 	kernelFramesLen := len(bpfTrace.KernelFrames)
 	trace := &libpf.Trace{
-		Frames:       make(libpf.Frames, kernelFramesLen, 512),
+		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+bpfTrace.NumFrames),
 		CustomLabels: bpfTrace.CustomLabels,
 	}
 	copy(trace.Frames, bpfTrace.KernelFrames)
@@ -383,28 +331,24 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 	cacheMiss := uint64(0)
 	cacheHit := uint64(0)
 
-	for i := range bpfTrace.Frames {
-		frame := &bpfTrace.Frames[i]
-		if frame.Type.IsError() {
+	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
+		frame := frames[:frames.Length()]
+		if frame.Flags().Error() {
 			if !pm.filterErrorFrames {
 				trace.Frames.Append(&libpf.Frame{
-					Type:            frame.Type,
-					AddressOrLineno: frame.Lineno,
+					Type:            frame.Type().Error(),
+					AddressOrLineno: libpf.AddressOrLineno(frame.Data()),
 				})
 			}
 			continue
 		}
 
 		oldLen := len(trace.Frames)
-		key := frameCacheKey{Frame: *frame}
-		switch frame.Type {
-		case libpf.NativeFrame, libpf.KernelFrame:
-			// The native frames can be cached for all PIDs.
-		default:
-			// By default the per-interpreter frames have cached entry
-			// specific to the PID.
-			key.PID = pid
+		key := frameCacheKey{}
+		if frame.Flags().PIDSpecific() {
+			key.pid = pid
 		}
+		copy(key.data[:], frame)
 		if cached, ok := pm.frameCache.GetAndRefresh(key, frameCacheLifetime); ok {
 			// Fast path
 			cacheHit++
@@ -423,7 +367,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 	if cacheHit != 0 {
 		pm.frameCacheHit.Add(cacheHit)
 	}
-
+	pm.mu.RLock()
 	// Release resources that were used to symbolize this stack.
 	pm.mu.RLock() // tmp race fix until mmap/ReleaseResources is removed
 	for _, instance := range pm.interpreters[pid] {
@@ -431,7 +375,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 			log.Warnf("Failed to release resources for %d: %v", pid, err)
 		}
 	}
-	pm.mu.RUnlock() // tmp race fix until mmap/ReleaseResources is removed
+	pm.mu.RUnlock()
 
 	trace.Hash = traceutil.HashTrace(trace)
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
