@@ -27,8 +27,10 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
           toolchain: 1.84.1
