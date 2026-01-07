@@ -56,7 +56,7 @@ type Resolver struct {
 }
 
 func (c *Resolver) ReportExecutable(md *reporter.ExecutableMetadata) {
-	if !md.MappingFile.Valid() {
+	if md.MappingFile == (libpf.FrameMappingFile{}) {
 		return
 	}
 	m := md.MappingFile.Value()
@@ -182,7 +182,7 @@ func (c *Resolver) ExecutableKnown(id libpf.FileID) bool {
 }
 
 func (c *Resolver) ObserveExecutable(fid libpf.FileID, md *reporter.ExecutableMetadata) error {
-	if !md.MappingFile.Valid() {
+	if md.MappingFile == (libpf.FrameMappingFile{}) {
 		return fmt.Errorf("invalid mapping file")
 	}
 	if md.MappingFile.Value().FileName == process.VdsoPathName {
@@ -224,8 +224,7 @@ func (c *Resolver) convert(
 	}
 
 	if md.DebuglinkFileName != "" {
-		debuglinkFileName, _ := md.Process.ExtractAsFile(md.DebuglinkFileName)
-		src, err = os.Open(debuglinkFileName)
+		src, err = os.Open(md.DebuglinkFileName)
 		if err != nil {
 			log.Debugf("open debug file failed: %v", err)
 		} else {

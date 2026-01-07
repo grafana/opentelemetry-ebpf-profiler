@@ -28,7 +28,7 @@ type Config struct {
 	ReporterFactory func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)
 	Reporter        reporter.Reporter
 
-	Policy             dynamicprofiling.Policy
+	Policy dynamicprofiling.Policy
 
 	Fs *flag.FlagSet
 }
