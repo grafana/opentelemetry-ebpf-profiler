@@ -132,8 +132,6 @@ type Mapping struct {
 	// Inode number of the backing file
 	Inode uint64
 
-	FilePath libpf.String
-
 	// FrameMapping data for this mapping.
 	FrameMapping libpf.FrameMapping
 }
