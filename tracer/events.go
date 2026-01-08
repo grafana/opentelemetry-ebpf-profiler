@@ -13,9 +13,9 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/perf"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/support"
@@ -88,7 +88,8 @@ func (t *Tracer) triggerPidEvent(data []byte) {
 // calls. Returns a function that can be called to retrieve perf event array
 // error counts.
 func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
-	triggerFunc func([]byte), perCPUBufferSize int) func() (lost, noData, readError uint64) {
+	triggerFunc func([]byte), perCPUBufferSize int,
+) func() (lost, noData, readError uint64) {
 	eventReader, err := perf.NewReader(perfEventMap, perCPUBufferSize)
 	if err != nil {
 		log.Fatalf("Failed to setup perf reporting via %s: %v", perfEventMap, err)
@@ -134,7 +135,8 @@ func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
 // Returns a function that can be called to retrieve perf event array
 // error counts.
 func (t *Tracer) startTraceEventMonitor(ctx context.Context,
-	traceOutChan chan<- *host.Trace) func() []metrics.Metric {
+	traceOutChan chan<- *libpf.EbpfTrace,
+) func() []metrics.Metric {
 	eventsMap := t.ebpfMaps["trace_events"]
 	eventReader, err := perf.NewReader(eventsMap,
 		t.samplesPerSecond*support.Sizeof_Trace)
@@ -150,7 +152,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
 	go func() {
 		var data perf.Record
-		var oldKTime, minKTime times.KTime
+		var oldKTime, minKTime int64
 		var eventCount int
 
 		pollTicker := time.NewTicker(t.intervals.TracePollInterval())
@@ -249,10 +251,10 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 				if minKTime > 0 && minKTime <= oldKTime {
 					// If minKTime is smaller than oldKTime, use it and reset it
 					// to avoid a repeat during next iteration.
-					t.processManager.ProcessedUntil(minKTime)
+					t.processManager.ProcessedUntil(times.KTime(minKTime))
 					minKTime = 0
 				} else {
-					t.processManager.ProcessedUntil(oldKTime)
+					t.processManager.ProcessedUntil(times.KTime(oldKTime))
 				}
 			}
 			oldKTime = minKTime

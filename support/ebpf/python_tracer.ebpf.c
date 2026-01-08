@@ -25,9 +25,15 @@ struct py_procs_t {
 } py_procs SEC(".maps");
 
 // Record a Python frame
-static EBPF_INLINE ErrorCode push_python(Trace *trace, u64 file, u64 line)
+static EBPF_INLINE ErrorCode push_python(UnwindState *state, Trace *trace, u64 file, u64 line)
 {
-  return _push(trace, file, line, FRAME_MARKER_PYTHON);
+  u64 *data = push_frame(state, trace, FRAME_MARKER_PYTHON, FRAME_FLAG_PID_SPECIFIC, 0, 2);
+  if (!data) {
+    return ERR_STACK_LENGTH_EXCEEDED;
+  }
+  data[0] = file;
+  data[1] = line;
+  return ERR_OK;
 }
 
 static EBPF_INLINE u64 py_encode_lineno(u32 object_id, u32 f_lasti)
@@ -72,7 +78,8 @@ static EBPF_INLINE ErrorCode process_python_frame(
 
   // Stop unwinding if `f_executable` is None. See comment when getting the
   // ´noneStruct´ address in python.go for details.
-  if (pyinfo->version >= 0x30d && py_codeobject == (void *)pyinfo->noneStructAddr) {
+  void *noneStructAddr = (void *)pyinfo->noneStructAddr;
+  if (noneStructAddr && py_codeobject == noneStructAddr) {
     *continue_with_next = true;
     return ERR_OK;
   }
@@ -92,7 +99,7 @@ static EBPF_INLINE ErrorCode process_python_frame(
   // selected in the *hope* that no collisions occur between code objects.
 
   int py_f_lasti = 0;
-  if (pyinfo->version >= 0x030b) {
+  if (pyinfo->lasti_is_codeunit) {
     // With Python 3.11 the element f_lasti not only got renamed but also its
     // type changed from int to a _Py_CODEUNIT* and needs to be translated to lastI.
     // It is a direct pointer to the bytecode, so calculate the byte code index.
@@ -153,7 +160,7 @@ static EBPF_INLINE ErrorCode process_python_frame(
 
 push_frame:
   DEBUG_PRINT("Pushing Python %lx %lu", (unsigned long)file_id, (unsigned long)lineno);
-  ErrorCode error = push_python(trace, file_id, lineno);
+  ErrorCode error = push_python(&record->state, trace, file_id, lineno);
   if (error) {
     DEBUG_PRINT("failed to push python frame");
     return error;
@@ -245,45 +252,22 @@ static EBPF_INLINE ErrorCode get_PyFrame(const PyProcInfo *pyinfo, void **frame)
     return ERR_PYTHON_ZERO_THREAD_STATE;
   }
 
-  if (pyinfo->version >= 0x30b) {
-    // Starting with 3.11 we have to do an additional step to get to _PyInterpreterFrame, formerly
-    // known as PyFrameObject.
-
-    // Get PyThreadState.cframe
-    void *cframe_ptr;
-    if (bpf_probe_read_user(
-          &cframe_ptr, sizeof(void *), py_tsd_thread_state + pyinfo->PyThreadState_frame)) {
+  // Get PyThreadState.frame
+  if (bpf_probe_read_user(
+        frame, sizeof(void *), py_tsd_thread_state + pyinfo->PyThreadState_frame)) {
+    DEBUG_PRINT(
+      "Failed to read PyThreadState.frame at 0x%lx",
+      (unsigned long)(py_tsd_thread_state + pyinfo->PyThreadState_frame));
+    increment_metric(metricID_UnwindPythonErrBadThreadStateFrameAddr);
+    return ERR_PYTHON_BAD_THREAD_STATE_FRAME_ADDR;
+  }
+  if (pyinfo->frame_is_cframe) {
+    if (bpf_probe_read_user(frame, sizeof(void *), *frame + pyinfo->PyCFrame_current_frame)) {
       DEBUG_PRINT(
-        "Failed to read PyThreadState.cframe at 0x%lx",
-        (unsigned long)(py_tsd_thread_state + pyinfo->PyThreadState_frame));
-      increment_metric(metricID_UnwindPythonErrBadThreadStateFrameAddr);
-      return ERR_PYTHON_BAD_THREAD_STATE_FRAME_ADDR;
-    }
-
-    // Get _PyCFrame.current_frame.
-    //
-    // Starting with Python 3.13, the indirection through _PyCFrame is removed.
-    // See commit 006e44f9 in the CPython repo.
-    if (pyinfo->version < 0x30d) {
-      if (bpf_probe_read_user(frame, sizeof(void *), cframe_ptr + pyinfo->PyCFrame_current_frame)) {
-        DEBUG_PRINT(
-          "Failed to read _PyCFrame.current_frame at 0x%lx",
-          (unsigned long)(cframe_ptr + pyinfo->PyCFrame_current_frame));
-        increment_metric(metricID_UnwindPythonErrBadCFrameFrameAddr);
-        return ERR_PYTHON_BAD_CFRAME_CURRENT_FRAME_ADDR;
-      }
-    } else {
-      *frame = cframe_ptr;
-    }
-  } else {
-    // Get PyThreadState.frame
-    if (bpf_probe_read_user(
-          frame, sizeof(void *), py_tsd_thread_state + pyinfo->PyThreadState_frame)) {
-      DEBUG_PRINT(
-        "Failed to read PyThreadState.frame at 0x%lx",
-        (unsigned long)(py_tsd_thread_state + pyinfo->PyThreadState_frame));
-      increment_metric(metricID_UnwindPythonErrBadThreadStateFrameAddr);
-      return ERR_PYTHON_BAD_THREAD_STATE_FRAME_ADDR;
+        "Failed to read _PyCFrame.current_frame at 0x%lx",
+        (unsigned long)(*frame + pyinfo->PyCFrame_current_frame));
+      increment_metric(metricID_UnwindPythonErrBadCFrameFrameAddr);
+      return ERR_PYTHON_BAD_CFRAME_CURRENT_FRAME_ADDR;
     }
   }
 
@@ -311,7 +295,8 @@ static EBPF_INLINE int unwind_python(struct pt_regs *ctx)
     // Not a Python process that we have info on
     DEBUG_PRINT("Can't build Python stack, no address info");
     increment_metric(metricID_UnwindPythonErrNoProcInfo);
-    return ERR_PYTHON_NO_PROC_INFO;
+    error = ERR_PYTHON_NO_PROC_INFO;
+    goto exit;
   }
 
   DEBUG_PRINT("Building Python stack for 0x%x", pyinfo->version);

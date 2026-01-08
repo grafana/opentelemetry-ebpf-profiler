@@ -21,7 +21,7 @@ func (d *dummyProcess) GetProcessMeta(config process.MetaConfig) process.Process
 	panic("implement me")
 }
 
-func (d *dummyProcess) GetExe() (string, error) {
+func (d *dummyProcess) GetExe() (libpf.String, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -60,10 +60,6 @@ func (d *dummyProcess) OpenMappingFile(m *process.Mapping) (process.ReadAtCloser
 
 func (d *dummyProcess) OpenELF(name string) (*pfelf.File, error) {
 	return pfelf.Open(name)
-}
-
-func (d *dummyProcess) ExtractAsFile(name string) (string, error) {
-	return name, nil
 }
 
 func (d *dummyProcess) Close() error {

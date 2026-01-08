@@ -10,11 +10,12 @@ import (
 	"time"
 
 	lru "github.com/elastic/go-freelru"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/beam"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
@@ -24,6 +25,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -32,17 +34,10 @@ import (
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
-	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 const (
-	// minimumMemoizableGapSize is the minimum size for a gap for it to be
-	// recorded. Currently reflects the V8 binary blob size, in which
-	// the gap size is >= 512kB.
-	minimumMemoizableGapSize = 512 * 1024
-
 	// deferredFileIDSize defines the maximum size of the deferredFileIDs LRU
 	// cache that contains file IDs for which stack delta extraction is deferred
 	// to avoid busy loops.
@@ -51,11 +46,9 @@ const (
 	deferredFileIDTimeout = 90 * time.Second
 )
 
-var (
-	// ErrDeferredFileID indicates that handling of stack deltas for a file ID failed
-	// and should only be tried again at a later point.
-	ErrDeferredFileID = errors.New("deferred FileID")
-)
+// ErrDeferredFileID indicates that handling of stack deltas for a file ID failed
+// and should only be tried again at a later point.
+var ErrDeferredFileID = errors.New("deferred FileID")
 
 // ExecutableInfo stores information about an executable (ELF file).
 type ExecutableInfo struct {
@@ -63,8 +56,8 @@ type ExecutableInfo struct {
 	// instance belongs to was previously identified as an interpreter. Otherwise,
 	// this field is nil.
 	Data interpreter.Data
-	// TSDInfo stores TSD information if the executable is libc, otherwise nil.
-	TSDInfo *tpbase.TSDInfo
+	// LibcInfo stores libc information if the executable is libc, otherwise nil.
+	LibcInfo *libc.LibcInfo
 }
 
 // ExecutableInfoManager manages all per-executable (FileID) information that we require to
@@ -128,6 +121,9 @@ func NewExecutableInfoManager(
 	if includeTracers.Has(types.GoTracer) {
 		interpreterLoaders = append(interpreterLoaders, golang.Loader)
 	}
+	if includeTracers.Has(types.BEAMTracer) {
+		interpreterLoaders = append(interpreterLoaders, beam.Loader)
+	}
 
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if includeTracers.Has(types.Labels) {
@@ -159,15 +155,15 @@ func NewExecutableInfoManager(
 // The return value is copied instead of returning a pointer in order to spare us the use
 // of getters and more complicated locking semantics.
 func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
-	elfRef *pfelf.Reference) (ExecutableInfo, error) {
+	elfRef *pfelf.Reference,
+) (ExecutableInfo, error) {
 	if _, exists := mgr.deferredFileIDs.Get(fileID); exists {
 		return ExecutableInfo{}, ErrDeferredFileID
 	}
 	var (
 		intervalData sdtypes.IntervalData
-		tsdInfo      *tpbase.TSDInfo
+		libcInfo     *libc.LibcInfo
 		ref          mapRef
-		gaps         []util.Range
 		err          error
 	)
 
@@ -199,9 +195,9 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	}
 
 	// Also gather TSD info if applicable.
-	if tpbase.IsPotentialTSDDSO(elfRef.FileName()) {
+	if libc.IsPotentialTSDDSO(elfRef.FileName()) {
 		if ef, errx := elfRef.GetELF(); errx == nil {
-			tsdInfo, _ = tpbase.ExtractTSDInfo(ef)
+			libcInfo, _ = libc.ExtractLibcInfo(ef)
 		}
 	}
 
@@ -215,20 +211,20 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	}
 
 	// Load the data into BPF maps.
-	ref, gaps, err = state.loadDeltas(fileID, intervalData.Deltas)
+	ref, err = state.loadDeltas(fileID, intervalData.Deltas)
 	if err != nil {
 		mgr.deferredFileIDs.Add(fileID, libpf.Void{})
 		return ExecutableInfo{}, fmt.Errorf("failed to load deltas: %w", err)
 	}
 
 	// Create the LoaderInfo for interpreter detection
-	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, gaps)
+	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef)
 
 	// Insert a corresponding record into our map.
 	info = &entry{
 		ExecutableInfo: ExecutableInfo{
-			Data:    state.detectAndLoadInterpData(loaderInfo),
-			TSDInfo: tsdInfo,
+			Data:     state.detectAndLoadInterpData(loaderInfo),
+			LibcInfo: libcInfo,
 		},
 		mapRef: ref,
 		rc:     1,
@@ -280,19 +276,14 @@ func (mgr *ExecutableInfoManager) NumInterpreterLoaders() int {
 // UpdateMetricSummary updates the metrics in the given metric map.
 func (mgr *ExecutableInfoManager) UpdateMetricSummary(summary metrics.Summary) {
 	state := mgr.state.RLock()
-	summary[metrics.IDNumExeIDLoadedToEBPF] =
-		metrics.MetricValue(len(state.executables))
-	summary[metrics.IDUnwindInfoArraySize] =
-		metrics.MetricValue(len(state.unwindInfoIndex))
-	summary[metrics.IDHashmapNumStackDeltaPages] =
-		metrics.MetricValue(state.numStackDeltaMapPages)
+	summary[metrics.IDNumExeIDLoadedToEBPF] = metrics.MetricValue(len(state.executables))
+	summary[metrics.IDUnwindInfoArraySize] = metrics.MetricValue(len(state.unwindInfoIndex))
+	summary[metrics.IDHashmapNumStackDeltaPages] = metrics.MetricValue(state.numStackDeltaMapPages)
 	mgr.state.RUnlock(&state)
 
 	deltaProviderStatistics := mgr.sdp.GetAndResetStatistics()
-	summary[metrics.IDStackDeltaProviderSuccess] =
-		metrics.MetricValue(deltaProviderStatistics.Success)
-	summary[metrics.IDStackDeltaProviderExtractionError] =
-		metrics.MetricValue(deltaProviderStatistics.ExtractionErrors)
+	summary[metrics.IDStackDeltaProviderSuccess] = metrics.MetricValue(deltaProviderStatistics.Success)
+	summary[metrics.IDStackDeltaProviderExtractionError] = metrics.MetricValue(deltaProviderStatistics.ExtractionErrors)
 }
 
 type executableInfoManagerState struct {
@@ -323,7 +314,8 @@ type executableInfoManagerState struct {
 // succeeds, it then loads additional per-interpreter data into the BPF maps and returns the
 // interpreter data. If multiple loaders recognize the executable, it returns a MultiData instance.
 func (state *executableInfoManagerState) detectAndLoadInterpData(
-	loaderInfo *interpreter.LoaderInfo) interpreter.Data {
+	loaderInfo *interpreter.LoaderInfo,
+) interpreter.Data {
 	var interpreterDatas []interpreter.Data //nolint:prealloc
 
 	// Ask all interpreter loaders whether they want to handle this executable.
@@ -370,11 +362,11 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 func (state *executableInfoManagerState) loadDeltas(
 	fileID host.FileID,
 	deltas []sdtypes.StackDelta,
-) (ref mapRef, gaps []util.Range, err error) {
+) (ref mapRef, err error) {
 	numDeltas := len(deltas)
 	if numDeltas == 0 {
 		// If no deltas are extracted, cache the result but don't reserve memory in BPF maps.
-		return mapRef{MapID: 0}, []util.Range{}, nil
+		return mapRef{MapID: 0}, nil
 	}
 
 	firstPage := deltas[0].Address >> support.StackDeltaPageBits
@@ -395,15 +387,6 @@ func (state *executableInfoManagerState) loadDeltas(
 		unwindInfo = delta.Info
 		if index+1 < len(deltas) {
 			unwindInfo.MergeOpcode = calculateMergeOpcode(delta, deltas[index+1])
-			nextDeltaAddr := deltas[index+1].Address
-			if delta.Hints&sdtypes.UnwindHintGap != 0 &&
-				nextDeltaAddr-delta.Address >= minimumMemoizableGapSize {
-				// Remember large gaps so ProcessManager plugins can
-				// later use them to find precompiled blobs without deltas.
-				gaps = append(gaps, util.Range{
-					Start: delta.Address,
-					End:   nextDeltaAddr})
-			}
 		}
 		// Uses the new 'unwindInfo' with potentially updated MergeOpcode
 		// here. In the end, it's only the unwindInfoIndex being different for
@@ -411,7 +394,7 @@ func (state *executableInfoManagerState) loadDeltas(
 		var unwindInfoIndex uint16
 		unwindInfoIndex, err = state.getUnwindInfoIndex(unwindInfo)
 		if err != nil {
-			return mapRef{}, nil, err
+			return mapRef{}, err
 		}
 		ebpfDeltas = append(ebpfDeltas, pmebpf.StackDeltaEBPF{
 			AddressLow: uint16(delta.Address),
@@ -423,7 +406,7 @@ func (state *executableInfoManagerState) loadDeltas(
 	// Update data to eBPF
 	mapID, err := state.ebpf.UpdateExeIDToStackDeltas(fileID, ebpfDeltas)
 	if err != nil {
-		return mapRef{}, nil,
+		return mapRef{},
 			fmt.Errorf("failed UpdateExeIDToStackDeltas for FileID %x: %v", fileID, err)
 	}
 
@@ -431,7 +414,7 @@ func (state *executableInfoManagerState) loadDeltas(
 	if err = state.ebpf.UpdateStackDeltaPages(fileID, numDeltasPerPage, mapID,
 		firstPageAddr); err != nil {
 		_ = state.ebpf.DeleteExeIDToStackDeltas(fileID, ref.MapID)
-		return mapRef{}, nil,
+		return mapRef{},
 			fmt.Errorf("failed UpdateStackDeltaPages for FileID %x: %v", fileID, err)
 	}
 	state.numStackDeltaMapPages += numPages
@@ -440,7 +423,7 @@ func (state *executableInfoManagerState) loadDeltas(
 		MapID:     mapID,
 		StartPage: firstPageAddr,
 		NumPages:  uint32(numPages),
-	}, gaps, nil
+	}, nil
 }
 
 // calculateMergeOpcode calculates the merge opcode byte given two consecutive StackDeltas.

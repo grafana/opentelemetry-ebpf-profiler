@@ -1,0 +1,48 @@
+name: "CI-EBPF"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - support/ebpf/**
+  pull_request:
+    branches: ["**"]
+    paths:
+      - support/ebpf/**
+
+permissions:
+  contents: read
+
+jobs:
+  check-binary-blobs:
+    name: Check for differences in the eBPF binary blobs
+    runs-on: ubuntu-24.04
+    container: otel/opentelemetry-ebpf-profiler-dev:latest@sha256:1d78b71cfc84beafdb321a11375628c2cb8c2d5ca544e34ddf50e3478eff8e6f
+    defaults:
+      run:
+        shell: bash --login {0}
+    steps:
+      - name: Clone code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Hash binary blobs
+        run: |
+          sha256sum support/ebpf/tracer.ebpf.* > binary-blobs.hash
+      - name: Rebuild eBPF blobs
+        run: |
+          rm support/ebpf/tracer.ebpf.*
+          make amd64 -C support/ebpf
+          make arm64 -C support/ebpf
+      - name: Check for differences
+        run: |
+          if ! sha256sum --check binary-blobs.hash; then
+            echo "Please rebuild and commit the updated binary blobs."
+            exit 1
+          fi
+      - if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: binary-blobs
+          path: support/ebpf/tracer.ebpf.*
+

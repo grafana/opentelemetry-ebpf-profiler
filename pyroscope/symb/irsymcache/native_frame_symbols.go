@@ -1,8 +1,7 @@
 package irsymcache // import "go.opentelemetry.io/ebpf-profiler/pyroscope/symb/irsymcache"
 
 import (
-	"github.com/sirupsen/logrus"
-
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
@@ -32,7 +31,7 @@ func SymbolizeNativeFrame(
 	if mappingName != process.VdsoPathName {
 		si, err = resolver.ResolveAddress(fileID, uint64(addr))
 		if err != nil {
-			logrus.Debugf("Failed to symbolize %v %x %v", fileID.StringNoQuotes(), addr, err)
+			log.Debugf("Failed to symbolize %v %x %v", fileID.StringNoQuotes(), addr, err)
 		}
 	}
 	symbolize(si)

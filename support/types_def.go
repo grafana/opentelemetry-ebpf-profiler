@@ -18,20 +18,25 @@ import (
 import "C"
 
 const (
-	FrameMarkerUnknown  = C.FRAME_MARKER_UNKNOWN
-	FrameMarkerErrorBit = C.FRAME_MARKER_ERROR_BIT
-	FrameMarkerPython   = C.FRAME_MARKER_PYTHON
-	FrameMarkerNative   = C.FRAME_MARKER_NATIVE
-	FrameMarkerPHP      = C.FRAME_MARKER_PHP
-	FrameMarkerPHPJIT   = C.FRAME_MARKER_PHP_JIT
-	FrameMarkerKernel   = C.FRAME_MARKER_KERNEL
-	FrameMarkerHotSpot  = C.FRAME_MARKER_HOTSPOT
-	FrameMarkerRuby     = C.FRAME_MARKER_RUBY
-	FrameMarkerPerl     = C.FRAME_MARKER_PERL
-	FrameMarkerV8       = C.FRAME_MARKER_V8
-	FrameMarkerDotnet   = C.FRAME_MARKER_DOTNET
-	FrameMarkerGo       = C.FRAME_MARKER_GO
-	FrameMarkerAbort    = C.FRAME_MARKER_ABORT
+	FrameMarkerUnknown = C.FRAME_MARKER_UNKNOWN
+	FrameMarkerPython  = C.FRAME_MARKER_PYTHON
+	FrameMarkerNative  = C.FRAME_MARKER_NATIVE
+	FrameMarkerPHP     = C.FRAME_MARKER_PHP
+	FrameMarkerPHPJIT  = C.FRAME_MARKER_PHP_JIT
+	FrameMarkerKernel  = C.FRAME_MARKER_KERNEL
+	FrameMarkerHotSpot = C.FRAME_MARKER_HOTSPOT
+	FrameMarkerRuby    = C.FRAME_MARKER_RUBY
+	FrameMarkerPerl    = C.FRAME_MARKER_PERL
+	FrameMarkerV8      = C.FRAME_MARKER_V8
+	FrameMarkerDotnet  = C.FRAME_MARKER_DOTNET
+	FrameMarkerBEAM    = C.FRAME_MARKER_BEAM
+	FrameMarkerGo      = C.FRAME_MARKER_GO
+)
+
+const (
+	FrameFlagError         = C.FRAME_FLAG_ERROR
+	FrameFlagReturnAddress = C.FRAME_FLAG_RETURN_ADDRESS
+	FrameFlagPidSpecific   = C.FRAME_FLAG_PID_SPECIFIC
 )
 
 const (
@@ -45,6 +50,7 @@ const (
 	ProgUnwindV8      = C.PROG_UNWIND_V8
 	ProgUnwindDotnet  = C.PROG_UNWIND_DOTNET
 	ProgGoLabels      = C.PROG_GO_LABELS
+	ProgUnwindBEAM    = C.PROG_UNWIND_BEAM
 )
 
 const (
@@ -56,8 +62,6 @@ const (
 const (
 	EventTypeGenericPID = C.EVENT_TYPE_GENERIC_PID
 )
-
-const MaxFrameUnwinds = C.MAX_FRAME_UNWINDS
 
 const UnwindInfoMaxEntries = C.UNWIND_INFO_MAX_ENTRIES
 
@@ -100,7 +104,7 @@ const (
 	TraceOriginUnknown  = C.TRACE_UNKNOWN
 	TraceOriginSampling = C.TRACE_SAMPLING
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
-	TraceOriginUProbe   = C.TRACE_UPROBE
+	TraceOriginProbe    = C.TRACE_PROBE
 )
 
 type ApmSpanID C.ApmSpanID
@@ -108,7 +112,6 @@ type ApmTraceID C.ApmTraceID
 type CustomLabel C.CustomLabel
 type CustomLabelsArray C.CustomLabelsArray
 type Event C.Event
-type Frame C.Frame
 type OffsetRange C.OffsetRange
 type PIDPage C.PIDPage
 type PIDPageMappingInfo C.PIDPageMappingInfo
@@ -121,6 +124,7 @@ type Trace C.Trace
 type UnwindInfo C.UnwindInfo
 
 type ApmIntProcInfo C.ApmIntProcInfo
+type BEAMProcInfo C.BEAMProcInfo
 type DotnetProcInfo C.DotnetProcInfo
 type GoLabelsOffsets C.GoLabelsOffsets
 type HotspotProcInfo C.HotspotProcInfo
@@ -131,7 +135,6 @@ type RubyProcInfo C.RubyProcInfo
 type V8ProcInfo C.V8ProcInfo
 
 const (
-	Sizeof_Frame      = C.sizeof_Frame
 	Sizeof_StackDelta = C.sizeof_StackDelta
 	Sizeof_Trace      = C.sizeof_Trace
 

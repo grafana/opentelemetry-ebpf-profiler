@@ -8,17 +8,17 @@ import (
 	"crypto/tls"
 	"time"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/collector/pdata/pprofile/pprofileotlp"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/encoding/gzip"
 
-	"go.opentelemetry.io/collector/pdata/pprofile/pprofileotlp"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"google.golang.org/grpc/encoding/gzip"
 )
 
 // Assert that we implement the full Reporter interface.
@@ -171,7 +171,8 @@ func waitGrpcEndpoint(ctx context.Context, cfg *Config) (*grpc.ClientConn, error
 // setupGrpcConnection sets up a gRPC connection instrumented with our auth interceptor
 func setupGrpcConnection(parent context.Context, cfg *Config) (*grpc.ClientConn, error) {
 	//nolint:staticcheck
-	opts := []grpc.DialOption{grpc.WithBlock(),
+	opts := []grpc.DialOption{
+		grpc.WithBlock(),
 		grpc.WithUnaryInterceptor(cfg.GRPCClientInterceptor),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(cfg.MaxRPCMsgSize),

@@ -33,6 +33,8 @@ const (
 	Dotnet InterpreterType = support.FrameMarkerDotnet
 	// Go identifies Go code.
 	Go InterpreterType = support.FrameMarkerGo
+	// BEAM identifies the BEAM interpreter.
+	BEAM InterpreterType = support.FrameMarkerBEAM
 )
 
 // Pseudo-interpreters without a corresponding frame type.
@@ -50,7 +52,7 @@ const (
 // Frame converts the interpreter type into the corresponding frame type.
 func (i InterpreterType) Frame() FrameType {
 	if i >= pseudoInterpreterStart {
-		return unknownFrame
+		return UnknownFrame
 	}
 
 	return FrameType(i)
@@ -69,6 +71,7 @@ var interpreterTypeToString = map[InterpreterType]string{
 	Perl:     "perl",
 	V8:       "v8js",
 	Dotnet:   "dotnet",
+	BEAM:     "beam",
 	APMInt:   "apm-integration",
 	Go:       "go",
 	GoLabels: "go-labels",

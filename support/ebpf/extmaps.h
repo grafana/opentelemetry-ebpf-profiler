@@ -14,7 +14,6 @@ extern struct reported_pids_t reported_pids;
 extern struct pid_events_t pid_events;
 extern struct inhibit_events_t inhibit_events;
 extern struct interpreter_offsets_t interpreter_offsets;
-extern struct system_config_t system_config;
 extern struct trace_events_t trace_events;
 extern struct go_labels_procs_t go_labels_procs;
 
@@ -24,6 +23,7 @@ extern struct go_labels_procs_t go_labels_procs;
 // are needed only for testing.
 
 extern struct apm_int_procs_t apm_int_procs;
+extern struct beam_procs_t beam_procs;
 extern struct exe_id_to_8_stack_deltas_t exe_id_to_8_stack_deltas;
 extern struct exe_id_to_9_stack_deltas_t exe_id_to_9_stack_deltas;
 extern struct exe_id_to_10_stack_deltas_t exe_id_to_10_stack_deltas;

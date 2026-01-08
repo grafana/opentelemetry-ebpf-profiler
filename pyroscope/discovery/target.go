@@ -7,7 +7,7 @@ import (
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 type DiscoveredTarget map[string]string
@@ -164,7 +164,7 @@ func (tf *targetProducer) setTargets(opts TargetsOptions) {
 		}
 	}
 	if len(opts.Targets) > 0 && len(containerID2Target) == 0 && len(pid2Target) == 0 {
-		logrus.Warn("targetProducer: No targets found")
+		log.Warn("targetProducer: No targets found")
 	}
 	tf.cid2target = containerID2Target
 	tf.pid2target = pid2Target
@@ -174,7 +174,7 @@ func (tf *targetProducer) setTargets(opts TargetsOptions) {
 		t := NewTarget("", 0, opts.DefaultTarget)
 		tf.defaultTarget = oco(tf.defaultTarget, t)
 	}
-	logrus.Debugf("targetProducer: created targets cids %d pids %d",
+	log.Debugf("targetProducer: created targets cids %d pids %d",
 		len(tf.cid2target), len(tf.pid2target))
 }
 

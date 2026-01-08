@@ -1,0 +1,40 @@
+name: "CI-Rust"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - rust-crates/**
+      - Cargo.toml
+      - Cargo.lock
+  pull_request:
+    branches: ["**"]
+    paths:
+      - rust-crates/**
+      - Cargo.toml
+      - Cargo.lock
+
+permissions:
+  contents: read
+
+jobs:
+  rust-test:
+    name: Rust Tests (${{ matrix.target_arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        target_arch: [amd64, arm64]
+    steps:
+      - name: Clone code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+          toolchain: 1.84.1
+      - name: Install protoc
+        uses: ./.github/workflows/protoc
+      - name: Tests
+        run: make rust-tests

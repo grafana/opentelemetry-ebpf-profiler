@@ -11,20 +11,25 @@ import (
 )
 
 const (
-	FrameMarkerUnknown  = 0x0
-	FrameMarkerErrorBit = 0x80
-	FrameMarkerPython   = 0x1
-	FrameMarkerNative   = 0x3
-	FrameMarkerPHP      = 0x2
-	FrameMarkerPHPJIT   = 0x9
-	FrameMarkerKernel   = 0x4
-	FrameMarkerHotSpot  = 0x5
-	FrameMarkerRuby     = 0x6
-	FrameMarkerPerl     = 0x7
-	FrameMarkerV8       = 0x8
-	FrameMarkerDotnet   = 0xa
-	FrameMarkerGo       = 0xb
-	FrameMarkerAbort    = 0xff
+	FrameMarkerUnknown = 0x0
+	FrameMarkerPython  = 0x1
+	FrameMarkerNative  = 0x3
+	FrameMarkerPHP     = 0x2
+	FrameMarkerPHPJIT  = 0x9
+	FrameMarkerKernel  = 0x4
+	FrameMarkerHotSpot = 0x5
+	FrameMarkerRuby    = 0x6
+	FrameMarkerPerl    = 0x7
+	FrameMarkerV8      = 0x8
+	FrameMarkerDotnet  = 0xa
+	FrameMarkerBEAM    = 0xc
+	FrameMarkerGo      = 0xb
+)
+
+const (
+	FrameFlagError         = 0x1
+	FrameFlagReturnAddress = 0x2
+	FrameFlagPidSpecific   = 0x4
 )
 
 const (
@@ -38,6 +43,7 @@ const (
 	ProgUnwindV8      = 0x7
 	ProgUnwindDotnet  = 0x8
 	ProgGoLabels      = 0x9
+	ProgUnwindBEAM    = 0xa
 )
 
 const (
@@ -49,8 +55,6 @@ const (
 const (
 	EventTypeGenericPID = 0x1
 )
-
-const MaxFrameUnwinds = 0x100
 
 const UnwindInfoMaxEntries = 0x4000
 
@@ -89,7 +93,7 @@ const (
 	TraceOriginUnknown  = 0x0
 	TraceOriginSampling = 0x1
 	TraceOriginOffCPU   = 0x2
-	TraceOriginUProbe   = 0x3
+	TraceOriginProbe    = 0x3
 )
 
 type ApmSpanID [8]byte
@@ -104,13 +108,6 @@ type CustomLabelsArray struct {
 }
 type Event struct {
 	Type uint32
-}
-type Frame struct {
-	File_id        uint64
-	Addr_or_line   uint64
-	Kind           uint8
-	Return_address uint8
-	Pad            [6]uint8
 }
 type OffsetRange struct {
 	Lower_offset1 uint64
@@ -162,10 +159,11 @@ type Trace struct {
 	Apm_trace_id       [16]byte
 	Custom_labels      CustomLabelsArray
 	Kernel_stack_id    int32
-	Stack_len          uint32
+	Frame_data_len     uint16
+	Num_frames         uint16
 	Origin             uint32
 	Offtime            uint64
-	Frames             [256]Frame
+	Frame_data         [3072]uint64
 }
 type UnwindInfo struct {
 	Opcode      uint8
@@ -177,6 +175,15 @@ type UnwindInfo struct {
 
 type ApmIntProcInfo struct {
 	Offset uint64
+}
+type BEAMProcInfo struct {
+	Bias                   uint64
+	R                      uint64
+	The_active_code_index  uint64
+	Beam_normal_exit       uint64
+	Frame_pointers_enabled bool
+	Ranges_sizeof          uint8
+	Pad_cgo_0              [6]byte
 }
 type DotnetProcInfo struct {
 	Version uint32
@@ -205,9 +212,10 @@ type HotspotProcInfo struct {
 	Method_constmethod     uint8
 	Cmethod_size           uint8
 	Jvm_version            uint8
+	New_bcp_slot           uint8
 	Segment_shift          uint8
 	Nmethod_uses_offsets   uint8
-	Pad_cgo_0              [7]byte
+	Pad_cgo_0              [6]byte
 }
 type PHPProcInfo struct {
 	Current_execute_data                uint64
@@ -262,10 +270,13 @@ type PyProcInfo struct {
 	PyCodeObject_co_firstlineno    uint8
 	PyCodeObject_sizeof            uint8
 	Continue_with_next_unwinder    uint8
-	Pad_cgo_0                      [5]byte
+	Lasti_is_codeunit              uint8
+	Frame_is_cframe                uint8
+	Pad_cgo_0                      [3]byte
 }
 type RubyProcInfo struct {
 	Version                      uint32
+	Current_ec_tpbase_tls_offset uint64
 	Current_ctx_ptr              uint64
 	Vm_stack                     uint8
 	Vm_stack_size                uint8
@@ -283,36 +294,36 @@ type RubyProcInfo struct {
 	Pad_cgo_0                    [2]byte
 }
 type V8ProcInfo struct {
-	Version                    uint32
-	Type_JSFunction_first      uint16
-	Type_JSFunction_last       uint16
-	Type_Code                  uint16
-	Type_SharedFunctionInfo    uint16
-	Off_HeapObject_map         uint8
-	Off_Map_instancetype       uint8
-	Off_JSFunction_code        uint8
-	Off_JSFunction_shared      uint8
-	Off_Code_instruction_start uint8
-	Off_Code_instruction_size  uint8
-	Off_Code_flags             uint8
-	Fp_marker                  uint8
-	Fp_function                uint8
-	Fp_bytecode_offset         uint8
-	Codekind_shift             uint8
-	Codekind_mask              uint8
-	Codekind_baseline          uint8
-	Pad_cgo_0                  [3]byte
+	Version                      uint32
+	Type_JSFunction_first        uint16
+	Type_JSFunction_last         uint16
+	Type_Code                    uint16
+	Type_SharedFunctionInfo      uint16
+	Off_HeapObject_map           uint8
+	Off_Map_instancetype         uint8
+	Off_JSFunction_code          uint8
+	Off_JSFunction_shared        uint8
+	Code_instructions_is_pointer uint8
+	Off_Code_instruction_start   uint8
+	Off_Code_instruction_size    uint8
+	Off_Code_flags               uint8
+	Fp_marker                    uint8
+	Fp_function                  uint8
+	Fp_bytecode_offset           uint8
+	Codekind_shift               uint8
+	Codekind_mask                uint8
+	Codekind_baseline            uint8
+	Pad_cgo_0                    [2]byte
 }
 
 const (
-	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1ad0
+	Sizeof_Trace      = 0x62d0
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
-	sizeof_RubyProcInfo   = 0x20
+	sizeof_RubyProcInfo   = 0x28
 )
 
 const (

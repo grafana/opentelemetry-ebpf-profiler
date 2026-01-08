@@ -11,7 +11,7 @@ resolver = "2"
 
 [workspace.package]
 version = "0.0.0"
-rust-version = "1.77"
+rust-version = "1.84.1"
 license = "Apache-2.0"
 
 [profile.release]
@@ -67,7 +67,7 @@ version = "0.16.0"
 default-features = false
 
 [workspace.dependencies.object]
-version = "0.37.0"
+version = "0.38.0"
 default-features = false
 features = ["std", "read_core", "elf", "macho", "unaligned"]
 

@@ -132,8 +132,8 @@ struct go_labels_procs_t {
   __uint(max_entries, 128);
 } go_labels_procs SEC(".maps");
 
-// drop_error_only_traces is set during load time.
-BPF_RODATA_VAR(bool, drop_error_only_traces, false)
+// filter_error_frames is set during load time.
+BPF_RODATA_VAR(bool, filter_error_frames, false)
 
 static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindState *state)
 {
@@ -257,7 +257,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
 
   // If the stack is otherwise empty, push an error for that: we should
   // never encounter empty stacks for successful unwinding.
-  if (trace->stack_len == 0 && trace->kernel_stack_id < 0) {
+  if (trace->frame_data_len == 0 && trace->kernel_stack_id < 0) {
     DEBUG_PRINT("unwind_stop called but the stack is empty");
     increment_metric(metricID_ErrEmptyStack);
     if (!state->unwind_error) {
@@ -268,7 +268,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   // If unwinding was aborted due to a critical error, push an error frame.
   if (state->unwind_error) {
     DEBUG_PRINT("Aborting further unwinding due to error code %d", state->unwind_error);
-    push_error(&record->trace, state->unwind_error);
+    push_abort(trace, state->unwind_error);
   }
 
   switch (state->error_metric) {
@@ -280,7 +280,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
     if (report_pid(ctx, pid_tgid, record->ratelimitAction)) {
       increment_metric(metricID_NumUnknownPC);
     }
-    // Fallthrough to report the error
+    // fallthrough
   default: increment_metric(state->error_metric);
   }
 
@@ -294,8 +294,8 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   // through different data structures, we'd have to keep a list of known empty traces to
   // also prevent the corresponding trace counts to be sent out. OTOH, if we do it here,
   // this is trivial.
-  if (trace->stack_len == 1 && trace->kernel_stack_id < 0 && state->unwind_error) {
-    if (drop_error_only_traces) {
+  if (trace->frame_data_len == 1 && trace->kernel_stack_id < 0 && state->unwind_error) {
+    if (filter_error_frames) {
       return 0;
     }
   }
@@ -311,6 +311,3 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
 MULTI_USE_FUNC(unwind_stop)
 
 char _license[] SEC("license") = "GPL";
-// this number will be interpreted by the elf loader
-// to set the current running kernel version
-u32 _version SEC("version")    = 0xFFFFFFFE;

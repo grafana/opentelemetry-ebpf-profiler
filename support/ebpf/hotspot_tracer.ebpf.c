@@ -27,11 +27,11 @@ typedef struct CodeBlobInfo {
   u32 orig_pc_offset;
   // Value of the `CodeBlob::_frame_size` field.
   u32 frame_size;
-  // Value of the `CodeBlob::_frame_complete_offset` field.
-  u32 frame_comp;
   // Value of the `nmethod::compile_id` field.
   // Only contains valid data if this CodeBlob is of `nmethod` type.
   u32 compile_id;
+  // Value of the `CodeBlob::_frame_complete_offset` field.
+  u16 frame_comp;
 } CodeBlobInfo;
 
 // Context structure for information shared between all handlers in the HotSpot unwinder.
@@ -101,9 +101,19 @@ struct hotspot_procs_t {
 } hotspot_procs SEC(".maps");
 
 // Record a HotSpot frame
-static EBPF_INLINE ErrorCode push_hotspot(Trace *trace, u64 file, u64 line, bool return_address)
+static EBPF_INLINE ErrorCode
+push_hotspot(UnwindState *state, Trace *trace, u64 file, u64 line, bool return_address)
 {
-  return _push_with_return_address(trace, file, line, FRAME_MARKER_HOTSPOT, return_address);
+  const u8 ra_flag = return_address ? FRAME_FLAG_RETURN_ADDRESS : 0;
+
+  u64 *data =
+    push_frame(state, trace, FRAME_MARKER_HOTSPOT, FRAME_FLAG_PID_SPECIFIC | ra_flag, 0, 2);
+  if (!data) {
+    return ERR_STACK_LENGTH_EXCEEDED;
+  }
+  data[0] = file;
+  data[1] = line;
+  return ERR_OK;
 }
 
 // calc_line merges the three values to be encoded in a frame 'line'
@@ -207,11 +217,7 @@ hotspot_handle_vtable_chunks(HotspotUnwindInfo *ui, HotspotUnwindAction *action)
 }
 
 static EBPF_INLINE ErrorCode hotspot_handle_interpreter(
-  UnwindState *state,
-  Trace *trace,
-  HotspotUnwindInfo *ui,
-  HotspotProcInfo *ji,
-  HotspotUnwindAction *action)
+  UnwindState *state, HotspotUnwindInfo *ui, HotspotProcInfo *ji, HotspotUnwindAction *action)
 {
   // Hotspot Interpreter has it's custom stack layout, and the unwinding is done based
   // on frame pointer. No frame information is in the CodeBlob header.
@@ -246,13 +252,12 @@ static EBPF_INLINE ErrorCode hotspot_handle_interpreter(
   }
 
   u64 bcp;
-  if (trace->stack_len) {
+  if (state->return_address) {
     // Interpreter frame has the BCP value stored
-    if (ji->jvm_version >= 9) {
-      // JDK9+ frame has new 'mirror' slot which offsets the BCP slot by one
+    if (ji->new_bcp_slot) {
+      // JDK9+ frame has new 'mirror' slot which offsets the BCP slot
       bcp = regs[FP_OFFS - BCP_SLOT_JVM9];
     } else {
-      // JDK8 and earlier
       bcp = regs[FP_OFFS - BCP_SLOT_JVM8];
     }
   } else {
@@ -771,7 +776,7 @@ static EBPF_INLINE ErrorCode hotspot_execute_unwind_action(
   case UA_UNWIND_COMPLETE: {
   unwind_complete:;
     u64 line        = calc_line(ui->line.subtype, ui->line.pc_delta_or_bci, ui->line.ptr_check);
-    ErrorCode error = push_hotspot(trace, ui->file, line, state->return_address);
+    ErrorCode error = push_hotspot(state, trace, ui->file, line, state->return_address);
     if (error) {
       return error;
     }
@@ -830,7 +835,7 @@ static EBPF_INLINE ErrorCode hotspot_read_codeblob(
   cbi->code_start     = *(u64 *)(scratch->codeblob + ji->codeblob_codestart);
   cbi->code_end       = *(u64 *)(scratch->codeblob + ji->codeblob_codeend);
   cbi->frame_size     = *(u32 *)(scratch->codeblob + ji->codeblob_framesize) * 8;
-  cbi->frame_comp     = *(u32 *)(scratch->codeblob + ji->codeblob_framecomplete);
+  cbi->frame_comp     = *(u16 *)(scratch->codeblob + ji->codeblob_framecomplete);
   cbi->compile_id     = *(u32 *)(scratch->codeblob + ji->nmethod_compileid);
   cbi->orig_pc_offset = *(u32 *)(scratch->codeblob + ji->nmethod_orig_pc_offset);
   cbi->deopt_handler  = *(u64 *)(scratch->codeblob + ji->nmethod_deopt_offset);
@@ -845,12 +850,6 @@ static EBPF_INLINE ErrorCode hotspot_read_codeblob(
   if (ji->nmethod_uses_offsets) {
     cbi->code_start = cbi->address + (cbi->code_start & 0xffffffff);
     cbi->code_end   = cbi->address + (cbi->code_end & 0xffffffff);
-  }
-
-  // JDK23+20+: frame_comp is uint16_t now.
-  // https://github.com/openjdk/jdk/commit/b704e91241b0
-  if (ji->jvm_version >= 23) {
-    cbi->frame_comp &= 0xffff;
   }
 
   DEBUG_PRINT(
@@ -903,7 +902,7 @@ hotspot_unwind_one_frame(PerCPURecord *record, HotspotProcInfo *ji, bool maybe_t
       &cbi, trace, &ui, ji, &action, maybe_topmost && !state->return_address);
     break;
   case FRAMETYPE_Interpreter: // main Interpreter program running byte code
-    err = hotspot_handle_interpreter(state, trace, &ui, ji, &action);
+    err = hotspot_handle_interpreter(state, &ui, ji, &action);
     break;
   case FRAMETYPE_vtable_chunks: // megamorphic interface call site
     err = hotspot_handle_vtable_chunks(&ui, &action);
@@ -930,16 +929,18 @@ static EBPF_INLINE int unwind_hotspot(struct pt_regs *ctx)
 
   Trace *trace = &record->trace;
   pid_t pid    = trace->pid;
-  DEBUG_PRINT("==== jvm: unwind %d ====", trace->stack_len);
+  DEBUG_PRINT("==== jvm: unwind %d ====", trace->num_frames);
+
+  int unwinder    = PROG_UNWIND_STOP;
+  ErrorCode error = ERR_OK;
 
   HotspotProcInfo *ji = bpf_map_lookup_elem(&hotspot_procs, &pid);
   if (!ji) {
     DEBUG_PRINT("jvm: no HotspotProcInfo for this pid");
-    return 0;
+    error = ERR_HOTSPOT_NO_PROC_INFO;
+    goto exit;
   }
 
-  int unwinder    = PROG_UNWIND_STOP;
-  ErrorCode error = ERR_OK;
   UNROLL for (int i = 0; i < HOTSPOT_FRAMES_PER_PROGRAM; i++)
   {
     unwinder = PROG_UNWIND_STOP;
@@ -954,6 +955,7 @@ static EBPF_INLINE int unwind_hotspot(struct pt_regs *ctx)
     }
   }
 
+exit:
   record->state.unwind_error = error;
   tail_call(ctx, unwinder);
   DEBUG_PRINT("jvm: tail call for next frame unwinder (%d) failed", unwinder);

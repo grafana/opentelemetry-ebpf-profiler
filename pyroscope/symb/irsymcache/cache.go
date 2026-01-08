@@ -12,7 +12,7 @@ import (
 	"time"
 
 	lru "github.com/elastic/go-freelru"
-	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 
@@ -44,7 +44,6 @@ func NewTableFactory() TableFactory {
 var _ reporter.ExecutableReporter = (*Resolver)(nil)
 
 type Resolver struct {
-	logger   *logrus.Entry
 	f        TableFactory
 	cacheDir string
 	cache    *lru.SyncedLRU[libpf.FileID, cachedMarker]
@@ -57,7 +56,7 @@ type Resolver struct {
 }
 
 func (c *Resolver) ReportExecutable(md *reporter.ExecutableMetadata) {
-	if !md.MappingFile.Valid() {
+	if md.MappingFile == (libpf.FrameMappingFile{}) {
 		return
 	}
 	m := md.MappingFile.Value()
@@ -90,15 +89,10 @@ type Options struct {
 }
 
 func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
-	l := logrus.WithField("component", "irsymtab")
-	l.WithFields(logrus.Fields{
-		"path": opt.Path,
-		"size": opt.SizeEntries,
-	}).Debug()
+	log.Debugf("irsymtab: path=%s size=%d", opt.Path, opt.SizeEntries)
 
 	shutdown := make(chan struct{})
 	res := &Resolver{
-		logger:   l,
 		f:        impl,
 		cacheDir: opt.Path,
 		jobs:     make(chan convertJob, 1),
@@ -122,11 +116,9 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 			return
 		}
 		filePath := res.tableFilePath(id)
-		l.WithFields(logrus.Fields{
-			"file": filePath,
-		}).Debug("symbcache evicting")
+		log.Debugf("symbcache evicting: file=%s", filePath)
 		if err = os.Remove(filePath); err != nil {
-			l.Error(err)
+			log.Errorf("symbcache eviction error: %v", err)
 		}
 	})
 	if err != nil {
@@ -190,7 +182,7 @@ func (c *Resolver) ExecutableKnown(id libpf.FileID) bool {
 }
 
 func (c *Resolver) ObserveExecutable(fid libpf.FileID, md *reporter.ExecutableMetadata) error {
-	if !md.MappingFile.Valid() {
+	if md.MappingFile == (libpf.FrameMappingFile{}) {
 		return fmt.Errorf("invalid mapping file")
 	}
 	if md.MappingFile.Value().FileName == process.VdsoPathName {
@@ -198,29 +190,26 @@ func (c *Resolver) ObserveExecutable(fid libpf.FileID, md *reporter.ExecutableMe
 		return nil
 	}
 	pid := md.Process.PID()
-	l := c.logger.WithFields(logrus.Fields{
-		"fid": fid.StringNoQuotes(),
-		"elf": md.MappingFile.Value().FileName.String(),
-		"pid": pid,
-	})
 	t1 := time.Now()
-	err := c.convert(l, fid, md)
+	err := c.convert(fid, md)
+	duration := time.Since(t1)
 	if err != nil {
 		c.cache.Add(fid, erroredMarker)
-		l = l.WithError(err).WithField("duration", time.Since(t1))
 		if !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, elf.ErrNoSymbols) {
-			l.Error("conversion failed")
+			log.Errorf("conversion failed: fid=%s elf=%s pid=%d duration=%s err=%v",
+				fid.StringNoQuotes(), md.MappingFile.Value().FileName.String(), pid, duration, err)
 		} else {
-			l.Debug("conversion failed")
+			log.Debugf("conversion failed: fid=%s elf=%s pid=%d duration=%s err=%v",
+				fid.StringNoQuotes(), md.MappingFile.Value().FileName.String(), pid, duration, err)
 		}
 	} else {
-		l.WithField("duration", time.Since(t1)).Debug("converted")
+		log.Debugf("converted: fid=%s elf=%s pid=%d duration=%s",
+			fid.StringNoQuotes(), md.MappingFile.Value().FileName.String(), pid, duration)
 	}
 	return err
 }
 
 func (c *Resolver) convert(
-	l *logrus.Entry,
 	fid libpf.FileID,
 	md *reporter.ExecutableMetadata,
 ) error {
@@ -235,10 +224,9 @@ func (c *Resolver) convert(
 	}
 
 	if md.DebuglinkFileName != "" {
-		debuglinkFileName, _ := md.Process.ExtractAsFile(md.DebuglinkFileName)
-		src, err = os.Open(debuglinkFileName)
+		src, err = os.Open(md.DebuglinkFileName)
 		if err != nil {
-			l.WithError(err).Debug("open debug file")
+			log.Debugf("open debug file failed: %v", err)
 		} else {
 			defer src.Close()
 		}
