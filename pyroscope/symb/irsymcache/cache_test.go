@@ -98,7 +98,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 					fid:  testFileId(456),
 					addr: 0x9cbb0,
 					expectedRes: SourceInfo{
-						FunctionName: libpf.Intern("__pthread_create_2_1"),
+						FunctionName: libpf.Intern("pthread_create@@GLIBC_2.34"),
 					},
 				},
 			},
@@ -137,7 +137,7 @@ func TestResolver_ResolveAddress(t *testing.T) {
 					fid:  testFileId(4242),
 					addr: 0x9cbb0,
 					expectedRes: SourceInfo{
-						FunctionName: libpf.Intern("__pthread_create_2_1"),
+						FunctionName: libpf.Intern("pthread_create@@GLIBC_2.34"),
 					},
 				},
 			},
