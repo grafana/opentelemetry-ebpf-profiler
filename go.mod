@@ -45,10 +45,12 @@ require (
 )
 
 require (
-	github.com/grafana/pyroscope/lidia v0.0.2-0.20251216080959-a49b562cd2fc
+	github.com/grafana/pyroscope/lidia v0.0.2
 	github.com/prometheus/common v0.55.0
 	github.com/prometheus/prometheus v0.51.2
 )
+
+replace github.com/grafana/pyroscope/lidia => /home/korniltsev/pyroscope/lidia
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect
