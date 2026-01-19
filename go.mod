@@ -8,7 +8,7 @@ module go.opentelemetry.io/ebpf-profiler
 // For the OpenTelemetry eBPF Profiler distribution specifically, see
 // https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-ebpf-profiler
 
-go 1.24.0
+go 1.24.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.0
@@ -45,7 +45,7 @@ require (
 )
 
 require (
-	github.com/grafana/pyroscope/lidia v0.0.0-20250716102313-506840f4afcd
+	github.com/grafana/pyroscope/lidia v0.0.2
 	github.com/prometheus/common v0.55.0
 	github.com/prometheus/prometheus v0.51.2
 )
