@@ -31,6 +31,6 @@ func TestNativeFrameSymbols(t *testing.T) {
 			res = si
 		})
 	require.Equal(t, SourceInfo{
-		FunctionName: libpf.Intern("__GI___pthread_cond_timedwait"),
+		FunctionName: libpf.Intern("pthread_cond_timedwait@@GLIBC_2.3.2"),
 	}, res)
 }
