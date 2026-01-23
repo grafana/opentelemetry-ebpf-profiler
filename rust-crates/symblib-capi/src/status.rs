@@ -6,7 +6,7 @@
 use std::io;
 use symblib::{dwarf, gosym, objfile, retpads, symbconv};
 
-pub type FfiResult<T> = Result<T, StatusCode>;
+pub type FfiResult<T = ()> = Result<T, StatusCode>;
 
 /// Error codes exposed to the C API.
 ///
@@ -47,7 +47,7 @@ pub enum StatusCode {
     PointResolver = 9,
 }
 
-impl From<StatusCode> for FfiResult<()> {
+impl From<StatusCode> for FfiResult {
     fn from(code: StatusCode) -> Self {
         if code == StatusCode::Ok {
             Ok(())
@@ -57,8 +57,8 @@ impl From<StatusCode> for FfiResult<()> {
     }
 }
 
-impl From<FfiResult<()>> for StatusCode {
-    fn from(result: FfiResult<()>) -> Self {
+impl From<FfiResult> for StatusCode {
+    fn from(result: FfiResult) -> Self {
         match result {
             Ok(()) => StatusCode::Ok,
             Err(e) => e,

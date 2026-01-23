@@ -34,7 +34,7 @@ pub unsafe extern "C" fn symblib_goruntime_new(
 unsafe fn goruntime_new_impl(
     executable: *const c_char,
     runtime: *mut *mut SymblibPointResolver,
-) -> FfiResult<()> {
+) -> FfiResult {
     let executable = CStr::from_ptr(executable)
         .to_str()
         .map(Path::new)
