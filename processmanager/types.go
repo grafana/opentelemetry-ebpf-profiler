@@ -75,6 +75,7 @@ type ProcessManager struct {
 	// frame conversion
 	frameCacheHit  atomic.Uint64
 	frameCacheMiss atomic.Uint64
+	frameInvalid   atomic.Uint64
 
 	// mappingStats are statistics for parsing process mappings
 	mappingStats struct {

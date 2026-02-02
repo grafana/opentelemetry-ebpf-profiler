@@ -635,6 +635,9 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
+	// Number of traces with invalid frame length headers
+	IDTraceFrameInvalid = 280
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 280
+	IDMax = 281
 )

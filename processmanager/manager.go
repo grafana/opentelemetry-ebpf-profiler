@@ -164,6 +164,7 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 
 		summary[metrics.IDTraceCacheHit] = metrics.MetricValue(pm.frameCacheHit.Swap(0))
 		summary[metrics.IDTraceCacheMiss] = metrics.MetricValue(pm.frameCacheMiss.Swap(0))
+		summary[metrics.IDTraceFrameInvalid] = metrics.MetricValue(pm.frameInvalid.Swap(0))
 
 		summary[metrics.IDErrProcNotExist] = metrics.MetricValue(pm.mappingStats.errProcNotExist.Swap(0))
 		summary[metrics.IDErrProcESRCH] = metrics.MetricValue(pm.mappingStats.errProcESRCH.Swap(0))
@@ -332,7 +333,77 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	cacheHit := uint64(0)
 
 	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
-		frame := frames[:frames.Length()]
+		frameLen := int(frames.Length())
+
+		// This protects against corrupted eBPF data, race conditions, or transmission errors.
+		//if frameLen == 0 || frameLen > len(frames) {
+		//	log.Warnf("Invalid frame length %d (available: %d uint64s) for PID %d. "+
+		//		"Processed %d frames successfully before corruption. "+
+		//		"This may indicate: eBPF program bug, buffer overflow, or transmission interruption.",
+		//		frameLen, len(frames), bpfTrace.PID, len(trace.Frames)-kernelFramesLen)
+		//	pm.frameInvalid.Add(1)
+		//	break
+		//}
+
+		if frameLen == 0 || frameLen > len(frames) {
+			// ENHANCED DIAGNOSTIC LOGGING
+			currentOffset := len(bpfTrace.FrameData) - len(frames)
+
+			log.Errorf("========== CORRUPTION DETECTED ==========")
+			log.Errorf("Process Info:")
+			log.Errorf("  PID=%d TID=%d CPU=%d", bpfTrace.PID, bpfTrace.TID, bpfTrace.CPU)
+			log.Errorf("  Comm=%s ProcessName=%s", bpfTrace.Comm, bpfTrace.ProcessName)
+			log.Errorf("  ExecutablePath=%s", bpfTrace.ExecutablePath)
+			log.Errorf("  ContainerID=%s", bpfTrace.ContainerID)
+			log.Errorf("  KTime=%d Origin=%v", bpfTrace.KTime, bpfTrace.Origin)
+
+			log.Errorf("Frame Data Stats:")
+			log.Errorf("  Total FrameData length: %d uint64s", len(bpfTrace.FrameData))
+			log.Errorf("  Expected NumFrames: %d", bpfTrace.NumFrames)
+			log.Errorf("  Successfully processed frames: %d", len(trace.Frames)-kernelFramesLen)
+			log.Errorf("  Current offset in FrameData: %d", currentOffset)
+			log.Errorf("  Remaining in buffer: %d uint64s", len(frames))
+
+			log.Errorf("Corrupted Frame Header:")
+			log.Errorf("  Raw header: 0x%016x", frames[0])
+			log.Errorf("  Parsed Type: %v (%d)", frames.Type(), frames.Type())
+			log.Errorf("  Parsed Flags: 0x%x", frames.Flags())
+			log.Errorf("  Parsed Length: %d (INVALID - available: %d)", frameLen, len(frames))
+			log.Errorf("  Parsed Data: 0x%013x", frames.Data())
+
+			// Log remaining buffer contents (up to 10 entries)
+			log.Errorf("Remaining buffer contents:")
+			maxRemaining := len(frames)
+			if maxRemaining > 10 {
+				maxRemaining = 10
+			}
+			for i := 0; i < maxRemaining; i++ {
+				log.Errorf("    frames[%d] = 0x%016x", i, frames[i])
+			}
+
+			// Log the full FrameData (first 100 entries, formatted in rows of 4)
+			log.Errorf("Full FrameData dump (first 100 entries):")
+			maxDump := len(bpfTrace.FrameData)
+			if maxDump > 100 {
+				maxDump = 100
+			}
+			for i := 0; i < maxDump; i += 4 {
+				log.Errorf("  [%3d-%3d]: 0x%016x 0x%016x 0x%016x 0x%016x",
+					i, i+3,
+					bpfTrace.FrameData[i],
+					getOrZero(bpfTrace.FrameData, i+1),
+					getOrZero(bpfTrace.FrameData, i+2),
+					getOrZero(bpfTrace.FrameData, i+3))
+			}
+
+			log.Errorf("=========================================")
+			// END ENHANCED LOGGING
+
+			pm.frameInvalid.Add(1)
+			//break
+		}
+
+		frame := frames[:frameLen]
 		if frame.Flags().Error() {
 			if !pm.filterErrorFrames {
 				trace.Frames.Append(&libpf.Frame{
@@ -382,4 +453,12 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
 		log.Errorf("Failed to report trace event: %v", err)
 	}
+}
+
+// getOrZero safely retrieves a value from a slice or returns 0 if index is out of bounds
+func getOrZero(slice []uint64, index int) uint64 {
+	if index < len(slice) {
+		return slice[index]
+	}
+	return 0
 }

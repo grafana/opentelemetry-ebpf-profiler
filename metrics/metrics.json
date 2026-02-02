@@ -2019,5 +2019,12 @@
     "name": "UnwindGoLabelsFailures",
     "field": "bpf.golabels.errors",
     "id": 279
+  },
+  {
+    "description": "Number of traces with invalid frame length headers",
+    "type": "counter",
+    "name": "TraceFrameInvalid",
+    "field": "agent.trace.frame_invalid",
+    "id": 280
   }
 ]
