@@ -335,16 +335,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
 		frameLen := int(frames.Length())
 
-		// This protects against corrupted eBPF data, race conditions, or transmission errors.
-		//if frameLen == 0 || frameLen > len(frames) {
-		//	log.Warnf("Invalid frame length %d (available: %d uint64s) for PID %d. "+
-		//		"Processed %d frames successfully before corruption. "+
-		//		"This may indicate: eBPF program bug, buffer overflow, or transmission interruption.",
-		//		frameLen, len(frames), bpfTrace.PID, len(trace.Frames)-kernelFramesLen)
-		//	pm.frameInvalid.Add(1)
-		//	break
-		//}
-
+		log.Errorf("========== Going to check corruption ==========")
 		if frameLen == 0 || frameLen > len(frames) {
 			// ENHANCED DIAGNOSTIC LOGGING
 			currentOffset := len(bpfTrace.FrameData) - len(frames)
@@ -462,3 +453,6 @@ func getOrZero(slice []uint64, index int) uint64 {
 	}
 	return 0
 }
+
+// DebugMarker is a constant to verify this code is included in the build
+const DebugMarker = "EBPF_PROFILER_DEBUG_MARKER_892f94dc1f8e"
