@@ -331,11 +331,11 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 
 	cacheMiss := uint64(0)
 	cacheHit := uint64(0)
+	traceStartTime := time.Now() // Track processing time
 
 	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
 		frameLen := int(frames.Length())
 
-		log.Errorf("========== Going to check corruption ==========")
 		if frameLen == 0 || frameLen > len(frames) {
 			// ENHANCED DIAGNOSTIC LOGGING
 			currentOffset := len(bpfTrace.FrameData) - len(frames)
@@ -372,19 +372,65 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 				log.Errorf("    frames[%d] = 0x%016x", i, frames[i])
 			}
 
-			// Log the full FrameData (first 100 entries, formatted in rows of 4)
-			log.Errorf("Full FrameData dump (first 100 entries):")
-			maxDump := len(bpfTrace.FrameData)
-			if maxDump > 100 {
-				maxDump = 100
-			}
-			for i := 0; i < maxDump; i += 4 {
+			// Log the COMPLETE FrameData (all entries, formatted in rows of 4)
+			log.Errorf("Full FrameData dump (ALL %d entries):", len(bpfTrace.FrameData))
+			for i := 0; i < len(bpfTrace.FrameData); i += 4 {
 				log.Errorf("  [%3d-%3d]: 0x%016x 0x%016x 0x%016x 0x%016x",
 					i, i+3,
 					bpfTrace.FrameData[i],
 					getOrZero(bpfTrace.FrameData, i+1),
 					getOrZero(bpfTrace.FrameData, i+2),
 					getOrZero(bpfTrace.FrameData, i+3))
+			}
+
+			// Pattern detection in corrupted buffer
+			log.Errorf("Corruption Pattern Analysis:")
+			valueCount := make(map[uint64]int)
+			for i := 0; i < len(frames) && i < 20; i++ {
+				valueCount[frames[i]]++
+			}
+			hasRepeats := false
+			for val, count := range valueCount {
+				if count > 1 {
+					log.Errorf("  Repeated value 0x%016x appears %dx (memory frozen?)", val, count)
+					hasRepeats = true
+				}
+			}
+			if !hasRepeats {
+				log.Errorf("  No repeated values (random corruption)")
+			}
+
+			// Check for specific patterns
+			if len(frames) > 0 {
+				allZeros := true
+				allSame := true
+				firstVal := frames[0]
+				for i := 0; i < len(frames) && i < 10; i++ {
+					if frames[i] != 0 {
+						allZeros = false
+					}
+					if frames[i] != firstVal {
+						allSame = false
+					}
+				}
+				if allZeros {
+					log.Errorf("  Pattern: All zeros (memory cleared/uninitialized)")
+				} else if allSame {
+					log.Errorf("  Pattern: All same value 0x%016x (stuck/frozen memory)", firstVal)
+				}
+			}
+
+			// Timing information
+			log.Errorf("Timing:")
+			log.Errorf("  Processing duration: %v", time.Since(traceStartTime))
+			log.Errorf("  Cache hits: %d, misses: %d", cacheHit, cacheMiss)
+
+			// Environment variables (might show SDK config)
+			if len(bpfTrace.EnvVars) > 0 {
+				log.Errorf("Environment Variables:")
+				for k, v := range bpfTrace.EnvVars {
+					log.Errorf("  %s=%s", k, v)
+				}
 			}
 
 			log.Errorf("=========================================")
