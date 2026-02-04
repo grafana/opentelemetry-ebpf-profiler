@@ -115,6 +115,14 @@ func NewFSCache(impl TableFactory, opt Options) (*Resolver, error) {
 		if marker == erroredMarker {
 			return
 		}
+		// Close and remove the memory-mapped table to prevent memory leak
+		res.mutex.Lock()
+		if table, ok := res.tables[id]; ok {
+			table.Close()
+			delete(res.tables, id)
+		}
+		res.mutex.Unlock()
+
 		filePath := res.tableFilePath(id)
 		log.Debugf("symbcache evicting: file=%s", filePath)
 		if err = os.Remove(filePath); err != nil {
