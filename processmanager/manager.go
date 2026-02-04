@@ -333,13 +333,31 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	cacheHit := uint64(0)
 	traceStartTime := time.Now() // Track processing time
 
+	// Track all frames for debugging corruption
+	type frameInfo struct {
+		offset   int
+		frameType libpf.FrameType
+		flags    libpf.FrameFlags
+		length   uint8
+		rawHeader uint64
+	}
+	var frameHistory []frameInfo
+
 	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
 		frameLen := int(frames.Length())
+		currentOffset := len(bpfTrace.FrameData) - len(frames)
+
+		// Record frame info for debugging
+		frameHistory = append(frameHistory, frameInfo{
+			offset:    currentOffset,
+			frameType: frames.Type(),
+			flags:     frames.Flags(),
+			length:    frames.Length(),
+			rawHeader: frames[0],
+		})
 
 		if frameLen == 0 || frameLen > len(frames) {
 			// ENHANCED DIAGNOSTIC LOGGING
-			currentOffset := len(bpfTrace.FrameData) - len(frames)
-
 			log.Errorf("========== CORRUPTION DETECTED ==========")
 			log.Errorf("Process Info:")
 			log.Errorf("  PID=%d TID=%d CPU=%d", bpfTrace.PID, bpfTrace.TID, bpfTrace.CPU)
@@ -354,6 +372,34 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 			log.Errorf("  Successfully processed frames: %d", len(trace.Frames)-kernelFramesLen)
 			log.Errorf("  Current offset in FrameData: %d", currentOffset)
 			log.Errorf("  Remaining in buffer: %d uint64s", len(frames))
+
+			// NEW: Log all frames processed BEFORE corruption
+			log.Errorf("Frame History (all %d frames parsed before corruption):", len(frameHistory))
+			frameTypeCounts := make(map[libpf.FrameType]int)
+			for i, fi := range frameHistory {
+				frameTypeCounts[fi.frameType]++
+				log.Errorf("  [%2d] offset=%3d type=%2d (%v) len=%d flags=0x%x raw=0x%016x",
+					i, fi.offset, fi.frameType, fi.frameType, fi.length, fi.flags, fi.rawHeader)
+			}
+			log.Errorf("Frame Type Summary:")
+			for ft, count := range frameTypeCounts {
+				log.Errorf("  Type %2d (%v): %d frames", ft, ft, count)
+			}
+
+			// Check for suspicious patterns in frame history
+			log.Errorf("Frame Progression Analysis:")
+			for i := 1; i < len(frameHistory); i++ {
+				prev := frameHistory[i-1]
+				curr := frameHistory[i]
+				expectedOffset := prev.offset + int(prev.length)
+				if curr.offset != expectedOffset {
+					log.Errorf("  JUMP at frame %d: expected offset %d, got %d (gap=%d)",
+						i, expectedOffset, curr.offset, curr.offset-expectedOffset)
+				}
+				if prev.frameType != curr.frameType && i > 1 {
+					log.Errorf("  TYPE CHANGE at frame %d: %v -> %v", i, prev.frameType, curr.frameType)
+				}
+			}
 
 			log.Errorf("Corrupted Frame Header:")
 			log.Errorf("  Raw header: 0x%016x", frames[0])
