@@ -267,6 +267,20 @@ static EBPF_INLINE ErrorCode unwind_one_dotnet_frame(PerCPURecord *record)
     increment_metric(metricID_UnwindDotnetErrCodeHeader);
     return ERR_DOTNET_CODE_HEADER;
   }
+
+  // Validate code_header_ptr: must be a valid userspace pointer.
+  // Invalid values (negative, kernel addresses, or very small) indicate race with .NET GC/JIT
+  // that corrupted the memory we're reading. Skip this frame to prevent garbage in frame_data.
+  // Userspace addresses on Linux x86_64 are typically < 0x00007fffffffffff.
+  // Kernel addresses have the high bit set (>= 0x8000000000000000).
+  if (code_header_ptr == 0 || code_header_ptr >= 0x8000000000000000ULL ||
+      code_header_ptr < 0x1000) {
+    DEBUG_PRINT("dotnet: invalid code_header_ptr 0x%lx (race condition), skipping frame",
+                (unsigned long)code_header_ptr);
+    increment_metric(metricID_UnwindDotnetErrCodeHeader);
+    return ERR_DOTNET_CODE_HEADER;
+  }
+
   type = DOTNET_CODE_JIT;
 
 push_frame:
