@@ -270,6 +270,14 @@ static EBPF_INLINE ErrorCode unwind_one_dotnet_frame(PerCPURecord *record)
   type = DOTNET_CODE_JIT;
 
 push_frame:
+  // Sanity check: if code_start > pc, the nibble map lookup returned corrupted data
+  // (likely due to race with .NET GC/JIT). Skip this frame to avoid corruption.
+  if (code_start > pc) {
+    DEBUG_PRINT("dotnet: code_start > pc (race condition detected), skipping frame");
+    increment_metric(metricID_UnwindDotnetErrCodeHeader);
+    return ERR_DOTNET_CODE_HEADER;
+  }
+
   DEBUG_PRINT(
     "dotnet:  --> code_start = %lx, code_header = %lx, pc_offset = %lx",
     (unsigned long)code_start,
