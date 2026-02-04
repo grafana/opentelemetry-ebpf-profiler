@@ -43,9 +43,10 @@ var (
 	verboseModeHelp    = "Enable verbose logging and debugging capabilities."
 	tracersHelp        = "Comma-separated list of interpreter tracers to include."
 	mapScaleFactorHelp = fmt.Sprintf("Scaling factor for eBPF map sizes. "+
-		"Every increase by 1 doubles the map size. Increase if you see eBPF map size errors. "+
-		"Default is %d corresponding to 4GB of executable address space, max is %d.",
-		defaultArgMapScaleFactor, config.MaxArgMapScaleFactor)
+		"Every increase by 1 doubles the map size, every decrease by 1 halves it. "+
+		"Increase if you see eBPF map size errors, decrease to reduce memory usage. "+
+		"Default is %d corresponding to 4GB of executable address space, range is [%d, %d].",
+		defaultArgMapScaleFactor, config.MinArgMapScaleFactor, config.MaxArgMapScaleFactor)
 	disableTLSHelp             = "Disable encryption for data in transit."
 	bpfVerifierLogLevelHelp    = "Log level of the eBPF verifier output (0,1,2). Default is 0."
 	versionHelp                = "Show version."
@@ -95,7 +96,7 @@ func ParseArgs() (*controller.Config, error) {
 
 	fs.BoolVar(&args.DisableTLS, "disable-tls", false, disableTLSHelp)
 
-	fs.UintVar(&args.MapScaleFactor, "map-scale-factor",
+	fs.IntVar(&args.MapScaleFactor, "map-scale-factor",
 		defaultArgMapScaleFactor, mapScaleFactorHelp)
 
 	fs.DurationVar(&args.MonitorInterval, "monitor-interval", defaultArgMonitorInterval,

@@ -15,6 +15,9 @@ import (
 const (
 	// 1TB of executable address space
 	MaxArgMapScaleFactor = 8
+	// Minimum scale factor to reduce memory usage
+	// -3 means 1/8th of the default map sizes
+	MinArgMapScaleFactor = -3
 )
 
 // Config is the configuration for the collector.
@@ -33,7 +36,7 @@ type Config struct {
 	IncludeEnvVars         string        `mapstructure:"include_env_vars"`
 	ProbeLinks             []string      `mapstructure:"probe_links"`
 	LoadProbe              bool          `mapstructure:"load_probe"`
-	MapScaleFactor         uint          `mapstructure:"map_scale_factor"`
+	MapScaleFactor         int           `mapstructure:"map_scale_factor"`
 	BPFVerifierLogLevel    uint          `mapstructure:"bpf_verifier_log_level"`
 	NoKernelVersionCheck   bool          `mapstructure:"no_kernel_version_check"`
 	MaxGRPCRetries         uint32        `mapstructure:"max_grpc_retries"`
@@ -47,10 +50,10 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("invalid sampling frequency: %d", cfg.SamplesPerSecond)
 	}
 
-	if cfg.MapScaleFactor > MaxArgMapScaleFactor {
+	if cfg.MapScaleFactor > MaxArgMapScaleFactor || cfg.MapScaleFactor < MinArgMapScaleFactor {
 		return fmt.Errorf(
-			"eBPF map scaling factor %d exceeds limit (max: %d)",
-			cfg.MapScaleFactor, MaxArgMapScaleFactor,
+			"eBPF map scaling factor %d out of range (min: %d, max: %d)",
+			cfg.MapScaleFactor, MinArgMapScaleFactor, MaxArgMapScaleFactor,
 		)
 	}
 
