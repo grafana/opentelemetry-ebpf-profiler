@@ -268,14 +268,10 @@ static EBPF_INLINE ErrorCode unwind_one_dotnet_frame(PerCPURecord *record)
     return ERR_DOTNET_CODE_HEADER;
   }
 
-  // Validate code_header_ptr: must be a valid userspace pointer.
-  // Invalid values (negative, kernel addresses, or very small) indicate race with .NET GC/JIT
-  // that corrupted the memory we're reading. Skip this frame to prevent garbage in frame_data.
-  // Userspace addresses on Linux x86_64 are typically < 0x00007fffffffffff.
-  // Kernel addresses have the high bit set (>= 0x8000000000000000).
-  if (code_header_ptr == 0 || code_header_ptr >= 0x8000000000000000ULL ||
-      code_header_ptr < 0x1000) {
-    DEBUG_PRINT("dotnet: invalid code_header_ptr 0x%lx (race condition), skipping frame",
+  // Validate code_header_ptr looks like a valid userspace address.
+  // The memory we read from may contain stale or invalid data.
+  if (is_kernel_address(code_header_ptr) || code_header_ptr < 0x1000) {
+    DEBUG_PRINT("dotnet: invalid code_header_ptr 0x%lx, skipping frame",
                 (unsigned long)code_header_ptr);
     increment_metric(metricID_UnwindDotnetErrCodeHeader);
     return ERR_DOTNET_CODE_HEADER;
@@ -284,14 +280,6 @@ static EBPF_INLINE ErrorCode unwind_one_dotnet_frame(PerCPURecord *record)
   type = DOTNET_CODE_JIT;
 
 push_frame:
-  // Sanity check: if code_start > pc, the nibble map lookup returned corrupted data
-  // (likely due to race with .NET GC/JIT). Skip this frame to avoid corruption.
-  if (code_start > pc) {
-    DEBUG_PRINT("dotnet: code_start > pc (race condition detected), skipping frame");
-    increment_metric(metricID_UnwindDotnetErrCodeHeader);
-    return ERR_DOTNET_CODE_HEADER;
-  }
-
   DEBUG_PRINT(
     "dotnet:  --> code_start = %lx, code_header = %lx, pc_offset = %lx",
     (unsigned long)code_start,
