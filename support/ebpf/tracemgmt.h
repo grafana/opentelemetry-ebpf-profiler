@@ -329,12 +329,7 @@ static inline EBPF_INLINE u64 frame_header(u8 frame_type, u8 flags, u8 length, u
   //      4   frame flags
   //      4   number of 64-bit 'variable' fields
   //     52   type specific data
-  //
-  // IMPORTANT: Mask data to 52 bits to prevent high bits from corrupting
-  // the type/flags/length fields. This can happen when pc_offset becomes
-  // negative (large unsigned) due to race conditions in .NET nibble map reading.
-  return ((u64)frame_type << 60) | ((u64)flags << 56) | ((u64)length << 52) |
-         (data & 0xFFFFFFFFFFFFF);
+  return ((u64)frame_type << 60) | ((u64)flags << 56) | ((u64)length << 52) | data;
 }
 
 // Push a data frame with variable length payload. This function allocates space from
