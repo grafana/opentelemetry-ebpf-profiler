@@ -274,6 +274,7 @@ static EBPF_INLINE ErrorCode unwind_one_dotnet_frame(PerCPURecord *record)
     DEBUG_PRINT("dotnet: invalid code_header_ptr 0x%lx, skipping frame",
                 (unsigned long)code_header_ptr);
     increment_metric(metricID_UnwindDotnetErrCodeHeader);
+    DEBUG_CAPTURE_COREDUMP_IF_TGID(trace->pid);
     return ERR_DOTNET_CODE_HEADER;
   }
 
