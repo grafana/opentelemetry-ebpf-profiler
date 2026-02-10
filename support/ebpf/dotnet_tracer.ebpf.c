@@ -9,6 +9,11 @@
 #include "tracemgmt.h"
 #include "types.h"
 
+// SIGTRAP is not provided by the minimal eBPF headers.
+#ifndef SIGTRAP
+#define SIGTRAP 5
+#endif
+
 // The number of dotnet frames to unwind per frame-unwinding eBPF program.
 #define DOTNET_FRAMES_PER_PROGRAM 6
 
