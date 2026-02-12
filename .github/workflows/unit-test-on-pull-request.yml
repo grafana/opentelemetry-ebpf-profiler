@@ -1,4 +1,5 @@
 name: CI
+
 on:
   push:
     branches: [main]
@@ -14,11 +15,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: 'false'
       - name: Set up Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -29,42 +30,37 @@ jobs:
             echo "run \"make legal\"."
             exit 1
           fi
+
   lint:
     name: Lint (${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target_arch: [amd64, arm64]
+        include:
+          - { target_arch: amd64, runner: ubuntu-24.04 }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: 'false'
       - name: Set up environment
         uses: ./.github/workflows/env
-        with:
-          target_arch: ${{ matrix.target_arch }}
       - name: linter
         env:
-          GOARCH: ${{ matrix.target-arch }}
           CGO_ENABLED: 1
         run: make lint
 
   format:
     name: Format Go and C code
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target_arch: [amd64]
     steps:
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: 'false'
       - name: Set up environment
         uses: ./.github/workflows/env
-        with:
-          target_arch: ${{ matrix.target_arch }}
       - name: formatter
         env:
           CGO_ENABLED: 1
@@ -74,25 +70,23 @@ jobs:
 
   test:
     name: Test (${{ matrix.target_arch }}${{ matrix.go_flags }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
-          - { target_arch: amd64, go_flags: "" }
-          - { target_arch: amd64, go_flags: "-race" }
-          - { target_arch: arm64, go_flags: "" }
-          # - { target_arch: arm64, go_flags: "-race" } # seem to not work under qemu
+          - { target_arch: amd64, runner: ubuntu-24.04, go_flags: "" }
+          - { target_arch: amd64, runner: ubuntu-24.04, go_flags: "-race" }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm, go_flags: "" }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm, go_flags: "-race" }
     steps:
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Set up environment
         uses: ./.github/workflows/env
-        with:
-          target_arch: ${{ matrix.target_arch }}
       - name: Cache coredump modules
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: tools/coredump/modulecache
           key: coredumps-${{ matrix.target_arch }}-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -104,20 +98,20 @@ jobs:
 
   build-integration-test-binaries:
     name: Build integration test binaries (${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
       matrix:
-        target_arch: [amd64, arm64]
+        include:
+          - { target_arch: amd64, runner: ubuntu-24.04 }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: 'false'
       - name: Set up environment
         uses: ./.github/workflows/env
-        with:
-          target_arch: ${{ matrix.target_arch }}
       - name: Prepare integration test binaries for qemu tests
         run: make integration-test-binaries TARGET_ARCH=${{ matrix.target_arch }}
       - run: ls -ltr support
@@ -132,16 +126,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Cache coredump modules
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: tools/coredump/modulecache
           key: coredumps-arm64-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -172,22 +166,22 @@ jobs:
           - { target_arch: amd64, kernel: 6.9.1 }
           - { target_arch: amd64, kernel: 6.12.16 }
           - { target_arch: amd64, kernel: 6.16 }
+          - { target_arch: amd64, kernel: 6.18 }
 
           # ARM64 (NOTE: older ARM64 kernels are not available in Cilium repos)
           - { target_arch: arm64, kernel: 6.6.31 }
           - { target_arch: arm64, kernel: 6.8.4 }
           - { target_arch: arm64, kernel: 6.9.1 }
           - { target_arch: arm64, kernel: 6.12.16 }
-          # qemu has a bug that prevents booting the following kernel on ARM,
-          # fixed in qemu 9.2
-          #- { target_arch: arm64, kernel: 6.16 }
+          - { target_arch: arm64, kernel: 6.16 }
+          - { target_arch: arm64, kernel: 6.18 }
     steps:
       - name: Disable man-db
         run: |
           echo "set man-db/auto-update false" | sudo debconf-communicate
           sudo dpkg-reconfigure man-db
       - name: Clone code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: 'false'
       - name: Install dependencies
