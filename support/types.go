@@ -276,7 +276,7 @@ type PyProcInfo struct {
 	Continue_with_next_unwinder    uint8
 	Lasti_is_codeunit              uint8
 	Frame_is_cframe                uint8
-	Pad_cgo_0                      [2]byte
+	Pad_cgo_0                      [1]byte
 }
 type RubyProcInfo struct {
 	Version                      uint32
