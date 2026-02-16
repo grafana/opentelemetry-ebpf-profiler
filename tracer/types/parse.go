@@ -51,6 +51,34 @@ func init() {
 	}
 }
 
+// IsMapEnabled checks if the given map is enabled and should be loaded.
+func IsMapEnabled(mapName string, includeTracers IncludedTracers) bool {
+	switch mapName {
+	case "perl_procs":
+		return includeTracers.Has(PerlTracer)
+	case "php_procs":
+		return includeTracers.Has(PHPTracer)
+	case "py_procs":
+		return includeTracers.Has(PythonTracer)
+	case "hotspot_procs":
+		return includeTracers.Has(HotspotTracer)
+	case "ruby_procs":
+		return includeTracers.Has(RubyTracer)
+	case "v8_procs":
+		return includeTracers.Has(V8Tracer)
+	case "dotnet_procs":
+		return includeTracers.Has(DotnetTracer)
+	case "beam_procs":
+		return includeTracers.Has(BEAMTracer)
+	case "go_labels_procs", "apm_int_procs":
+		// go_labels_procs and apm_int_procs are called from
+		// unwind_stop and therefore need to be available all the time.
+		return true
+	default:
+		return true // Not an interpreter map, so it should be loaded
+	}
+}
+
 // tracerTypeFromName returns the tracer type for the given name.
 func tracerTypeFromName(s string) (tracerType, bool) {
 	tt, ok := tracerNameToType[s]
@@ -120,7 +148,7 @@ func Parse(tracers string) (IncludedTracers, error) {
 	var result IncludedTracers
 
 	// Parse and validate tracers string.
-	for _, name := range strings.Split(tracers, ",") {
+	for name := range strings.SplitSeq(tracers, ",") {
 		name = strings.ToLower(strings.TrimSpace(name))
 		if name == "" {
 			continue
@@ -133,9 +161,6 @@ func Parse(tracers string) (IncludedTracers, error) {
 		switch name {
 		case "all":
 			result.enableAll()
-			if runtime.GOARCH == "arm64" {
-				result.Disable(DotnetTracer)
-			}
 		case "native":
 			log.Warn("Enabling the `native` tracer explicitly is deprecated (it's always-on)")
 		default:

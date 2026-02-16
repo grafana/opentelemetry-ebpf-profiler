@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -24,6 +25,8 @@ type Controller struct {
 	config   *Config
 	reporter reporter.Reporter
 	tracer   *tracer.Tracer
+
+	cancelFunc context.CancelFunc
 }
 
 // New creates a new controller
@@ -41,12 +44,14 @@ func New(cfg *Config) *Controller {
 // Start starts the controller
 // The controller should only be started once.
 func (c *Controller) Start(ctx context.Context) error {
-	if err := tracer.ProbeBPFSyscall(); err != nil {
+	if err := linux.ProbeBPFSyscall(); err != nil {
 		return fmt.Errorf("failed to probe eBPF syscall: %w", err)
 	}
 
 	intervals := times.New(c.config.ReporterInterval, c.config.MonitorInterval,
 		c.config.ProbabilisticInterval)
+
+	ctx, c.cancelFunc = context.WithCancel(ctx)
 
 	// Start periodic synchronization with the realtime clock
 	times.StartRealtimeSync(ctx, c.config.ClockSyncInterval)
@@ -63,8 +68,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	}
 
 	envVars := libpf.Set[string]{}
-	splittedEnvVars := strings.Split(c.config.IncludeEnvVars, ",")
-	for _, envVar := range splittedEnvVars {
+	for envVar := range strings.SplitSeq(c.config.IncludeEnvVars, ",") {
 		envVar = strings.TrimSpace(envVar)
 		if envVar != "" {
 			envVars[envVar] = libpf.Void{}
@@ -152,6 +156,10 @@ func (c *Controller) Start(ctx context.Context) error {
 // Shutdown stops the controller
 func (c *Controller) Shutdown() {
 	log.Info("Stop processing ...")
+	if c.cancelFunc != nil {
+		c.cancelFunc()
+	}
+
 	if c.reporter != nil {
 		c.reporter.Stop()
 	}
