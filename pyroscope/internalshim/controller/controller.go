@@ -2,8 +2,10 @@ package controller // import "go.opentelemetry.io/ebpf-profiler/pyroscope/intern
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+	"go.opentelemetry.io/ebpf-profiler/log"
 )
 
 type Controller struct {
@@ -23,6 +25,13 @@ func (cfg *Config) Validate() error {
 }
 
 func New(cfg *Config) *Controller {
+	// set debugging logging if requested; this is otherwise done in main.go
+	if cfg.VerboseMode {
+		log.SetLevel(slog.LevelDebug)
+		// Dump the arguments in debug mode.
+		cfg.Dump()
+	}
+
 	return &Controller{
 		controller.New(cfg.Config),
 	}
