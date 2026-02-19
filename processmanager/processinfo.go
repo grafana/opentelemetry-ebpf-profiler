@@ -677,7 +677,8 @@ func (pm *ProcessManager) profilingEnabled(pr process.Process) bool {
 
 	containerID, err := process.ExtractContainerIDCached(pr.PID())
 	if err != nil {
-		return false
+		containerID = ""
+		log.Debugf("Could not detect containerID for pid %d: %s", pr, err.Error())
 	}
 	enabled := pm.policy.ProfilingEnabled(pr, containerID)
 	if enabled {
