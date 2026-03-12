@@ -2063,5 +2063,40 @@
     "name": "UnwindRubyErrCmeMaxEp",
     "field": "bpf.ruby.errors.read_cme_max_ep",
     "id": 285
+  },
+  {
+    "description": "Number of traces dropped due to unexpected origin in loadBpfTrace",
+    "type": "counter",
+    "name": "TraceUnwindUnexpectedOrigin",
+    "field": "agent.trace.errors.unexpected_origin",
+    "id": 286
+  },
+  {
+    "description": "Number of traces dropped due to unexpected errors in loadBpfTrace",
+    "type": "counter",
+    "name": "TraceUnwindOtherError",
+    "field": "agent.trace.errors.unwind_other",
+    "id": 287
+  },
+  {
+    "description": "Number of failures to read kernel stack frames",
+    "type": "counter",
+    "name": "KernelFrameReadError",
+    "field": "agent.trace.errors.kernel_frame_read",
+    "id": 288
+  },
+  {
+    "description": "Number of error frames dropped by error frame filtering",
+    "type": "counter",
+    "name": "ErrorFramesFiltered",
+    "field": "agent.trace.filtered_error_frames",
+    "id": 289
+  },
+  {
+    "description": "Number of trace events that failed to be reported",
+    "type": "counter",
+    "name": "TraceEventReportError",
+    "field": "agent.trace.errors.report_event",
+    "id": 290
   }
 ]

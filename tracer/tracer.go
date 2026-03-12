@@ -1049,6 +1049,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) (*libpf.EbpfTrace, error) {
 		var err error
 		trace.KernelFrames, err = t.readKernelFrames(ptr.Kernel_stack_id, trace.KernelFrames)
 		if err != nil {
+			metrics.Add(metrics.IDKernelFrameReadError, 1)
 			log.Errorf("Failed to get kernel stack frames: %v", err)
 		}
 	}

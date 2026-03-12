@@ -346,6 +346,8 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 					Type:            frame.Type().Error(),
 					AddressOrLineno: libpf.AddressOrLineno(frame.Data()),
 				})
+			} else {
+				metrics.Add(metrics.IDErrorFramesFiltered, 1)
 			}
 			continue
 		}
@@ -387,6 +389,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
 
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
+		metrics.Add(metrics.IDTraceEventReportError, 1)
 		log.Errorf("Failed to report trace event: %v", err)
 	}
 }

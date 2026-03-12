@@ -647,6 +647,21 @@ const (
 	// Number of failed attempts to read a CME by exceeding max EP checks
 	IDUnwindRubyErrCmeMaxEp = 285
 
+	// Number of traces dropped due to unexpected origin in loadBpfTrace
+	IDTraceUnwindUnexpectedOrigin = 286
+
+	// Number of traces dropped due to unexpected errors in loadBpfTrace
+	IDTraceUnwindOtherError = 287
+
+	// Number of failures to read kernel stack frames
+	IDKernelFrameReadError = 288
+
+	// Number of error frames dropped by error frame filtering
+	IDErrorFramesFiltered = 289
+
+	// Number of trace events that failed to be reported
+	IDTraceEventReportError = 290
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 286
+	IDMax = 291
 )

@@ -223,6 +223,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 				case err == nil:
 					// Fast path for no error.
 				case errors.Is(err, errOriginUnexpected):
+					metrics.Add(metrics.IDTraceUnwindUnexpectedOrigin, 1)
 					log.Warnf("skip trace handling: %v", err)
 					continue
 				case errors.Is(err, errRecordTooSmall), errors.Is(err, errRecordUnexpectedSize):
@@ -230,6 +231,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 					// TODO: trigger a graceful shutdown
 					return
 				default:
+					metrics.Add(metrics.IDTraceUnwindOtherError, 1)
 					log.Warnf("unexpected error handling trace: %v", err)
 					continue
 				}
