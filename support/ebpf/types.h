@@ -325,6 +325,18 @@ enum {
   // number of failed attempts to read a CME by exceeding max EP checks
   metricID_UnwindRubyErrCmeMaxEp,
 
+  // number of traces dropped by the single-error-frame filter (TEMPORARY HACK)
+  metricID_BpfTraceSingleErrorDrop,
+
+  // number of tail call failures causing sample drops
+  metricID_BpfTailCallFailure,
+
+  // number of traces dropped because PID info not yet loaded
+  metricID_BpfPidUnknownDrop,
+
+  // number of traces dropped in go_labels (record/offsets lookup failure)
+  metricID_BpfGoLabelsDrop,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //

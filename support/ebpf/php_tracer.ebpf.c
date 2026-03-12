@@ -262,6 +262,7 @@ static EBPF_INLINE int unwind_php(struct pt_regs *ctx)
 
 exit:
   tail_call(ctx, unwinder);
+  increment_metric(metricID_BpfTailCallFailure);
   return -1;
 }
 MULTI_USE_FUNC(unwind_php)

@@ -662,6 +662,21 @@ const (
 	// Number of trace events that failed to be reported
 	IDTraceEventReportError = 290
 
+	// Number of traces dropped by TEMPORARY HACK: single error frame when filter_error_frames enabled
+	IDBpfTraceSingleErrorDrop = 291
+
+	// Number of tail call failures in eBPF that silently drop a sample mid-unwind
+	IDBpfTailCallFailure = 292
+
+	// Number of traces dropped because PID information not yet loaded in eBPF maps
+	IDBpfPidUnknownDrop = 293
+
+	// Number of traces dropped in go_labels eBPF program due to offsets lookup failure
+	IDBpfGoLabelsDrop = 294
+
+	// Number of profile exports that failed causing all samples in that batch to be lost
+	IDProfileExportError = 295
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 291
+	IDMax = 296
 )

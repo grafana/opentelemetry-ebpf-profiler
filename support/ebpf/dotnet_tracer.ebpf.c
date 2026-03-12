@@ -453,6 +453,7 @@ exit:
   record->state.unwind_error = error;
   tail_call(ctx, unwinder);
   DEBUG_PRINT("dotnet: tail call for next frame unwinder (%d) failed", unwinder);
+  increment_metric(metricID_BpfTailCallFailure);
   return -1;
 }
 

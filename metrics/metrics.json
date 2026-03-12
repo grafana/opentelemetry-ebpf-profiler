@@ -2098,5 +2098,40 @@
     "name": "TraceEventReportError",
     "field": "agent.trace.errors.report_event",
     "id": 290
+  },
+  {
+    "description": "Number of traces dropped by TEMPORARY HACK: single error frame when filter_error_frames enabled",
+    "type": "counter",
+    "name": "BpfTraceSingleErrorDrop",
+    "field": "bpf.trace.drops.single_error_frame",
+    "id": 291
+  },
+  {
+    "description": "Number of tail call failures in eBPF that silently drop a sample mid-unwind",
+    "type": "counter",
+    "name": "BpfTailCallFailure",
+    "field": "bpf.trace.drops.tail_call_failure",
+    "id": 292
+  },
+  {
+    "description": "Number of traces dropped because PID information not yet loaded in eBPF maps",
+    "type": "counter",
+    "name": "BpfPidUnknownDrop",
+    "field": "bpf.trace.drops.pid_unknown",
+    "id": 293
+  },
+  {
+    "description": "Number of traces dropped in go_labels eBPF program due to offsets lookup failure",
+    "type": "counter",
+    "name": "BpfGoLabelsDrop",
+    "field": "bpf.trace.drops.go_labels",
+    "id": 294
+  },
+  {
+    "description": "Number of profile exports that failed causing all samples in that batch to be lost",
+    "type": "counter",
+    "name": "ProfileExportError",
+    "field": "agent.profile.errors.export",
+    "id": 295
   }
 ]

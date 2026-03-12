@@ -289,6 +289,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   // this is trivial.
   if (trace->frame_data_len == 1 && trace->kernel_stack_id < 0 && state->unwind_error) {
     if (filter_error_frames) {
+      increment_metric(metricID_BpfTraceSingleErrorDrop);
       return 0;
     }
   }

@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -93,6 +94,7 @@ func (r *CollectorReporter) reportProfile(ctx context.Context) error {
 	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
 		collectionStartTime, collectionEndTime)
 	if err != nil {
+		metrics.Add(metrics.IDProfileExportError, 1)
 		log.Errorf("pdata: %v", err)
 		return nil
 	}

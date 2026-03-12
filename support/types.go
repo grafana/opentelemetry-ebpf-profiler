@@ -489,4 +489,8 @@ var MetricsTranslation = []metrics.MetricID{
 	0x65: metrics.IDUnwindRubyErrReadSvar,
 	0x66: metrics.IDUnwindRubyErrReadRbasicFlags,
 	0x67: metrics.IDUnwindRubyErrCmeMaxEp,
+	0x68: metrics.IDBpfTraceSingleErrorDrop,
+	0x69: metrics.IDBpfTailCallFailure,
+	0x6a: metrics.IDBpfPidUnknownDrop,
+	0x6b: metrics.IDBpfGoLabelsDrop,
 }

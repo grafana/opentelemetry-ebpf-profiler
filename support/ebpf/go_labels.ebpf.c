@@ -182,6 +182,7 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
   GoLabelsOffsets *offsets = bpf_map_lookup_elem(&go_labels_procs, &pid);
   if (!offsets) {
     DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
+    increment_metric(metricID_BpfGoLabelsDrop);
     return -1;
   }
   DEBUG_PRINT(

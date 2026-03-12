@@ -753,6 +753,7 @@ static inline EBPF_INLINE int collect_trace(
     if (report_pid(ctx, pid_tgid, RATELIMIT_ACTION_DEFAULT)) {
       increment_metric(metricID_NumProcNew);
     }
+    increment_metric(metricID_BpfPidUnknownDrop);
     return 0;
   }
   error = get_next_unwinder_after_native_frame(record, &unwinder);
@@ -761,6 +762,7 @@ exit:
   record->state.unwind_error = error;
   tail_call(ctx, unwinder);
   DEBUG_PRINT("bpf_tail call failed for %d in native_tracer_entry", unwinder);
+  increment_metric(metricID_BpfTailCallFailure);
   return -1;
 }
 

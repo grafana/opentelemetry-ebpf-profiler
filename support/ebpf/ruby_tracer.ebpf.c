@@ -560,6 +560,7 @@ static EBPF_INLINE int unwind_ruby(struct pt_regs *ctx)
 exit:
   record->state.unwind_error = error;
   tail_call(ctx, unwinder);
+  increment_metric(metricID_BpfTailCallFailure);
   return -1;
 }
 MULTI_USE_FUNC(unwind_ruby)

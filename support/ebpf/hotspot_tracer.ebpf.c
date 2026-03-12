@@ -959,6 +959,7 @@ exit:
   record->state.unwind_error = error;
   tail_call(ctx, unwinder);
   DEBUG_PRINT("jvm: tail call for next frame unwinder (%d) failed", unwinder);
+  increment_metric(metricID_BpfTailCallFailure);
   return -1;
 }
 MULTI_USE_FUNC(unwind_hotspot)

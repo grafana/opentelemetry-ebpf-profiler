@@ -604,6 +604,7 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
   record->state.unwind_error = error;
   tail_call(ctx, unwinder);
   DEBUG_PRINT("bpf_tail call failed for %d in unwind_native", unwinder);
+  increment_metric(metricID_BpfTailCallFailure);
   return -1;
 }
 
