@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	npsr "go.opentelemetry.io/ebpf-profiler/nopanicslicereader"
@@ -91,7 +92,7 @@ type hotspotInstance struct {
 	heapAreas []jitArea
 
 	// stubs stores all known stub routine regions.
-	stubs map[libpf.Address]StubRoutine
+	stubs xsync.RWMutex[map[libpf.Address]StubRoutine]
 }
 
 func (d *hotspotInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
@@ -242,12 +243,14 @@ func (d *hotspotInstance) getStubName(ripOrBci uint32, addr libpf.Address) libpf
 	stubName := d.rm.String(constStubNameAddr)
 
 	a := d.rm.Ptr(addr+libpf.Address(vms.CodeBlob.CodeBegin)) + libpf.Address(ripOrBci)
-	for _, stub := range d.stubs {
+	stubs := d.stubs.RLock()
+	for _, stub := range *stubs {
 		if stub.start <= a && stub.end > a {
 			stubName = fmt.Sprintf("%s [%s]", stubName, stub.name)
 			break
 		}
 	}
+	d.stubs.RUnlock(&stubs)
 	name := libpf.Intern(stubName)
 	d.addrToStubName.Add(addr, name)
 	return name
@@ -508,7 +511,8 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 		// [scopes_data]	@ _immutable_data + nmethod._scopes_data_begin	\ arrays we need
 		// [scopes_pcs]		@ _immutable_data + nmethod._scopes_pcs_offset	/ for inlining info
 		// [speculations]	@ _immutable_data + nmethod._speculations_offset
-		// [end]		@ _immutable_Data + nmethod._immutable_data_size
+		// [end]		    @ _immutable_data + nmethod._immutable_data_size
+		// [end]            @ _immutable_data + min(_immutable_data_size, _immutable_data_ref_count_offset)  (JDK 26+)
 		// ...
 		// speculations presence depends on JDK build, and is not used. Instead the scopes
 		// end is determined from immutable data size.
@@ -532,6 +536,15 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 		scopesDataOff := npsr.PtrDiff32(nmethod, vms.Nmethod.ScopesDataOffset)
 		immutableDataPtr := npsr.Ptr(nmethod, vms.Nmethod.ImmutableData)
 		immutableDataSize := npsr.Uint32(nmethod, vms.Nmethod.ImmutableDataSize)
+
+		// JDK26+: immutable data ends at ref_count offset, not at immutable_data_size
+		if vms.Nmethod.ImmutableDataRefCountOff != 0 {
+			immutableDataRefCountOff := npsr.Uint32(nmethod, vms.Nmethod.ImmutableDataRefCountOff)
+			if immutableDataRefCountOff < immutableDataSize {
+				immutableDataSize = immutableDataRefCountOff
+			}
+		}
+
 		if immutableDataSize >= maxMetadataSize {
 			return nil, fmt.Errorf("unreasonably large immutable data region: %d bytes",
 				immutableDataSize)
@@ -793,12 +806,17 @@ func (d *hotspotInstance) populateMainMappings(vmd *hotspotVMData,
 func (d *hotspotInstance) updateStubMappings(vmd *hotspotVMData,
 	ebpf interpreter.EbpfHandler, pid libpf.PID,
 ) {
-	for _, stub := range findStubBounds(vmd, d.bias, d.rm) {
-		if _, exists := d.stubs[stub.start]; exists {
+	allStubs := findStubBounds(vmd, d.bias, d.rm)
+
+	stubs := d.stubs.WLock()
+	defer d.stubs.WUnlock(&stubs)
+
+	for _, stub := range allStubs {
+		if _, exists := (*stubs)[stub.start]; exists {
 			continue
 		}
 
-		d.stubs[stub.start] = stub
+		(*stubs)[stub.start] = stub
 
 		// Separate stub areas are only required on ARM64.
 		if runtime.GOARCH != "arm64" {
