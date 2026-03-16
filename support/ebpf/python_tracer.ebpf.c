@@ -9,7 +9,7 @@
 // The number of Python frames to unwind per frame-unwinding eBPF program. If
 // we start running out of instructions in the walk_python_stack program, one
 // option is to adjust this number downwards.
-#define FRAMES_PER_WALK_PYTHON_STACK 64
+#define FRAMES_PER_WALK_PYTHON_STACK 32
 
 // Forward declaration to avoid warnings like
 // "declaration of 'struct pt_regs' will not be visible outside of this function [-Wvisibility]".
@@ -176,8 +176,7 @@ walk_python_stack(PerCPURecord *record, const PyProcInfo *pyinfo, int *unwinder)
   ErrorCode error = ERR_OK;
   *unwinder       = PROG_UNWIND_STOP;
 
-  UNROLL for (u32 i = 0; i < FRAMES_PER_WALK_PYTHON_STACK; ++i)
-  {
+  for (u32 i = 0; i < FRAMES_PER_WALK_PYTHON_STACK; ++i) {
     bool continue_with_next;
     error = process_python_frame(record, pyinfo, &py_frame, &continue_with_next);
     if (error) {
