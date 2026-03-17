@@ -100,7 +100,7 @@ const (
 
 var (
 	// regex to identify the Ruby interpreter executable
-	rubyRegex = regexp.MustCompile(`^(?:.*/)?libruby(?:-.*)?\.so\.(\d)\.(\d)\.(\d)$`)
+	rubyRegex = regexp.MustCompile(`^(?:.*/)?libruby(?:-.*)?\.so\.(\d)\.(\d)\.(\d+)$`)
 	// regex to extract a version from a string
 	rubyVersionRegex = regexp.MustCompile(`^(\d)\.(\d)\.(\d)$`)
 
@@ -1072,6 +1072,7 @@ func (r *rubyInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 		})
 		return nil
 	case support.RubyFrameTypeJit:
+		fmt.Println("jit...")
 		label := rubyJitDummyFrame
 		frames.Append(&libpf.Frame{
 			Type:         libpf.RubyFrame,
