@@ -353,8 +353,6 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 		procInfo:          &cdata,
 		globalSymbolsAddr: r.globalSymbolsAddr + bias,
 		addrToString:      addrToString,
-		mappings:          make(map[process.Mapping]*uint32),
-		prefixes:          make(map[lpm.Prefix]*uint32),
 		memPool: sync.Pool{
 			New: func() any {
 				buf := make([]byte, 512)
@@ -414,15 +412,14 @@ type rubyInstance struct {
 	// in getRubyLineNo.
 	maxSize atomic.Uint32
 
-	// mappings is indexed by the Mapping to its generation
-	mappings map[process.Mapping]*uint32
-	// prefixes is indexed by the prefix added to ebpf maps (to be cleaned up) to its generation
-	prefixes map[lpm.Prefix]*uint32
-	// mappingGeneration is the current generation (so old entries can be pruned)
-	mappingGeneration uint32
+	// prefixes added to ebpf maps for the YJIT region, cleaned up in Detach
+	prefixes []lpm.Prefix
 }
 
 func (r *rubyInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
+	for _, prefix := range r.prefixes {
+		_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+	}
 	return ebpf.DeleteProcData(libpf.Ruby, pid)
 }
 
@@ -1212,85 +1209,40 @@ func profileFrameFullLabel(classPath, label, baseLabel, methodName libpf.String,
 
 func (r *rubyInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping) error {
-	var jitMapping *process.Mapping
+	start, end, found := detectYJITRegion(pr, r.r.version, mappings)
+	if !found {
+		return nil
+	}
+
+	if r.procInfo.Jit_start != 0 {
+		if start != r.procInfo.Jit_start || end != r.procInfo.Jit_end {
+			log.Warnf("YJIT region changed: %#x-%#x -> %#x-%#x",
+				r.procInfo.Jit_start, r.procInfo.Jit_end, start, end)
+		}
+		return nil
+	}
 
 	pid := pr.PID()
-	jitFound := false
-	r.mappingGeneration++
 
-	log.Debugf("Synchronizing ruby mappings")
+	size := end - start
+	log.Debugf("Found YJIT region %#x-%#x (size %d MiB)", start, end, size/(1024*1024))
 
-	for idx := range mappings {
-		m := &mappings[idx]
-		if !m.IsExecutable() || !m.IsAnonymous() {
-			continue
-		}
-		// If prctl is allowed, ruby should label the memory region
-		// always prefer that
-		if strings.Contains(m.Path.String(), "jit_reserve_addr_space") {
-			jitMapping = m
-			jitFound = true
-		}
-		// Use the first executable anon region we find if it isn't labeled
-		// If we find more, prefer ones earlier in memory or larger in size
-		if !jitFound && (jitMapping == nil || m.Vaddr < jitMapping.Vaddr || m.Length > jitMapping.Length) {
-			// Don't set jitFound here as it is a heuristic, we aren't sure
-			// could be on a system without linux config flag to allow prctl to label memoy
-			jitMapping = m
-		}
-
-		if _, exists := r.mappings[*m]; exists {
-			*r.mappings[*m] = r.mappingGeneration
-			continue
-		}
-
-		// Generate a new uint32 pointer which is shared for mapping and the prefixes it owns
-		// so updating the mapping above will reflect to prefixes also.
-		mappingGeneration := r.mappingGeneration
-		r.mappings[*m] = &mappingGeneration
-
-		// Just assume all anonymous and executable mappings are Ruby for now
-		log.Debugf("Enabling Ruby interpreter for %#x/%#x", m.Vaddr, m.Length)
-
-		prefixes, err := lpm.CalculatePrefixList(m.Vaddr, m.Vaddr+m.Length)
-		if err != nil {
-			return fmt.Errorf("new anonymous mapping lpm failure %#x/%#x", m.Vaddr, m.Length)
-		}
-
-		for _, prefix := range prefixes {
-			_, exists := r.prefixes[prefix]
-			if !exists {
-				err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindRuby, 0, 0)
-				if err != nil {
-					return err
-				}
-			}
-			r.prefixes[prefix] = &mappingGeneration
-		}
+	prefixes, err := lpm.CalculatePrefixList(start, end)
+	if err != nil {
+		return fmt.Errorf("YJIT region lpm failure %#x/%#x: %w", start, size, err)
 	}
-	if jitMapping != nil && (r.procInfo.Jit_start != jitMapping.Vaddr || r.procInfo.Jit_end != jitMapping.Vaddr+jitMapping.Length) {
-		r.procInfo.Jit_start = jitMapping.Vaddr
-		r.procInfo.Jit_end = jitMapping.Vaddr + jitMapping.Length
-		if err := ebpf.UpdateProcData(libpf.Ruby, pr.PID(), unsafe.Pointer(r.procInfo)); err != nil {
+
+	for _, prefix := range prefixes {
+		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindRuby, 0, 0); err != nil {
 			return err
 		}
-		log.Debugf("Added jit mapping %08x ruby proc info, %08x", r.procInfo.Jit_start, r.procInfo.Jit_end)
 	}
-	// Remove prefixes not seen
-	for prefix, generationPtr := range r.prefixes {
-		if *generationPtr == r.mappingGeneration {
-			continue
-		}
-		log.Debugf("Delete Ruby prefix %#v", prefix)
-		_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
-		delete(r.prefixes, prefix)
-	}
-	for m, generationPtr := range r.mappings {
-		if *generationPtr == r.mappingGeneration {
-			continue
-		}
-		log.Debugf("Disabling Ruby for %#x/%#x", m.Vaddr, m.Length)
-		delete(r.mappings, m)
+	r.prefixes = prefixes
+
+	r.procInfo.Jit_start = start
+	r.procInfo.Jit_end = end
+	if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(r.procInfo)); err != nil {
+		return err
 	}
 
 	return nil
