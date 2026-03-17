@@ -510,6 +510,8 @@ typedef struct RubyProcInfo {
   // rb_ractor_struct offset:
   u16 running_ec;
 
+  u8 return_to_native;
+
 } RubyProcInfo;
 
 // V8ProcInfo is a container for the data needed to build a stack trace for a V8 process.
