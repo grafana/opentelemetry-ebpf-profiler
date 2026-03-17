@@ -144,6 +144,42 @@ func TestFindYJITRegion(t *testing.T) {
 			wantStart:    0x1000000,
 			wantFound:    true,
 		},
+		{
+			name: "part of real process with rw mappings",
+			mappings: []process.Mapping{
+				{Vaddr: 0x400000, Length: 0x1000, Flags: 0x5, Path: libpf.Intern("/opt/ruby-3.3.10/bin/ruby")},
+				{Vaddr: 0x401000, Length: 0x1000, Flags: 0x4, Path: libpf.Intern("/opt/ruby-3.3.10/bin/ruby")},
+				{Vaddr: 0x402000, Length: 0x1000, Flags: 0x4, Path: libpf.Intern("/opt/ruby-3.3.10/bin/ruby")},
+				{Vaddr: 0x403000, Length: 0x1000, Flags: 0x6, Path: libpf.Intern("/opt/ruby-3.3.10/bin/ruby")},
+				{Vaddr: 0x7fa6f0000000, Length: 0x48000, Flags: 0x6, Path: libpf.Intern("")},
+				{Vaddr: 0x7fa739c00000, Length: 0x410000, Flags: 0x5, Path: libpf.Intern("/opt/ruby-3.3.10/lib/libruby.so.3.3.10")},
+				{Vaddr: 0x7fa73a010000, Length: 0x1cf000, Flags: 0x4, Path: libpf.Intern("/opt/ruby-3.3.10/lib/libruby.so.3.3.10")},
+				{Vaddr: 0x7fa73a1df000, Length: 0x16000, Flags: 0x4, Path: libpf.Intern("/opt/ruby-3.3.10/lib/libruby.so.3.3.10")},
+				{Vaddr: 0x7fa73a1f5000, Length: 0x5000, Flags: 0x6, Path: libpf.Intern("/opt/ruby-3.3.10/lib/libruby.so.3.3.10")},
+				{Vaddr: 0x7fa73a1fa000, Length: 0x15000, Flags: 0x6, Path: libpf.Intern("")},
+				{Vaddr: 0x7fa73a2e2000, Length: 0x2000, Flags: 0x6, Path: libpf.Intern("")},
+				{Vaddr: 0x7fa73a2ea000, Length: 0x2000, Flags: 0x5, Path: libpf.Intern("linux-vdso.1.so")},
+				{Vaddr: 0x7fa73a2ec000, Length: 0x2a000, Flags: 0x5, Path: libpf.Intern("/usr/lib64/ld-linux-x86-64.so.2")},
+				{Vaddr: 0x7fa73a316000, Length: 0xc000, Flags: 0x4, Path: libpf.Intern("/usr/lib64/ld-linux-x86-64.so.2")},
+				{Vaddr: 0x7fa73a322000, Length: 0x2000, Flags: 0x4, Path: libpf.Intern("/usr/lib64/ld-linux-x86-64.so.2")},
+				{Vaddr: 0x7fa73a324000, Length: 0x1000, Flags: 0x6, Path: libpf.Intern("/usr/lib64/ld-linux-x86-64.so.2")},
+				{Vaddr: 0x7fa73a325000, Length: 0x1000, Flags: 0x6, Path: libpf.Intern("")},
+				{Vaddr: 0x7fa73a358000, Length: 0x11b000, Flags: 0x5, Path: libpf.Intern("")},
+				{Vaddr: 0x7fa73a473000, Length: 0xd8000, Flags: 0x5, Path: libpf.Intern("")},
+			},
+			expectedSize: 48 * mib,
+			wantStart:    0x7fa73a358000,
+			wantFound:    true,
+		},
+		{
+			name: "16k_rx_hole_then_50mib_rx_expected_none",
+			mappings: []process.Mapping{
+				{Vaddr: 0x1000000, Length: 4 * 0x1000, Flags: rx, Path: libpf.NullString},
+				{Vaddr: 0x1000000 + 8*0x1000, Length: 50 * mib, Flags: rx, Path: libpf.NullString},
+			},
+			expectedSize: 48 * mib,
+			wantFound:    false,
+		},
 	}
 
 	for _, tt := range tests {

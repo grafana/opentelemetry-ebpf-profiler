@@ -1210,7 +1210,13 @@ func profileFrameFullLabel(classPath, label, baseLabel, methodName libpf.String,
 func (r *rubyInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping) error {
 	start, end, found := detectYJITRegion(pr, r.r.version, mappings)
+	log.Debugf("YJIT region %#x-%#x %+v", start, end, found)
 	if !found {
+		for i := range mappings {
+			m := &mappings[i]
+			fmt.Printf("YJIT DEBUG {Vaddr: %#x, Length: %#x, Flags: %#x, Path: libpf.Intern(%q)},\n",
+				m.Vaddr, m.Length, uint32(m.Flags), m.Path.String())
+		}
 		return nil
 	}
 
@@ -1304,6 +1310,7 @@ func determineRubyVersion(ef *pfelf.File) (uint32, error) {
 }
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+	fmt.Println(info.FileName())
 	if !rubyRegex.MatchString(info.FileName()) {
 		return nil, nil
 	}

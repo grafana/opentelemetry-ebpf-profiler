@@ -4,11 +4,13 @@
 package ruby // import "go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 
 import (
+	"debug/elf"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
@@ -65,25 +67,31 @@ func determineYJITRegionSize(version uint32, pr process.Process) uint64 {
 	return yjitRegionSize(version, execMemSize, memSize)
 }
 
+// mappings contains all readable or executable mappings, meaning rw-, rwx, -wx may be there, but not -w-
 func findYJITRegion(mappings []process.Mapping, expectedSize uint64) (start uint64, found bool) {
 	var end uint64
+	_ = end
 	for i := range mappings {
 		m := &mappings[i]
-		if !m.IsAnonymous() {
-			if found && m.Vaddr < end {
+		if !found {
+			if m.Path == libpf.NullString && m.Flags == (elf.PF_R|elf.PF_X) {
+				found = true
+				start = m.Vaddr
+				end = start + expectedSize
+			}
+			continue
+		}
+		withinFoundRange := m.Vaddr < end && m.Vaddr+m.Length <= end
+		if withinFoundRange {
+			if m.Path != libpf.NullString {
 				return 0, false
 			}
 			continue
 		}
-		if !found {
-			start = m.Vaddr
-			end = start + expectedSize
-			found = true
-			continue
-		}
-		if m.Vaddr >= end {
+		if m.Path == libpf.NullString && m.Flags == (elf.PF_R|elf.PF_X) {
 			return 0, false
 		}
+
 	}
 	return start, found
 }
