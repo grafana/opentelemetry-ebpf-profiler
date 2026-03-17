@@ -1071,7 +1071,6 @@ func (r *rubyInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 		})
 		return nil
 	case support.RubyFrameTypeJit:
-		fmt.Println("jit...")
 		label := rubyJitDummyFrame
 		frames.Append(&libpf.Frame{
 			Type:         libpf.RubyFrame,
@@ -1312,7 +1311,6 @@ func determineRubyVersion(ef *pfelf.File) (uint32, error) {
 }
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
-	fmt.Println(info.FileName())
 	if !rubyRegex.MatchString(info.FileName()) {
 		return nil, nil
 	}
