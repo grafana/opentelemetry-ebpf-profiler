@@ -17,28 +17,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
     steps:
-      - name: Get secrets
-        uses: grafana/shared-workflows/actions/get-vault-secrets@ac5193564bb463032623a9a0ba23716f866f309c
-        with:
-          repo_secrets: |
-            GITHUB_APP_ID=pyroscope-development-app:app-id
-            GITHUB_APP_PRIVATE_KEY=pyroscope-development-app:app-private-key
-
-      - name: Generate GitHub token
-        id: app-token
-        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
-        with:
-          app-id: ${{ env.GITHUB_APP_ID }}
-          private-key: ${{ env.GITHUB_APP_PRIVATE_KEY }}
-          owner: grafana
-          repositories: opentelemetry-ebpf-profiler
-
       - name: Checkout pyroscope_alloy
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
           ref: pyroscope_alloy
 
@@ -61,28 +43,19 @@ jobs:
             echo "has_changes=true" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Get GitHub App User ID
+      - name: Build updated module
         if: steps.changes.outputs.has_changes == 'true'
-        id: get-user-id
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          APP_BOT="${APP_SLUG}[bot]"
-          USER_ID="$(gh api "/users/${APP_BOT}" --jq '.id')"
-          echo "user-id=${USER_ID}" >> "${GITHUB_OUTPUT}"
+          go build .
 
       - name: Commit and push changes
         if: steps.changes.outputs.has_changes == 'true'
         id: commit
         env:
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          USER_ID: ${{ steps.get-user-id.outputs.user-id }}
           ALLOY_REVISION: ${{ inputs.alloy_revision }}
         run: |
-          APP_BOT="${APP_SLUG}[bot]"
-          git config user.name "${APP_BOT}"
-          git config user.email "${USER_ID}+${APP_BOT}@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           SAFE_REVISION="$(printf '%s' "${ALLOY_REVISION}" | tr '/:@ ' '-' | tr -cd 'A-Za-z0-9._-')"
           if [[ -z "${SAFE_REVISION}" ]]; then
@@ -100,7 +73,7 @@ jobs:
       - name: Create pull request
         if: steps.changes.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           ALLOY_REVISION: ${{ inputs.alloy_revision }}
           BRANCH_NAME: ${{ steps.commit.outputs.branch }}
         run: |
