@@ -4,7 +4,6 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 OTEL_PREFIX = "go.opentelemetry.io/"
@@ -32,28 +31,26 @@ def read_otel_requirements(go_mod_path: Path) -> dict[str, str]:
     return requirements
 
 
-def collect_alloy_versions(alloy_dir: Path) -> dict[str, str]:
-    go_mod_files = [
-        line.strip()
-        for line in run(["git", "-C", str(alloy_dir), "ls-files", "**/go.mod"]).splitlines()
-        if line.strip()
-    ]
+def download_alloy_module(alloy_revision: str, cwd: Path) -> tuple[Path, str]:
+    raw = run(
+        ["go", "mod", "download", "-json", f"github.com/grafana/alloy@{alloy_revision}"],
+        cwd=cwd,
+    )
+    data = json.loads(raw)
 
-    versions: dict[str, str] = {}
-    sources: dict[str, str] = {}
-    for rel_path in sorted(go_mod_files):
-        go_mod = alloy_dir / rel_path
-        for dep_path, version in read_otel_requirements(go_mod).items():
-            current = versions.get(dep_path)
-            if current is not None and current != version:
-                src = sources[dep_path]
-                raise SystemExit(
-                    "Failed: conflicting versions in alloy for "
-                    f"{dep_path}: {current} (from {src}) vs {version} (from {rel_path})"
-                )
-            versions[dep_path] = version
-            sources[dep_path] = rel_path
-    return versions
+    alloy_dir = Path(data.get("Dir", ""))
+    if not alloy_dir.exists():
+        raise SystemExit(f"Failed: could not resolve alloy module dir for {alloy_revision}")
+
+    resolved_version = data.get("Version", alloy_revision)
+    return alloy_dir, resolved_version
+
+
+def collect_alloy_versions(alloy_dir: Path) -> dict[str, str]:
+    alloy_go_mod = alloy_dir / "go.mod"
+    if not alloy_go_mod.exists():
+        raise SystemExit(f"Failed: alloy go.mod not found at {alloy_go_mod}")
+    return read_otel_requirements(alloy_go_mod)
 
 
 def apply_versions(repo_root: Path, versions: dict[str, str], deps: list[str]) -> None:
@@ -110,18 +107,13 @@ def main() -> int:
 
     original_deps = sorted(profiler_versions.keys())
 
-    with tempfile.TemporaryDirectory() as tmp:
-        alloy_dir = Path(tmp) / "alloy"
-        print("Cloning grafana/alloy...")
-        run(["git", "clone", "https://github.com/grafana/alloy.git", str(alloy_dir)])
-        run(["git", "-C", str(alloy_dir), "checkout", args.alloy_revision])
-        resolved_revision = run(["git", "-C", str(alloy_dir), "rev-parse", "HEAD"])
-
-        print(
-            "Collecting go.opentelemetry.io/* dependency versions from alloy "
-            f"({resolved_revision})..."
-        )
-        alloy_versions = collect_alloy_versions(alloy_dir)
+    print("Downloading grafana/alloy with go mod...")
+    alloy_dir, resolved_revision = download_alloy_module(args.alloy_revision, repo_root)
+    print(
+        "Collecting go.opentelemetry.io/* dependency versions from alloy go.mod "
+        f"({resolved_revision})..."
+    )
+    alloy_versions = collect_alloy_versions(alloy_dir)
 
     print("Applying alloy versions to profiler go.opentelemetry.io/* dependencies...")
     apply_versions(repo_root, alloy_versions, original_deps)
