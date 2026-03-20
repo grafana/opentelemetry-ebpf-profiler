@@ -87,6 +87,8 @@ jobs:
           - Source revision: \`${ALLOY_REVISION}\`
           - Script: \`tools/denovate-opentelemetry-from-alloy.py\`
           - Includes \`go mod tidy\` and strict post-tidy version verification
+
+          If CI workflows do not start automatically on this PR, close and reopen the PR to retrigger \`pull_request\` workflows.
           EOF
             )"
 
