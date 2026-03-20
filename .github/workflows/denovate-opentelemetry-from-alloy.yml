@@ -32,7 +32,7 @@ jobs:
 
       - name: Run denovate script
         run: |
-          ./tools/denovate-opentelemetry-from-alloy.py "${{ inputs.alloy_revision }}"
+          go run ./tools/denovate-opentelemetry-from-alloy.go "${{ inputs.alloy_revision }}"
 
       - name: Check for changes
         id: changes
@@ -85,7 +85,7 @@ jobs:
           Sync all \`go.opentelemetry.io/*\` dependencies in \`go.mod\` to versions from the specified Alloy revision.
 
           - Source revision: \`${ALLOY_REVISION}\`
-          - Script: \`tools/denovate-opentelemetry-from-alloy.py\`
+          - Script: \`tools/denovate-opentelemetry-from-alloy.go\`
           - Includes \`go mod tidy\` and strict post-tidy version verification
 
           If CI workflows do not start automatically on this PR, close and reopen the PR to retrigger \`pull_request\` workflows.
