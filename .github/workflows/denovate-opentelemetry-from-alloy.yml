@@ -50,7 +50,7 @@ jobs:
 
       - name: Run denovate script
         run: |
-          ./tools/denovate-opentelemetry-from-alloy.sh "${{ inputs.alloy_revision }}"
+          ./tools/denovate-opentelemetry-from-alloy.py "${{ inputs.alloy_revision }}"
 
       - name: Check for changes
         id: changes
@@ -112,7 +112,7 @@ jobs:
           Sync all \`go.opentelemetry.io/*\` dependencies in \`go.mod\` to versions from the specified Alloy revision.
 
           - Source revision: \`${ALLOY_REVISION}\`
-          - Script: \`tools/denovate-opentelemetry-from-alloy.sh\`
+          - Script: \`tools/denovate-opentelemetry-from-alloy.py\`
           - Includes \`go mod tidy\` and strict post-tidy version verification
           EOF
             )"
