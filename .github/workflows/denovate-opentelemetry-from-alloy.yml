@@ -1,0 +1,122 @@
+name: Denovate OpenTelemetry Dependencies from Alloy
+
+on:
+  workflow_dispatch:
+    inputs:
+      alloy_revision:
+        description: Alloy revision to sync against (tag, branch, or commit)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  denovate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Get secrets
+        uses: grafana/shared-workflows/actions/get-vault-secrets@ac5193564bb463032623a9a0ba23716f866f309c
+        with:
+          repo_secrets: |
+            GITHUB_APP_ID=pyroscope-development-app:app-id
+            GITHUB_APP_PRIVATE_KEY=pyroscope-development-app:app-private-key
+
+      - name: Generate GitHub token
+        id: app-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ env.GITHUB_APP_ID }}
+          private-key: ${{ env.GITHUB_APP_PRIVATE_KEY }}
+          owner: grafana
+          repositories: opentelemetry-ebpf-profiler
+
+      - name: Checkout pyroscope_alloy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+          ref: pyroscope_alloy
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run denovate script
+        run: |
+          ./tools/denovate-opentelemetry-from-alloy.sh "${{ inputs.alloy_revision }}"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_changes=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Get GitHub App User ID
+        if: steps.changes.outputs.has_changes == 'true'
+        id: get-user-id
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          APP_BOT="${APP_SLUG}[bot]"
+          USER_ID="$(gh api "/users/${APP_BOT}" --jq '.id')"
+          echo "user-id=${USER_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.has_changes == 'true'
+        id: commit
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          USER_ID: ${{ steps.get-user-id.outputs.user-id }}
+          ALLOY_REVISION: ${{ inputs.alloy_revision }}
+        run: |
+          APP_BOT="${APP_SLUG}[bot]"
+          git config user.name "${APP_BOT}"
+          git config user.email "${USER_ID}+${APP_BOT}@users.noreply.github.com"
+
+          SAFE_REVISION="$(printf '%s' "${ALLOY_REVISION}" | tr '/:@ ' '-' | tr -cd 'A-Za-z0-9._-')"
+          if [[ -z "${SAFE_REVISION}" ]]; then
+            SAFE_REVISION="revision"
+          fi
+          BRANCH_NAME="automation/denovate-otel-${SAFE_REVISION}-${GITHUB_RUN_ID}"
+
+          git checkout -b "${BRANCH_NAME}"
+          git add go.mod go.sum
+          git commit -m "chore: denovate opentelemetry deps from alloy ${ALLOY_REVISION}"
+          git push origin "${BRANCH_NAME}"
+
+          echo "branch=${BRANCH_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create pull request
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ALLOY_REVISION: ${{ inputs.alloy_revision }}
+          BRANCH_NAME: ${{ steps.commit.outputs.branch }}
+        run: |
+          gh pr create \
+            --base pyroscope_alloy \
+            --head "${BRANCH_NAME}" \
+            --title "chore: denovate OpenTelemetry deps from alloy ${ALLOY_REVISION}" \
+            --body "$(cat <<EOF
+          Sync all \`go.opentelemetry.io/*\` dependencies in \`go.mod\` to versions from the specified Alloy revision.
+
+          - Source revision: \`${ALLOY_REVISION}\`
+          - Script: \`tools/denovate-opentelemetry-from-alloy.sh\`
+          - Includes \`go mod tidy\` and strict post-tidy version verification
+          EOF
+            )"
+
+      - name: No changes
+        if: steps.changes.outputs.has_changes != 'true'
+        run: echo "No dependency changes detected; skipping PR creation."
