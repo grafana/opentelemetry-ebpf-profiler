@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,11 +28,24 @@ type goModDownloadResult struct {
 func run(repoRoot string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("%s %s failed: %w\n%s", name, strings.Join(args, " "), err, string(out))
+		return "", fmt.Errorf(
+			"%s %s failed: %w\nstdout:\n%s\nstderr:\n%s",
+			name,
+			strings.Join(args, " "),
+			err,
+			stdout.String(),
+			stderr.String(),
+		)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func readModFile(path string) (*modfile.File, error) {
@@ -72,15 +86,8 @@ func downloadAlloy(repoRoot string, revision string) (dir string, resolvedVersio
 		return "", "", err
 	}
 
-	start := strings.Index(out, "{")
-	end := strings.LastIndex(out, "}")
-	if start < 0 || end < start {
-		return "", "", fmt.Errorf("unexpected go mod download output:\n%s", out)
-	}
-	jsonPayload := out[start : end+1]
-
 	var result goModDownloadResult
-	if unmarshalErr := json.Unmarshal([]byte(jsonPayload), &result); unmarshalErr != nil {
+	if unmarshalErr := json.Unmarshal([]byte(out), &result); unmarshalErr != nil {
 		return "", "", fmt.Errorf("decode go mod download output: %w\nraw output:\n%s", unmarshalErr, out)
 	}
 	if result.Error != "" {
