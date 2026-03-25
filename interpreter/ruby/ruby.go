@@ -4,6 +4,7 @@
 package ruby // import "go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 
 import (
+	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1215,8 +1216,11 @@ func (r *rubyInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	if !found {
 		for i := range mappings {
 			m := &mappings[i]
-			fmt.Printf("YJIT DEBUG {Vaddr: %#x, Length: %#x, Flags: %#x, Path: libpf.Intern(%q)},\n",
-				m.Vaddr, m.Length, uint32(m.Flags), m.Path.String())
+			if m.Flags&(elf.PF_R|elf.PF_X) != elf.PF_R|elf.PF_X || m.Path.String() != "" {
+				continue
+			}
+			log.Debugf("YJIT mapping {Vaddr: %#x, Length: %#x, Flags: %#x}",
+				m.Vaddr, m.Length, uint32(m.Flags))
 		}
 		return nil
 	}
