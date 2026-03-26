@@ -216,23 +216,6 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 	return nil
 }
 
-// sanitizeRevision makes a revision string safe for use in branch names.
-func sanitizeRevision(rev string) string {
-	replacer := strings.NewReplacer("/", "-", ":", "-", "@", "-", " ", "-")
-	safe := replacer.Replace(rev)
-
-	var buf strings.Builder
-	for _, r := range safe {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
-			buf.WriteRune(r)
-		}
-	}
-	result := buf.String()
-	if result == "" {
-		return "revision"
-	}
-	return result
-}
 
 func composePRBody(revision string, scriptOutput string) string {
 	if scriptOutput == "" {
@@ -370,7 +353,7 @@ func main() {
 	fmt.Println("Build succeeded.")
 
 	// Determine branch name.
-	safeRevision := sanitizeRevision(alloyRevision)
+	safeRevision := strings.TrimSpace(alloyRevision)
 	uniqueSuffix := os.Getenv("GITHUB_RUN_ID")
 	if uniqueSuffix == "" {
 		uniqueSuffix = fmt.Sprintf("%d", time.Now().Unix())
