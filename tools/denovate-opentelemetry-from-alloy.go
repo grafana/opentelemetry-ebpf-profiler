@@ -216,7 +216,6 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 	return nil
 }
 
-
 func composePRBody(revision string, scriptOutput string) string {
 	if scriptOutput == "" {
 		scriptOutput = "(no output captured)"
