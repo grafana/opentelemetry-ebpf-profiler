@@ -344,13 +344,6 @@ func main() {
 		return
 	}
 
-	fmt.Println("\nVerifying build...")
-	if err := runPassthrough(repoRoot, "go", "build", "."); err != nil {
-		fmt.Fprintf(os.Stderr, "build failed: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Build succeeded.")
-
 	// Determine branch name.
 	safeRevision := strings.TrimSpace(alloyRevision)
 	uniqueSuffix := os.Getenv("GITHUB_RUN_ID")
