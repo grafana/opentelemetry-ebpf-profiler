@@ -31,12 +31,10 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run denovate script
-        id: run-denovate
         run: |
           set -o pipefail
-          OUTPUT_FILE="${RUNNER_TEMP}/denovate-output.txt"
+          OUTPUT_FILE="/tmp/denovate-output.txt"
           go run ./tools/denovate-opentelemetry-from-alloy.go "${{ inputs.alloy_revision }}" 2>&1 | tee "${OUTPUT_FILE}"
-          echo "output_file=${OUTPUT_FILE}" >> "${GITHUB_OUTPUT}"
 
       - name: Check for changes
         id: changes
@@ -80,9 +78,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ALLOY_REVISION: ${{ inputs.alloy_revision }}
           BRANCH_NAME: ${{ steps.commit.outputs.branch }}
-          SCRIPT_OUTPUT_FILE: ${{ steps.run-denovate.outputs.output_file }}
         run: |
-          SCRIPT_OUTPUT="$(cat "${SCRIPT_OUTPUT_FILE}")"
+          SCRIPT_OUTPUT="$(cat /tmp/denovate-output.txt)"
           if [[ -z "${SCRIPT_OUTPUT}" ]]; then
             SCRIPT_OUTPUT="(no output captured)"
           fi
