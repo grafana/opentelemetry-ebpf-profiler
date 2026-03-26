@@ -31,8 +31,12 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run denovate script
+        id: run-denovate
         run: |
-          go run ./tools/denovate-opentelemetry-from-alloy.go "${{ inputs.alloy_revision }}"
+          set -o pipefail
+          OUTPUT_FILE="${RUNNER_TEMP}/denovate-output.txt"
+          go run ./tools/denovate-opentelemetry-from-alloy.go "${{ inputs.alloy_revision }}" 2>&1 | tee "${OUTPUT_FILE}"
+          echo "output_file=${OUTPUT_FILE}" >> "${GITHUB_OUTPUT}"
 
       - name: Check for changes
         id: changes
@@ -76,7 +80,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ALLOY_REVISION: ${{ inputs.alloy_revision }}
           BRANCH_NAME: ${{ steps.commit.outputs.branch }}
+          SCRIPT_OUTPUT_FILE: ${{ steps.run-denovate.outputs.output_file }}
         run: |
+          SCRIPT_OUTPUT="$(cat "${SCRIPT_OUTPUT_FILE}")"
+          if [[ -z "${SCRIPT_OUTPUT}" ]]; then
+            SCRIPT_OUTPUT="(no output captured)"
+          fi
+
           gh pr create \
             --base pyroscope_alloy \
             --head "${BRANCH_NAME}" \
@@ -87,6 +97,11 @@ jobs:
           - Source revision: \`${ALLOY_REVISION}\`
           - Script: \`tools/denovate-opentelemetry-from-alloy.go\`
           - Includes \`go mod tidy\` and strict post-tidy version verification
+
+          ### Script output
+          \`\`\`text
+          ${SCRIPT_OUTPUT}
+          \`\`\`
 
           If CI workflows do not start automatically on this PR, close and reopen the PR to retrigger \`pull_request\` workflows.
           EOF

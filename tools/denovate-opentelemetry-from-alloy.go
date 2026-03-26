@@ -141,6 +141,11 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 
 	for _, dep := range sortedKeys(profilerDeps) {
 		if shouldSkipDep(dep) {
+			finalVersion, ok := finalDeps[dep]
+			if !ok {
+				return fmt.Errorf("%s disappeared after go mod tidy", dep)
+			}
+			fmt.Printf("  - %s: %s => %s (skipping verification)\n", dep, finalVersion, finalVersion)
 			continue
 		}
 
@@ -156,6 +161,7 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 		if finalVersion != expected {
 			return fmt.Errorf("%s is %s after go mod tidy, expected %s", dep, finalVersion, expected)
 		}
+		fmt.Printf("  - %s: %s => %s (verified)\n", dep, expected, finalVersion)
 	}
 	return nil
 }
