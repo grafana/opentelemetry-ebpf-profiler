@@ -14,6 +14,8 @@ permissions:
 jobs:
   denovate:
     runs-on: ubuntu-24.04
+    env:
+      GOTOOLCHAIN: auto
     permissions:
       contents: write
       pull-requests: write
@@ -30,89 +32,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Run denovate script
-        env:
-          ALLOY_REVISION: ${{ inputs.alloy_revision }}
-        run: |
-          set -o pipefail
-          OUTPUT_FILE="/tmp/denovate-output.txt"
-          go run ./tools/denovate-opentelemetry-from-alloy.go "${ALLOY_REVISION}" 2>&1 | tee "${OUTPUT_FILE}"
-
-      - name: Check for changes
-        id: changes
-        run: |
-          if git diff --quiet; then
-            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
-          else
-            echo "has_changes=true" >> "${GITHUB_OUTPUT}"
-          fi
-
-      - name: Build updated module
-        if: steps.changes.outputs.has_changes == 'true'
-        run: |
-          go build .
-
-      - name: Commit and push changes
-        if: steps.changes.outputs.has_changes == 'true'
-        id: commit
-        env:
-          ALLOY_REVISION: ${{ inputs.alloy_revision }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          TARGET_ALLOY_REVISION="${ALLOY_REVISION:-main}"
-          SAFE_REVISION="$(printf '%s' "${TARGET_ALLOY_REVISION}" | tr '/:@ ' '-' | tr -cd 'A-Za-z0-9._-')"
-          if [[ -z "${SAFE_REVISION}" ]]; then
-            SAFE_REVISION="revision"
-          fi
-          BRANCH_NAME="automation/denovate-otel-${SAFE_REVISION}-${GITHUB_RUN_ID}"
-
-          git checkout -b "${BRANCH_NAME}"
-          git add go.mod go.sum
-          git commit -m "chore: denovate opentelemetry deps from alloy ${TARGET_ALLOY_REVISION}"
-          git push origin "${BRANCH_NAME}"
-
-          echo "branch=${BRANCH_NAME}" >> "${GITHUB_OUTPUT}"
-
-      - name: Create pull request
-        if: steps.changes.outputs.has_changes == 'true'
+      - name: Run denovate
         env:
           GH_TOKEN: ${{ github.token }}
           ALLOY_REVISION: ${{ inputs.alloy_revision }}
-          BRANCH_NAME: ${{ steps.commit.outputs.branch }}
-        run: |
-          TARGET_ALLOY_REVISION="${ALLOY_REVISION:-main}"
-          SAFE_ALLOY_REVISION="$(printf '%s' "${TARGET_ALLOY_REVISION}" | tr '\n\r\t' '   ')"
-          if [[ -z "${SAFE_ALLOY_REVISION}" ]]; then
-            SAFE_ALLOY_REVISION="(empty)"
-          fi
-
-          if [[ ! -s /tmp/denovate-output.txt ]]; then
-            echo "(no output captured)" >/tmp/denovate-output.txt
-          fi
-
-          {
-            echo "Sync all \`go.opentelemetry.io/*\` dependencies in \`go.mod\` to versions from the specified Alloy revision."
-            echo
-            echo "- Source revision: \`${SAFE_ALLOY_REVISION}\`"
-            echo "- Script: \`tools/denovate-opentelemetry-from-alloy.go\`"
-            echo "- Includes \`go mod tidy\` and strict post-tidy version verification"
-            echo
-            echo "### Script output"
-            echo "\`\`\`text"
-            cat /tmp/denovate-output.txt
-            echo "\`\`\`"
-            echo
-            echo "If CI workflows do not start automatically on this PR, close and reopen the PR to retrigger \`pull_request\` workflows."
-          } >/tmp/denovate-pr-body.md
-
-          gh pr create \
-            --base pyroscope_alloy \
-            --head "${BRANCH_NAME}" \
-            --title "chore: denovate OpenTelemetry deps from alloy ${SAFE_ALLOY_REVISION}" \
-            --body-file /tmp/denovate-pr-body.md
-
-      - name: No changes
-        if: steps.changes.outputs.has_changes != 'true'
-        run: echo "No dependency changes detected; skipping PR creation."
+        run: go run ./tools/denovate-opentelemetry-from-alloy.go "${ALLOY_REVISION}"

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/mod/modfile"
 )
@@ -24,9 +26,25 @@ var skippedDeps = map[string]struct{}{
 	"go.opentelemetry.io/proto/otlp/profiles/v1development": {},
 }
 
+var scriptOutputBuf strings.Builder
+
 func shouldSkipDep(dep string) bool {
 	_, ok := skippedDeps[dep]
 	return ok
+}
+
+// logf writes to both stdout and the script output buffer (used for PR body).
+func logf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	fmt.Print(msg)
+	scriptOutputBuf.WriteString(msg)
+}
+
+// logln writes to both stdout and the script output buffer (used for PR body).
+func logln(args ...any) {
+	msg := fmt.Sprintln(args...)
+	fmt.Print(msg)
+	scriptOutputBuf.WriteString(msg)
 }
 
 type goModDownloadResult struct {
@@ -59,6 +77,35 @@ func run(repoRoot string, name string, args ...string) (string, error) {
 		)
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// runPassthrough runs a command with stdout/stderr connected to the terminal.
+func runPassthrough(repoRoot string, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = repoRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// runExitCode runs a command and returns its exit code without treating non-zero as an error.
+func runExitCode(repoRoot string, name string, args ...string) (int, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = repoRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err == nil {
+		return 0, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), nil
+	}
+	return -1, fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
 }
 
 func readModFile(path string) (*modfile.File, error) {
@@ -119,7 +166,7 @@ func applyAlloyVersions(repoRoot string, profilerDeps map[string]string, alloyDe
 	for _, dep := range sortedKeys(profilerDeps) {
 		currentVersion := profilerDeps[dep]
 		if shouldSkipDep(dep) {
-			fmt.Printf("  - %s: %s => %s (skipping dependency)\n", dep, currentVersion, currentVersion)
+			logf("  - %s: %s => %s (skipping dependency)\n", dep, currentVersion, currentVersion)
 			continue
 		}
 
@@ -127,7 +174,7 @@ func applyAlloyVersions(repoRoot string, profilerDeps map[string]string, alloyDe
 		if !ok {
 			return fmt.Errorf("dependency %s was not found in alloy", dep)
 		}
-		fmt.Printf("  - %s: %s => %s\n", dep, currentVersion, alloyVersion)
+		logf("  - %s: %s => %s\n", dep, currentVersion, alloyVersion)
 		if _, err := run(repoRoot, "go", "mod", "edit", "-require="+dep+"@"+alloyVersion); err != nil {
 			return err
 		}
@@ -148,7 +195,7 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 			if !ok {
 				return fmt.Errorf("%s disappeared after go mod tidy", dep)
 			}
-			fmt.Printf("  - %s: %s => %s (skipping verification)\n", dep, finalVersion, finalVersion)
+			logf("  - %s: %s => %s (skipping verification)\n", dep, finalVersion, finalVersion)
 			continue
 		}
 
@@ -164,28 +211,55 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 		if finalVersion != expected {
 			return fmt.Errorf("%s is %s after go mod tidy, expected %s", dep, finalVersion, expected)
 		}
-		fmt.Printf("  - %s: %s => %s (verified)\n", dep, expected, finalVersion)
+		logf("  - %s: %s => %s (verified)\n", dep, expected, finalVersion)
 	}
 	return nil
 }
 
-func main() {
-	if len(os.Args) > 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s [alloy-revision]\n", os.Args[0])
-		os.Exit(1)
+func composePRBody(revision string, scriptOutput string) string {
+	if scriptOutput == "" {
+		scriptOutput = "(no output captured)"
 	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Sync all `go.opentelemetry.io/*` dependencies in `go.mod` to versions from the specified Alloy revision.\n\n")
+	fmt.Fprintf(&b, "- Source revision: `%s`\n", revision)
+	fmt.Fprintf(&b, "- Script: `tools/denovate-opentelemetry-from-alloy.go`\n")
+	fmt.Fprintf(&b, "- Includes `go mod tidy` and strict post-tidy version verification\n\n")
+	fmt.Fprintf(&b, "### Script output\n")
+	fmt.Fprintf(&b, "```text\n%s\n```\n\n", scriptOutput)
+	fmt.Fprintf(&b, "If CI workflows do not start automatically on this PR, close and reopen the PR to retrigger `pull_request` workflows.\n")
+	return b.String()
+}
+
+func main() {
+	dryRun := flag.Bool("dry-run", false, "show git diff without committing, pushing, or creating a PR")
+	baseBranch := flag.String("base-branch", "pyroscope_alloy", "base branch for the PR")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [alloy-revision]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Syncs go.opentelemetry.io/* dependencies to match a given Alloy revision.\n")
+		fmt.Fprintf(os.Stderr, "Set GOTOOLCHAIN=auto if Alloy requires a newer Go version.\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
 
 	alloyRevision := "main"
-	usedDefaultRevision := len(os.Args) == 1
-	if len(os.Args) == 2 {
-		alloyRevision = strings.TrimSpace(os.Args[1])
+	usedDefaultRevision := true
+	if flag.NArg() > 1 {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [alloy-revision]\n", os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+	if flag.NArg() == 1 {
+		alloyRevision = strings.TrimSpace(flag.Arg(0))
 		if alloyRevision == "" {
 			alloyRevision = "main"
-			usedDefaultRevision = true
+		} else {
+			usedDefaultRevision = false
 		}
 	}
 	if usedDefaultRevision {
-		fmt.Println("No alloy revision provided; defaulting to latest main.")
+		logln("No alloy revision provided; defaulting to latest main.")
 	}
 
 	repoRoot, err := os.Getwd()
@@ -202,11 +276,11 @@ func main() {
 	}
 	profilerDeps := otelRequirements(profilerMod)
 	if len(profilerDeps) == 0 {
-		fmt.Println("No go.opentelemetry.io/* dependencies found; nothing to do.")
+		logln("No go.opentelemetry.io/* dependencies found; nothing to do.")
 		return
 	}
 
-	fmt.Println("Downloading grafana/alloy with go mod...")
+	logln("Downloading grafana/alloy with go mod...")
 	alloyDir, resolvedRevision, resolvedHash, err := downloadAlloy(repoRoot, alloyRevision)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to download alloy module: %v\n", err)
@@ -214,9 +288,9 @@ func main() {
 	}
 	if usedDefaultRevision {
 		if strings.TrimSpace(resolvedHash) == "" {
-			fmt.Println("No alloy revision provided; resolved to main (commit hash unavailable).")
+			logln("No alloy revision provided; resolved to main (commit hash unavailable).")
 		} else {
-			fmt.Printf("No alloy revision provided; resolved main to commit %s.\n", resolvedHash)
+			logf("No alloy revision provided; resolved main to commit %s.\n", resolvedHash)
 		}
 	}
 
@@ -228,24 +302,100 @@ func main() {
 	}
 	alloyDeps := otelRequirements(alloyMod)
 
-	fmt.Printf("Collecting go.opentelemetry.io/* dependency versions from alloy go.mod (%s)...\n", resolvedRevision)
-	fmt.Println("Applying alloy versions to profiler go.opentelemetry.io/* dependencies...")
+	logf("Collecting go.opentelemetry.io/* dependency versions from alloy go.mod (%s)...\n", resolvedRevision)
+	logln("Applying alloy versions to profiler go.opentelemetry.io/* dependencies...")
 	if err := applyAlloyVersions(repoRoot, profilerDeps, alloyDeps); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to apply alloy versions: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Running go mod tidy...")
+	logln("Running go mod tidy...")
 	if _, err := run(repoRoot, "go", "mod", "tidy"); err != nil {
 		fmt.Fprintf(os.Stderr, "go mod tidy failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Verifying resulting versions...")
+	logln("Verifying resulting versions...")
 	if err := verifyAligned(goModPath, profilerDeps, alloyDeps); err != nil {
 		fmt.Fprintf(os.Stderr, "verification failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Success: all go.opentelemetry.io/* dependencies match alloy revision %s.\n", alloyRevision)
+	logf("Success: all go.opentelemetry.io/* dependencies match alloy revision %s.\n", alloyRevision)
+
+	// --- Post-sync workflow: check changes, build, commit, push, create PR ---
+
+	fmt.Println("\nChecking for changes...")
+	exitCode, err := runExitCode(repoRoot, "git", "diff", "--quiet")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git diff failed: %v\n", err)
+		os.Exit(1)
+	}
+	if exitCode == 0 {
+		fmt.Println("No dependency changes detected; nothing to do.")
+		return
+	}
+	fmt.Println("Changes detected in go.mod/go.sum.")
+
+	if *dryRun {
+		fmt.Println("\n--- Dry-run mode: showing git diff ---")
+		_ = runPassthrough(repoRoot, "git", "diff")
+		fmt.Println("\nDry-run complete. No commits, pushes, or PRs were created.")
+		return
+	}
+
+	// Determine branch name.
+	safeRevision := strings.TrimSpace(alloyRevision)
+	uniqueSuffix := os.Getenv("GITHUB_RUN_ID")
+	if uniqueSuffix == "" {
+		uniqueSuffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	branchName := fmt.Sprintf("automation/denovate-otel-%s-%s", safeRevision, uniqueSuffix)
+
+	// Configure git identity.
+	fmt.Println("\nConfiguring git...")
+	if _, err := run(repoRoot, "git", "config", "user.name", "github-actions[bot]"); err != nil {
+		fmt.Fprintf(os.Stderr, "git config user.name failed: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := run(repoRoot, "git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"); err != nil {
+		fmt.Fprintf(os.Stderr, "git config user.email failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create branch, stage, commit, push.
+	fmt.Printf("Creating branch %s...\n", branchName)
+	if _, err := run(repoRoot, "git", "checkout", "-b", branchName); err != nil {
+		fmt.Fprintf(os.Stderr, "git checkout -b failed: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := run(repoRoot, "git", "add", "go.mod", "go.sum"); err != nil {
+		fmt.Fprintf(os.Stderr, "git add failed: %v\n", err)
+		os.Exit(1)
+	}
+	commitMsg := fmt.Sprintf("chore: denovate opentelemetry deps from alloy %s", alloyRevision)
+	if _, err := run(repoRoot, "git", "commit", "-m", commitMsg); err != nil {
+		fmt.Fprintf(os.Stderr, "git commit failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Pushing branch...")
+	if _, err := run(repoRoot, "git", "push", "origin", branchName); err != nil {
+		fmt.Fprintf(os.Stderr, "git push failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create pull request.
+	fmt.Println("Creating pull request...")
+	prTitle := fmt.Sprintf("chore: denovate OpenTelemetry deps from alloy %s", alloyRevision)
+	prBody := composePRBody(alloyRevision, scriptOutputBuf.String())
+	if err := runPassthrough(repoRoot, "gh", "pr", "create",
+		"--base", *baseBranch,
+		"--head", branchName,
+		"--title", prTitle,
+		"--body", prBody,
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "gh pr create failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Done.")
 }
