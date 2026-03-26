@@ -15,10 +15,19 @@ import (
 )
 
 const (
-	otelPrefix                          = "go.opentelemetry.io/"
-	alloyModule                         = "github.com/grafana/alloy"
-	allowedMissingDepKeepCurrentVersion = "go.opentelemetry.io/proto/otlp/profiles/v1development"
+	otelPrefix  = "go.opentelemetry.io/"
+	alloyModule = "github.com/grafana/alloy"
 )
+
+var skippedDeps = map[string]struct{}{
+	"go.opentelemetry.io/proto/otlp":                        {},
+	"go.opentelemetry.io/proto/otlp/profiles/v1development": {},
+}
+
+func shouldSkipDep(dep string) bool {
+	_, ok := skippedDeps[dep]
+	return ok
+}
 
 type goModDownloadResult struct {
 	Dir     string `json:"Dir"`
@@ -106,12 +115,13 @@ func downloadAlloy(repoRoot string, revision string) (dir string, resolvedVersio
 func applyAlloyVersions(repoRoot string, profilerDeps map[string]string, alloyDeps map[string]string) error {
 	for _, dep := range sortedKeys(profilerDeps) {
 		currentVersion := profilerDeps[dep]
+		if shouldSkipDep(dep) {
+			fmt.Printf("  - %s: %s => %s (skipping dependency)\n", dep, currentVersion, currentVersion)
+			continue
+		}
+
 		alloyVersion, ok := alloyDeps[dep]
 		if !ok {
-			if dep == allowedMissingDepKeepCurrentVersion {
-				fmt.Printf("  - %s: %s => %s (unchanged; not found in alloy)\n", dep, currentVersion, currentVersion)
-				continue
-			}
 			return fmt.Errorf("dependency %s was not found in alloy", dep)
 		}
 		fmt.Printf("  - %s: %s => %s\n", dep, currentVersion, alloyVersion)
@@ -130,14 +140,13 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 	finalDeps := otelRequirements(finalMod)
 
 	for _, dep := range sortedKeys(profilerDeps) {
-		currentVersion := profilerDeps[dep]
+		if shouldSkipDep(dep) {
+			continue
+		}
+
 		expected, ok := alloyDeps[dep]
 		if !ok {
-			if dep == allowedMissingDepKeepCurrentVersion {
-				expected = currentVersion
-			} else {
-				return fmt.Errorf("no expected alloy version found for %s", dep)
-			}
+			return fmt.Errorf("no expected alloy version found for %s", dep)
 		}
 
 		finalVersion, ok := finalDeps[dep]
