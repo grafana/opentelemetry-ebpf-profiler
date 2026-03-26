@@ -35,4 +35,5 @@ jobs:
       - name: Run denovate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: go run ./tools/denovate-opentelemetry-from-alloy.go "${{ inputs.alloy_revision }}"
+          ALLOY_REVISION: ${{ inputs.alloy_revision }}
+        run: go run ./tools/denovate-opentelemetry-from-alloy.go "${ALLOY_REVISION}"
