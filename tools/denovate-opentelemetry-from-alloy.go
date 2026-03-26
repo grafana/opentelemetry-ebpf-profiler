@@ -167,11 +167,23 @@ func verifyAligned(profilePath string, profilerDeps map[string]string, alloyDeps
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <alloy-revision>\n", os.Args[0])
+	if len(os.Args) > 2 {
+		fmt.Fprintf(os.Stderr, "Usage: %s [alloy-revision]\n", os.Args[0])
 		os.Exit(1)
 	}
-	alloyRevision := os.Args[1]
+
+	alloyRevision := "main"
+	usedDefaultRevision := len(os.Args) == 1
+	if len(os.Args) == 2 {
+		alloyRevision = strings.TrimSpace(os.Args[1])
+		if alloyRevision == "" {
+			alloyRevision = "main"
+			usedDefaultRevision = true
+		}
+	}
+	if usedDefaultRevision {
+		fmt.Println("No alloy revision provided; defaulting to latest main.")
+	}
 
 	repoRoot, err := os.Getwd()
 	if err != nil {
