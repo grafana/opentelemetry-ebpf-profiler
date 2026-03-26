@@ -33,6 +33,9 @@ type goModDownloadResult struct {
 	Dir     string `json:"Dir"`
 	Version string `json:"Version"`
 	Error   string `json:"Error"`
+	Origin  struct {
+		Hash string `json:"Hash"`
+	} `json:"Origin"`
 }
 
 func run(repoRoot string, name string, args ...string) (string, error) {
@@ -90,26 +93,26 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-func downloadAlloy(repoRoot string, revision string) (dir string, resolvedVersion string, err error) {
+func downloadAlloy(repoRoot string, revision string) (dir string, resolvedVersion string, resolvedHash string, err error) {
 	out, err := run(repoRoot, "go", "mod", "download", "-json", alloyModule+"@"+revision)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	var result goModDownloadResult
 	if unmarshalErr := json.Unmarshal([]byte(out), &result); unmarshalErr != nil {
-		return "", "", fmt.Errorf("decode go mod download output: %w\nraw output:\n%s", unmarshalErr, out)
+		return "", "", "", fmt.Errorf("decode go mod download output: %w\nraw output:\n%s", unmarshalErr, out)
 	}
 	if result.Error != "" {
-		return "", "", errors.New(result.Error)
+		return "", "", "", errors.New(result.Error)
 	}
 	if result.Dir == "" {
-		return "", "", fmt.Errorf("go mod download did not return Dir for %s", revision)
+		return "", "", "", fmt.Errorf("go mod download did not return Dir for %s", revision)
 	}
 	if result.Version == "" {
 		result.Version = revision
 	}
-	return result.Dir, result.Version, nil
+	return result.Dir, result.Version, result.Origin.Hash, nil
 }
 
 func applyAlloyVersions(repoRoot string, profilerDeps map[string]string, alloyDeps map[string]string) error {
@@ -204,10 +207,17 @@ func main() {
 	}
 
 	fmt.Println("Downloading grafana/alloy with go mod...")
-	alloyDir, resolvedRevision, err := downloadAlloy(repoRoot, alloyRevision)
+	alloyDir, resolvedRevision, resolvedHash, err := downloadAlloy(repoRoot, alloyRevision)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to download alloy module: %v\n", err)
 		os.Exit(1)
+	}
+	if usedDefaultRevision {
+		if strings.TrimSpace(resolvedHash) == "" {
+			fmt.Println("No alloy revision provided; resolved to main (commit hash unavailable).")
+		} else {
+			fmt.Printf("No alloy revision provided; resolved main to commit %s.\n", resolvedHash)
+		}
 	}
 
 	alloyGoModPath := filepath.Join(alloyDir, "go.mod")
