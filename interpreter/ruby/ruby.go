@@ -4,6 +4,7 @@
 package ruby // import "go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 
 import (
+	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -24,9 +25,12 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	npsr "go.opentelemetry.io/ebpf-profiler/nopanicslicereader"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/successfailurecounter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -103,14 +107,16 @@ var (
 	// regex to extract a version from a string
 	rubyVersionRegex = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 
-	unknownCfunc     = libpf.Intern("<unknown cfunc>")
-	cfuncDummyFile   = libpf.Intern("<cfunc>")
-	rubyGcFrame      = libpf.Intern("(garbage collection)")
-	rubyGcRunning    = libpf.Intern("(running)")
-	rubyGcMarking    = libpf.Intern("(marking)")
-	rubyGcSweeping   = libpf.Intern("(sweeping)")
-	rubyGcCompacting = libpf.Intern("(compacting)")
-	rubyGcDummyFile  = libpf.Intern("<gc>")
+	unknownCfunc      = libpf.Intern("<unknown cfunc>")
+	cfuncDummyFile    = libpf.Intern("<cfunc>")
+	rubyGcFrame       = libpf.Intern("(garbage collection)")
+	rubyGcRunning     = libpf.Intern("(running)")
+	rubyGcMarking     = libpf.Intern("(marking)")
+	rubyGcSweeping    = libpf.Intern("(sweeping)")
+	rubyGcCompacting  = libpf.Intern("(compacting)")
+	rubyGcDummyFile   = libpf.Intern("<gc>")
+	rubyJitDummyFrame = libpf.Intern("<unknown jit code>")
+	rubyJitDummyFile  = libpf.Intern("<jitted code>")
 	// compiler check to make sure the needed interfaces are satisfied
 	_ interpreter.Data     = &rubyData{}
 	_ interpreter.Instance = &rubyInstance{}
@@ -340,6 +346,8 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 		Size_of_value: r.vmStructs.size_of_value,
 
 		Running_ec: r.vmStructs.rb_ractor_struct.running_ec,
+
+		Return_to_native: uint8(returnToNative()),
 	}
 
 	if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(&cdata)); err != nil {
@@ -355,6 +363,7 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 	return &rubyInstance{
 		r:                 r,
 		rm:                rm,
+		procInfo:          &cdata,
 		globalSymbolsAddr: r.globalSymbolsAddr + bias,
 		addrToString:      addrToString,
 		memPool: sync.Pool{
@@ -400,6 +409,9 @@ type rubyInstance struct {
 
 	// lastId is a cached copy index of the final entry in the global symbol table
 	lastId uint32
+	// Store the procinfo so we can update it if mappings are updated
+	procInfo *support.RubyProcInfo
+
 	// globalSymbolsAddr is the offset of the global symbol table, for looking up ruby symbolic ids
 	globalSymbolsAddr libpf.Address
 
@@ -412,9 +424,15 @@ type rubyInstance struct {
 	// maxSize is the largest number we did see in the last reporting interval for size
 	// in getRubyLineNo.
 	maxSize atomic.Uint32
+
+	// prefixes added to ebpf maps for the YJIT region, cleaned up in Detach
+	prefixes []lpm.Prefix
 }
 
 func (r *rubyInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
+	for _, prefix := range r.prefixes {
+		_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+	}
 	return ebpf.DeleteProcData(libpf.Ruby, pid)
 }
 
@@ -1063,6 +1081,15 @@ func (r *rubyInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 			SourceLine:   0,
 		})
 		return nil
+	case support.RubyFrameTypeJit:
+		label := rubyJitDummyFrame
+		frames.Append(&libpf.Frame{
+			Type:         libpf.RubyFrame,
+			FunctionName: label,
+			SourceFile:   rubyJitDummyFile,
+			SourceLine:   0,
+		})
+		return nil
 	default:
 		return fmt.Errorf("Unable to get CME or ISEQ from frame address (%d)", frameAddrType)
 	}
@@ -1190,6 +1217,56 @@ func profileFrameFullLabel(classPath, label, baseLabel, methodName libpf.String,
 
 	// Get the prefix from label and concatenate with qualifiedMethodName
 	return libpf.Intern(profileLabel)
+}
+
+func (r *rubyInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
+	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping) error {
+	start, end, found := detectYJITRegion(pr, r.r.version, mappings)
+	log.Debugf("YJIT region %#x-%#x %+v", start, end, found)
+	if !found {
+		for i := range mappings {
+			m := &mappings[i]
+			if m.Flags&(elf.PF_R|elf.PF_X) != elf.PF_R|elf.PF_X || m.Path.String() != "" {
+				continue
+			}
+			log.Debugf("YJIT mapping {Vaddr: %#x, Length: %#x, Flags: %#x}",
+				m.Vaddr, m.Length, uint32(m.Flags))
+		}
+		return nil
+	}
+
+	if r.procInfo.Jit_start != 0 {
+		if start != r.procInfo.Jit_start || end != r.procInfo.Jit_end {
+			log.Warnf("YJIT region changed: %#x-%#x -> %#x-%#x",
+				r.procInfo.Jit_start, r.procInfo.Jit_end, start, end)
+		}
+		return nil
+	}
+
+	pid := pr.PID()
+
+	size := end - start
+	log.Debugf("Found YJIT region %#x-%#x (size %d MiB)", start, end, size/(1024*1024))
+
+	prefixes, err := lpm.CalculatePrefixList(start, end)
+	if err != nil {
+		return fmt.Errorf("YJIT region lpm failure %#x/%#x: %w", start, size, err)
+	}
+
+	for _, prefix := range prefixes {
+		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindRuby, 0, 0); err != nil {
+			return err
+		}
+	}
+	r.prefixes = prefixes
+
+	r.procInfo.Jit_start = start
+	r.procInfo.Jit_end = end
+	if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(r.procInfo)); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *rubyInstance) GetAndResetMetrics() ([]metrics.Metric, error) {

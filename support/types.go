@@ -284,6 +284,8 @@ type RubyProcInfo struct {
 	Current_ec_tpbase_tls_offset int64
 	Current_ctx_ptr              uint64
 	Has_objspace                 bool
+	Jit_start                    uint64
+	Jit_end                      uint64
 	Vm_stack                     uint8
 	Vm_stack_size                uint8
 	Cfp                          uint8
@@ -300,7 +302,8 @@ type RubyProcInfo struct {
 	Cme_method_def               uint8
 	Size_of_value                uint8
 	Running_ec                   uint16
-	Pad_cgo_0                    [4]byte
+	Return_to_native             uint8
+	Pad_cgo_0                    [3]byte
 }
 type V8ProcInfo struct {
 	Version                      uint32
@@ -332,7 +335,7 @@ const (
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
-	sizeof_RubyProcInfo   = 0x30
+	sizeof_RubyProcInfo   = 0x48
 )
 
 const (
@@ -393,6 +396,7 @@ const (
 	RubyFrameTypeCmeCfunc = 0x2
 	RubyFrameTypeIseq     = 0x3
 	RubyFrameTypeGc       = 0x4
+	RubyFrameTypeJit      = 0x5
 )
 
 var MetricsTranslation = []metrics.MetricID{
