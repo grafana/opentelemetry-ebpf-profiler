@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"slices"
 	"time"
 
@@ -380,8 +381,8 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	trace.Hash = traceutil.HashTrace(trace)
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
 
-	if meta.Comm.String() == "cat" {
-		sb := fmt.Sprintf("cat stacktrace pid=%d tid=%d frames=%d\n",
+	if comm := meta.Comm.String(); comm == "cat" {
+		sb := fmt.Sprintf("=== cat stacktrace pid=%d tid=%d frames=%d ===\n",
 			meta.PID, meta.TID, len(trace.Frames))
 		for i, h := range trace.Frames {
 			f := h.Value()
@@ -392,7 +393,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 			sb += fmt.Sprintf("  [%2d] 0x%06x  %-50s  [%s]\n",
 				i, f.AddressOrLineno, f.FunctionName, mapping)
 		}
-		log.Infof("%s", sb)
+		fmt.Fprint(os.Stderr, sb)
 	}
 
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
