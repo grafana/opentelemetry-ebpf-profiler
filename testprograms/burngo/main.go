@@ -1,34 +1,28 @@
-// burngo is a CGO PIE Go program that burns CPU by calling read(0,..) through
-// libc in a tight loop.  This gives the Go process libc frames which the eBPF
-// profiler's Go interpreter will (incorrectly) symbolize using this binary's
-// pclntab, poisoning the frame cache for unrelated C processes.
+// burngo burns CPU by reading from stdin (run as: ./burngo < /dev/urandom)
+// using Go's syscall.Read, which on a CGO-linked binary with external linker
+// goes through libc's __syscall_cancel at a predictable ELF offset.
 //
-// Build (CGO + PIE are both required to get p_vaddr=0 so Go function
-// ELF offsets overlap with libc offsets):
+// Build (external linker gives p_vaddr=0 so Go function ELF offsets start
+// near 0 and overlap with libc function offsets):
 //
-//	CGO_ENABLED=1 go build -buildmode=pie -o burngo .
+//	CGO_ENABLED=1 go build -buildmode=pie -ldflags="-linkmode=external" -o burngo .
 //
-// The program also prints its own ELF-space addresses so you can verify
-// the collision with burnc's output.
+// The program prints its own ELF-space addresses on startup so you can
+// compare against burnc's output and verify the collision address.
 package main
 
-/*
-#include <unistd.h>
-*/
-import "C"
-
 import (
-	"unsafe"
 	"bufio"
 	"fmt"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-// loadBias reads /proc/self/maps to find the bias for this binary.
+// loadBias reads /proc/self/maps to find the load bias of this binary.
 // For a PIE binary with ELF p_vaddr==0 the bias equals the first r-xp
 // segment's runtime start address.
 func loadBias() uintptr {
@@ -74,19 +68,15 @@ func main() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	var buf [256]C.char
-	iter := 0
+	buf := make([]byte, 256)
 	for {
 		select {
 		case <-ticker.C:
 			printStack(bias)
 		default:
-			// read from stdin (run as: ./burngo < /dev/urandom)
-			// This drives execution through libc's __syscall_cancel at a
-			// predictable ELF offset, creating the frame the eBPF profiler
-			// caches under a PID-agnostic key.
-			C.read(0, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-			iter++
+			// syscall.Read goes through libc's __syscall_cancel because
+			// the binary is linked against libc via the external linker.
+			syscall.Read(0, buf)
 		}
 	}
 }

@@ -2,29 +2,19 @@
 
 all: burngo burnc
 
-# CGO + PIE are both required:
-#   CGO  - so the Go process calls through libc, giving it libc frames
-#   PIE  - so Go function ELF offsets start near 0, overlapping with libc offsets
-#
-# On this system libc's __syscall_cancel lands at ELF offset ~0x7a970, which
-# coincides with sync.(*poolDequeue).popHead in the burngo binary.
 burngo:
-	CGO_ENABLED=1 go build -buildmode=pie -o burngo/burngo ./burngo/
+	CGO_ENABLED=1 go build -buildmode=pie -ldflags="-linkmode=external" -o burngo/burngo ./burngo/
 
-# -fno-omit-frame-pointer lets the eBPF profiler unwind the C stack correctly.
-burnc:
-	gcc -fno-omit-frame-pointer -O1 -o burnc/burnc burnc/burnc.c -ldl
+burnc: burngo
+	$(eval GOADDR := $(shell nm burngo/burngo 2>/dev/null | awk '/t main.main$$/{print "0x"$$1}'))
+	@echo "burngo main.main at $(GOADDR) — placing burnc burn_work there"
+	gcc -fno-omit-frame-pointer -fpie -pie -O1 \
+		-Wl,--section-start=.text.burn=$(GOADDR) \
+		-o burnc/burnc burnc/burnc.c -ldl -rdynamic
 
 clean:
 	rm -f burngo/burngo burnc/burnc
 
-# Run both programs feeding /dev/urandom as stdin so read() keeps exercising
-# libc's __syscall_cancel, then start the eBPF profiler.
-# Expected result: the C process (burnc) shows Go function names
-# (e.g. sync.(*poolDequeue).popHead) in its flamegraph.
 run: all
-	./burngo/burngo < /dev/urandom &
-	./burnc/burnc   < /dev/urandom &
-	@echo "burngo PID=$$!  burnc started"
-	@echo "Now start the eBPF profiler:"
-	@echo "  sudo ../ebpf-profiler -collection-agent=<host>:11000 -disable-tls -off-cpu-threshold=1"
+	@echo "Run:  ./burngo/burngo < /dev/urandom &  ./burnc/burnc &"
+	@echo "Then: sudo ../ebpf-profiler -collection-agent=<host>:11000 -disable-tls -off-cpu-threshold=1"
