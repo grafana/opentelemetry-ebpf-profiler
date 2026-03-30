@@ -28,53 +28,26 @@ package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanag
 //	// pid is omitted from the key → shared across all processes
 
 import (
+	"os"
+	"runtime"
+	"strings"
 	"testing"
 
 	lru "github.com/elastic/go-freelru"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/ebpf-profiler/host"
+	gointerp "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/process"
+	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
-
-// goInterpreterFake is a fake Go interpreter for a single address.
-// When Symbolize is called on a native frame at targetAddr it returns a
-// GoFrame with the given function name, mimicking the real Go pclntab lookup.
-type goInterpreterFake struct {
-	interpreter.InstanceStubs
-	targetAddr uint64
-	fnName     string
-	srcFile    string
-}
-
-func (g *goInterpreterFake) Symbolize(
-	ef libpf.EbpfFrame,
-	frames *libpf.Frames,
-	mapping libpf.FrameMapping,
-) error {
-	if !ef.Type().IsInterpType(libpf.Native) {
-		return interpreter.ErrMismatchInterpreterType
-	}
-	if ef.Data() != g.targetAddr {
-		return interpreter.ErrMismatchInterpreterType
-	}
-	frames.Append(&libpf.Frame{
-		Type:            libpf.GoFrame,
-		AddressOrLineno: libpf.AddressOrLineno(ef.Data()),
-		Mapping:         mapping,
-		FunctionName:    libpf.Intern(g.fnName),
-		SourceFile:      libpf.Intern(g.srcFile),
-	})
-	return nil
-}
-
-func (g *goInterpreterFake) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
-	return nil
-}
 
 // captureReporter implements reporter.TraceReporter and keeps the last trace.
 type captureReporter struct {
@@ -86,42 +59,72 @@ func (r *captureReporter) ReportTraceEvent(trace *libpf.Trace, _ *samples.TraceE
 	return nil
 }
 
-// Ensure captureReporter satisfies the interface.
 var _ reporter.TraceReporter = (*captureReporter)(nil)
 
 func TestNativeFrameCachePollution(t *testing.T) {
-	const (
-		// libcAddr is an offset within libc.so.6 (__syscall_cancel+0x13).
-		// In the real bug this is 0x6ec83 and gh's pclntab maps it to
-		// runtime.traceReadCPU.
-		libcAddr = uint64(0x6ec83)
+	// Load the real Go interpreter from this test binary. The test binary IS a
+	// Go binary, so its pclntab contains all runtime functions. We pick any
+	// address that resolves to a known function.
+	exec, err := os.Executable()
+	require.NoError(t, err)
 
-		// goPID is a Go binary's PID (simulates gh or similar).
+	// runtime.Caller returns the virtual address of this call site. For a
+	// non-PIE Go binary the virtual address equals the ELF-space address, so
+	// pclntab.Symbolize will find it directly.
+	pc, _, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	fnPC := runtime.FuncForPC(pc)
+	require.NotNil(t, fnPC)
+	frameAddr := uint64(pc)
+
+	libpfPID := libpf.PID(os.Getpid())
+	pid := process.New(libpfPID, libpfPID)
+	elfRef := pfelf.NewReference(exec, pid)
+
+	hostFileID, err := host.FileIDFromBytes([]byte{0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55})
+	require.NoError(t, err)
+	loaderInfo := interpreter.NewLoaderInfo(hostFileID, elfRef)
+	rm := remotememory.NewProcessVirtualMemory(libpfPID)
+
+	gData, err := gointerp.Loader(nil, loaderInfo)
+	require.NoError(t, err, "failed to load Go interpreter from test binary")
+
+	gInstance, err := gData.Attach(nil, libpfPID, 0x0, rm)
+	require.NoError(t, err)
+
+	// Quick sanity-check: the real interpreter should resolve frameAddr to the
+	// current function name.
+	{
+		sanityFrames := libpf.Frames{}
+		ef := libpf.NewEbpfFrame(libpf.NativeFrame, 0, 2, frameAddr)
+		require.NoError(t, gInstance.Symbolize(ef, &sanityFrames, libpf.FrameMapping{}))
+		require.Len(t, sanityFrames, 1)
+		got := sanityFrames[0].Value().FunctionName.String()
+		// runtime.Caller returns a return address; the function name may have
+		// a "funcN" suffix for anonymous callers, so check for the prefix only.
+		assert.True(t, strings.HasPrefix(got, "go.opentelemetry.io/ebpf-profiler/processmanager"),
+			"unexpected function name %q for addr 0x%x", got, frameAddr)
+	}
+
+	const (
+		// goPID simulates the Go binary (e.g. gh) whose interpreter symbolizes
+		// the frame and populates the cache.
 		goPID = libpf.PID(100)
-		// cPID is a plain C binary's PID (simulates cat, irqbalance, etc.).
+		// cPID simulates a plain C binary (e.g. cat) with no Go interpreter.
 		cPID = libpf.PID(200)
 	)
 
-	// Build the frame cache the same way the real ProcessManager does.
-	frameCache, err := lru.New[frameCacheKey, libpf.Frames](
-		frameCacheSize, hashFrameCacheKey)
+	frameCache, err := lru.New[frameCacheKey, libpf.Frames](frameCacheSize, hashFrameCacheKey)
 	require.NoError(t, err)
 	frameCache.SetLifetime(frameCacheLifetime)
 
+	odid := util.OnDiskFileIdentifier{DeviceID: 42, InodeNum: 1}
 	cr := &captureReporter{}
 
-	// The fake Go interpreter for goPID resolves libcAddr → GoFrame.
-	fakeGoInterp := &goInterpreterFake{
-		targetAddr: libcAddr,
-		fnName:     "runtime.traceReadCPU",
-		srcFile:    "/usr/lib/golang/src/runtime/tracecpu.go",
-	}
-	fakeODID := util.OnDiskFileIdentifier{DeviceID: 42, InodeNum: 1}
-
 	pm := ProcessManager{
-		// goPID has the fake Go interpreter; cPID has nothing.
+		// goPID has the real Go interpreter; cPID has none.
 		interpreters: map[libpf.PID]map[util.OnDiskFileIdentifier]interpreter.Instance{
-			goPID: {fakeODID: fakeGoInterp},
+			goPID: {odid: gInstance},
 			cPID:  {},
 		},
 		pidToProcessInfo: map[libpf.PID]*processInfo{
@@ -132,55 +135,46 @@ func TestNativeFrameCachePollution(t *testing.T) {
 		traceReporter: cr,
 	}
 
-	// Build a native EbpfFrame for libcAddr.
-	// Layout (see libpf/trace.go): ef[0] = type|flags|length|addr, ef[1] = fileID.
-	// NewEbpfFrame with length=2 allocates [ef[0], ef[1]]; ef[1]=fileID defaults to 0.
-	nativeFrame := libpf.NewEbpfFrame(libpf.NativeFrame, 0 /*no PIDSpecific*/, 2, libcAddr)
-	// ef[1] is already 0 (fileID = 0, irrelevant for the test)
-
+	// Native EbpfFrame carrying frameAddr (no PIDSpecific flag).
+	// Length=2: ef[0]=header|addr, ef[1]=fileID (0, irrelevant here).
 	makeTrace := func(pid libpf.PID) *libpf.EbpfTrace {
-		buf := make([]uint64, len(nativeFrame))
-		copy(buf, nativeFrame)
-		return &libpf.EbpfTrace{
-			PID:       pid,
-			FrameData: buf,
-			NumFrames: 1,
-		}
+		ef := libpf.NewEbpfFrame(libpf.NativeFrame, 0 /*no PIDSpecific*/, 2, frameAddr)
+		buf := make([]uint64, len(ef))
+		copy(buf, ef)
+		return &libpf.EbpfTrace{PID: pid, FrameData: buf, NumFrames: 1}
 	}
 
-	// ── Step 1: process goPID's trace ────────────────────────────────────────
-	// The Go interpreter symbolizes libcAddr as runtime.traceReadCPU and the
-	// result is cached under key {pid=0, data=nativeFrame[:3]}.
+	// ── Step 1: goPID ────────────────────────────────────────────────────────
+	// The real Go interpreter symbolizes frameAddr, producing a GoFrame. The
+	// result is stored in the cache under key {pid=0, data=frame_bytes}
+	// (PID is zero because PIDSpecific is not set for native frames).
 	pm.HandleTrace(makeTrace(goPID))
 	require.NotNil(t, cr.lastTrace)
-
 	goTrace := cr.lastTrace
 	require.Len(t, goTrace.Frames, 1)
-	assert.Equal(t, libpf.GoFrame, goTrace.Frames[0].Value().Type,
-		"goPID: frame should be GoFrame after Go interpreter symbolization")
-	assert.Equal(t, "runtime.traceReadCPU",
-		goTrace.Frames[0].Value().FunctionName.String(),
-		"goPID: function name should be runtime.traceReadCPU")
+	goFrame := goTrace.Frames[0].Value()
+	assert.Equal(t, libpf.GoFrame, goFrame.Type,
+		"goPID: real Go interpreter should produce a GoFrame")
+	assert.True(t, strings.HasPrefix(goFrame.FunctionName.String(),
+		"go.opentelemetry.io/ebpf-profiler/processmanager"),
+		"goPID: function name should be from this package, got %q", goFrame.FunctionName)
 
-	// ── Step 2: process cPID's trace with the SAME frame bytes ───────────────
-	// cPID has no Go interpreter.  Under correct behaviour it should get a
-	// plain NativeFrame with no function name.
-	// Due to the bug the cache key has pid=0 (PIDSpecific flag was not set),
-	// so cPID hits goPID's cached entry and gets a GoFrame instead.
+	// ── Step 2: cPID ─────────────────────────────────────────────────────────
+	// cPID has no Go interpreter. Correct behaviour: NativeFrame with no name.
+	// BUG: because the cache key omits the PID for native frames, cPID gets a
+	// cache hit and inherits goPID's GoFrame instead.
 	pm.HandleTrace(makeTrace(cPID))
 	require.NotNil(t, cr.lastTrace)
-
 	cTrace := cr.lastTrace
 	require.Len(t, cTrace.Frames, 1)
+	cFrame := cTrace.Frames[0].Value()
 
-	// BUG: cPID (a C process) gets a GoFrame with runtime.traceReadCPU because
-	// the frame cache key does not include the PID for native frames.
-	// Once the bug is fixed, the assertions below should be flipped:
-	//   assert.Equal(t, libpf.NativeFrame, ...)
-	//   assert.Equal(t, "", cTrace.Frames[0].FunctionName.String())
-	assert.Equal(t, libpf.GoFrame, cTrace.Frames[0].Value().Type,
-		"BUG: cPID got goPID's cached GoFrame — cache key missing PID for native frames")
-	assert.Equal(t, "runtime.traceReadCPU",
-		cTrace.Frames[0].Value().FunctionName.String(),
-		"BUG: cPID got goPID's Go function name from poisoned cache")
+	// These assertions document the current (buggy) behaviour.
+	// When the bug is fixed they should be:
+	//   assert.Equal(t, libpf.NativeFrame, cFrame.Type)
+	//   assert.Equal(t, "", cFrame.FunctionName.String())
+	assert.Equal(t, libpf.GoFrame, cFrame.Type,
+		"BUG: cPID got goPID's cached GoFrame — native frame cache key is missing PID")
+	assert.Equal(t, goFrame.FunctionName.String(), cFrame.FunctionName.String(),
+		"BUG: cPID got goPID's function name from poisoned cache")
 }
