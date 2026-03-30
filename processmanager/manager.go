@@ -380,6 +380,21 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	trace.Hash = traceutil.HashTrace(trace)
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
 
+	if meta.Comm.String() == "cat" {
+		sb := fmt.Sprintf("cat stacktrace pid=%d tid=%d frames=%d\n",
+			meta.PID, meta.TID, len(trace.Frames))
+		for i, h := range trace.Frames {
+			f := h.Value()
+			mapping := ""
+			if f.Mapping.Valid() {
+				mapping = f.Mapping.Value().File.Value().FileName.String()
+			}
+			sb += fmt.Sprintf("  [%2d] 0x%06x  %-50s  [%s]\n",
+				i, f.AddressOrLineno, f.FunctionName, mapping)
+		}
+		log.Infof("%s", sb)
+	}
+
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
 		log.Errorf("Failed to report trace event: %v", err)
 	}
