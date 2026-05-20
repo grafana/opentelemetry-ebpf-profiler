@@ -1,7 +1,33 @@
 # Introduction
 
 This repository implements a whole-system, cross-language profiler for Linux via
-eBPF.
+eBPF. It is a Grafana Labs fork of
+[opentelemetry-ebpf-profiler](https://github.com/open-telemetry/opentelemetry-ebpf-profiler),
+used as the engine behind [Grafana Alloy's `pyroscope.ebpf`
+component](https://grafana.com/docs/alloy/latest/reference/components/pyroscope/pyroscope.ebpf/).
+
+## Grafana fork — additional capabilities
+
+This fork extends the upstream project with capabilities that are important for
+production deployments:
+
+1. **On-target symbolization** — Native applications can be symbolized directly
+   on the host, without requiring users to upload debug symbols out-of-band to a
+   backend. Upstream work to add opt-in on-host native symbolization is tracked
+   in [opentelemetry-ebpf-profiler#1388](https://github.com/open-telemetry/opentelemetry-ebpf-profiler/pull/1388).
+
+2. **Target selection** — Profiling can be scoped to a specific subset of
+   processes (e.g. by executable name), rather than profiling every process on
+   the machine. Upstream work in this area is tracked in
+   [opentelemetry-ebpf-profiler#1326](https://github.com/open-telemetry/opentelemetry-ebpf-profiler/pull/1326).
+
+3. **pprof output** — Profiles are emitted in pprof format, which integrates
+   directly with Pyroscope and Grafana. As the OTel profiling signal matures,
+   supporting the OTLP profiling format across Alloy components is on the
+   roadmap.
+
+The goal is to upstream these capabilities and converge with the upstream project
+over time.
 
 ## Core features and strengths
 
