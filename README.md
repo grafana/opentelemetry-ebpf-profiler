@@ -21,11 +21,6 @@ production deployments:
    the machine. Upstream work in this area is tracked in
    [opentelemetry-ebpf-profiler#1326](https://github.com/open-telemetry/opentelemetry-ebpf-profiler/pull/1326).
 
-3. **pprof output** — Profiles are emitted in pprof format, which integrates
-   directly with Pyroscope and Grafana. As the OTel profiling signal matures,
-   supporting the OTLP profiling format across Alloy components is on the
-   roadmap.
-
 The goal is to upstream these capabilities and converge with the upstream project
 over time.
 
