@@ -325,6 +325,9 @@ enum {
   // number of failed attempts to read a CME by exceeding max EP checks
   metricID_UnwindRubyErrCmeMaxEp,
 
+  // number of failures to read TLS variables via the DTV
+  metricID_UnwindErrBadDTVRead,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
@@ -389,15 +392,16 @@ typedef struct TSDInfo {
 } TSDInfo;
 
 // DTVInfo contains data needed to read Thread Local Storage (TLS) values, which
-// are located using the Dynamic Thread Vector (DTV)
+// are located using the Dynamic Thread Vector (DTV).
+// DTV access is always indirect: TP+offset yields a pointer to the DTV array,
+// which must be dereferenced before indexing by module ID. This is true for
+// both glibc and musl (the DTV is a separately-allocated array, not inline
+// in the thread control block).
 typedef struct DTVInfo {
-  // Offset is the offset of DTV from FS base (or from thread pointer)
+  // Offset is the offset of the DTV pointer from the thread pointer base.
   s16 offset;
-  // Multiplier is the size of each DTV entry in bytes
-  // Typically 8 bytes on 64bit musl and 16 bytes on 64bit glibc
+  // Multiplier is the size of each DTV entry in bytes.
   u8 multiplier;
-  // Indirect is 0 if DTV is at FS+offset, 1 if at [FS+0]+offset
-  u8 indirect;
 } DTVInfo;
 
 // DotnetProcInfo is a container for the data needed to build stack trace for a dotnet process.
@@ -472,6 +476,13 @@ typedef struct RubyProcInfo {
   // tls_offset holds TLS base + ruby_current_ec tls symbol, as an offset from tpbase.
   // Signed because static TLS offsets (local exec model) are negative on x86_64.
   s64 current_ec_tpbase_tls_offset;
+
+  // DTV-based TLS access for ruby_current_ec (fallback when TLSDESC unavailable)
+  DTVInfo dtv_info;
+  // Offset of ruby_current_ec within its module's TLS block
+  u64 current_ec_tls_offset;
+  // Runtime TLS module ID for libruby.so (from DTPMOD64 relocation, written by linker)
+  u32 tls_module_id;
 
   // current_ctx_ptr holds the address of the symbol ruby_current_execution_context_ptr.
   u64 current_ctx_ptr;
@@ -560,6 +571,11 @@ typedef union ApmSpanID {
 
 _Static_assert(sizeof(ApmSpanID) == 8, "unexpected trace ID size");
 
+typedef struct __attribute__((packed)) SpanTraceInfo {
+  ApmTraceID trace_id;
+  ApmSpanID span_id;
+} SpanTraceInfo;
+
 // Defines the format of the APM correlation TLS buffer.
 //
 // Specification:
@@ -619,8 +635,9 @@ typedef struct Trace {
   // origin indicates the source of the trace.
   TraceOrigin origin;
 
-  // offtime stores the nanoseconds that the trace was off-cpu for.
-  u64 offtime;
+  // value stores context-specific data that was collected with the stack.
+  // e.g. time in nanoseconds for off-CPU traces
+  u64 value;
 
   // The frame data of the stack trace. Each frame is variable length.
   // Frame is currently 2-3 entries long. This array size limits the
@@ -826,6 +843,13 @@ typedef struct PerCPURecord {
     GoMapBucket goMapBucket;
     // Scratch for Go 1.24 labels
     struct GoString labels[MAX_CUSTOM_LABELS * 2];
+    // Signal frame registers for unwind_one_frame (avoids 272-byte stack alloc on arm64).
+    // Sized to match the kernel rt_sigframe register array for the target architecture.
+#if defined(__x86_64__)
+    u64 rt_regs[18];
+#elif defined(__aarch64__)
+    u64 rt_regs[34];
+#endif
   };
   // Mask to indicate which unwinders are complete
   u32 unwindersDone;

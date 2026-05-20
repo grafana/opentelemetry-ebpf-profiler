@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,8 +29,12 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
 
-// GetMappings returns this error when no mappings can be extracted.
+// ErrNoMappings is returned when no mappings can be extracted.
 var ErrNoMappings = errors.New("no mappings")
+
+// ErrCallbackStopped is returned when the IterateMappings callback returns
+// false, signaling that iteration was intentionally interrupted.
+var ErrCallbackStopped = errors.New("IterateMappings stopped by callback")
 
 const (
 	containerSource = "[0-9a-f]{64}"
@@ -55,7 +61,7 @@ type systemProcess struct {
 	mainThreadExit bool
 	remoteMemory   remotememory.RemoteMemory
 
-	fileToMapping map[string]*Mapping
+	fileToMapping map[string]*RawMapping
 }
 
 var _ Process = &systemProcess{}
@@ -177,6 +183,62 @@ func extractContainerID(pid libpf.PID) (libpf.String, error) {
 	return parseContainerID(cgroupFile), nil
 }
 
+// CgroupRootInode returns the inode of /proc/<pid>/root/sys/fs/cgroup, which identifies
+// the cgroup namespace root visible to the given process, unaffected by namespace masking.
+func CgroupRootInode(pid libpf.PID) (uint64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(fmt.Sprintf("/proc/%d/root/sys/fs/cgroup", pid), &st); err != nil {
+		return 0, err
+	}
+	return st.Ino, nil
+}
+
+// DetectSelfContainerIDViaInode detects the current process's container ID by matching
+// cgroup directory inodes. When the process runs in a private cgroup namespace (cgroup v2),
+// /proc/self/cgroup returns a path relative to the namespace root (e.g. "0::/"), making it
+// impossible to extract the container ID via the standard path. However, stat("/sys/fs/cgroup")
+// returns the inode of the process's actual cgroup directory on the host, unaffected by
+// namespace masking. This function walks the host's cgroup tree (via
+// /proc/1/root/sys/fs/cgroup) to find the directory whose inode matches, then extracts
+// the container ID from its path.
+func DetectSelfContainerIDViaInode() (libpf.String, uint64, error) {
+	const hostCgroupRoot = "/proc/1/root/sys/fs/cgroup"
+
+	var selfStat unix.Stat_t
+	if err := unix.Stat("/sys/fs/cgroup", &selfStat); err != nil {
+		return libpf.NullString, 0, fmt.Errorf("failed to stat /sys/fs/cgroup: %w", err)
+	}
+	selfIno := selfStat.Ino
+
+	var matched libpf.String
+	err := filepath.WalkDir(hostCgroupRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if d == nil {
+				return err // root is inaccessible
+			}
+			return nil // skip inaccessible subdirectories
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		var st unix.Stat_t
+		if err := unix.Stat(path, &st); err != nil {
+			return nil
+		}
+		if st.Ino == selfIno {
+			if parts := expContainerID.FindStringSubmatch(path); len(parts) == 2 {
+				matched = libpf.Intern(parts[1])
+			}
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return libpf.NullString, 0, fmt.Errorf("failed to walk host cgroup tree: %w", err)
+	}
+	return matched, selfIno, nil
+}
+
 func trimMappingPath(path string) string {
 	// Trim the deleted indication from the path.
 	// See path_with_deleted in linux/fs/d_path.c
@@ -189,13 +251,12 @@ func trimMappingPath(path string) string {
 	return path
 }
 
-func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
+func iterateMappings(mapsFile io.Reader, callback func(m RawMapping) bool) (uint32, error) {
 	numParseErrors := uint32(0)
-	mappings := make([]Mapping, 0, 32)
 	scanner := bufio.NewScanner(mapsFile)
 	scanBuf := bufPool.Get().(*[]byte)
 	if scanBuf == nil {
-		return mappings, 0, errors.New("failed to get memory from sync pool")
+		return 0, errors.New("failed to get memory from sync pool")
 	}
 	defer func() {
 		// Reset memory and return it for reuse.
@@ -211,6 +272,10 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 		var addrs [2]string
 		var devs [2]string
 
+		// WARNING: line (and all substrings derived from it, including the
+		// Path field of the emitted RawMapping) points into scanBuf which is
+		// recycled after iteration. Callers must intern Path (libpf.Intern)
+		// before storing.
 		line := pfunsafe.ToString(scanner.Bytes())
 		if stringutil.FieldsN(line, fields[:]) < 5 {
 			numParseErrors++
@@ -266,7 +331,7 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 		}
 		device := major<<8 + minor
 
-		var path libpf.String
+		var path string
 		if inode == 0 {
 			if fields[5] == "[vdso]" {
 				// Map to something filename looking with synthesized inode
@@ -275,12 +340,15 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 				inode = vdsoInode
 			} else if fields[5] == "" {
 				// This is an anonymous mapping, keep it
+			} else if strings.HasPrefix(fields[5], "[anon:") {
+				// Keep named anonymous mapping
+				path = fields[5]
 			} else {
 				// Ignore other mappings that are invalid, non-existent or are special pseudo-files
 				continue
 			}
 		} else {
-			path = libpf.Intern(trimMappingPath(fields[5]))
+			path = trimMappingPath(fields[5])
 		}
 
 		vaddr, err := strconv.ParseUint(addrs[0], 16, 64)
@@ -304,7 +372,7 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 			continue
 		}
 
-		mappings = append(mappings, Mapping{
+		if !callback(RawMapping{
 			Vaddr:      vaddr,
 			Length:     length,
 			Flags:      flags,
@@ -312,29 +380,39 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 			Device:     device,
 			Inode:      inode,
 			Path:       path,
-		})
+		}) {
+			return numParseErrors, ErrCallbackStopped
+		}
 	}
-	return mappings, numParseErrors, scanner.Err()
+	return numParseErrors, scanner.Err()
 }
 
-// GetMappings will process the mappings file from proc. Additionally,
-// a reverse map from mapping filename to a Mapping node is built to allow
-// OpenELF opening ELF files using the corresponding proc map_files entry.
-// WARNING: This implementation does not support calling GetMappings
-// concurrently with itself, or with OpenELF.
-func (sp *systemProcess) GetMappings() ([]Mapping, uint32, error) {
+func (sp *systemProcess) IterateMappings(callback func(m RawMapping) bool) (uint32, error) {
 	mapsFile, err := os.Open(fmt.Sprintf("/proc/%d/maps", sp.pid))
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 	defer mapsFile.Close()
 
-	mappings, numParseErrors, err := parseMappings(mapsFile)
-	if err != nil {
-		return mappings, numParseErrors, err
+	fileToMapping := make(map[string]*RawMapping)
+	gotMappings := false
+
+	collectForOpenELF := func(m RawMapping) bool {
+		gotMappings = true
+		if m.IsExecutable() || m.IsVDSO() {
+			stored := m
+			stored.Path = libpf.Intern(m.Path).String()
+			fileToMapping[stored.Path] = &stored
+		}
+		return callback(m)
 	}
 
-	if len(mappings) == 0 {
+	numParseErrors, err := iterateMappings(mapsFile, collectForOpenELF)
+	if err != nil {
+		return numParseErrors, err
+	}
+
+	if !gotMappings {
 		// We could test for main thread exit here by checking for zombie state
 		// in /proc/sp.pid/stat but it's simpler to assume that this is the case
 		// and try extracting mappings for a different thread. Since we stopped
@@ -344,7 +422,7 @@ func (sp *systemProcess) GetMappings() ([]Mapping, uint32, error) {
 		sp.mainThreadExit = true
 
 		if sp.pid == sp.tid {
-			return mappings, numParseErrors, ErrNoMappings
+			return numParseErrors, ErrNoMappings
 		}
 
 		log.Debugf("TID: %v extracting mappings", sp.tid)
@@ -356,24 +434,17 @@ func (sp *systemProcess) GetMappings() ([]Mapping, uint32, error) {
 		// the agent to unload process metadata when a thread exits but the process is still
 		// alive).
 		if err != nil {
-			return mappings, numParseErrors, ErrNoMappings
+			return numParseErrors, ErrNoMappings
 		}
 		defer mapsFileAlt.Close()
-		mappings, numParseErrors, err = parseMappings(mapsFileAlt)
-		if err != nil || len(mappings) == 0 {
-			return mappings, numParseErrors, ErrNoMappings
+		numParseErrors, err := iterateMappings(mapsFileAlt, collectForOpenELF)
+		if err != nil || !gotMappings {
+			return numParseErrors, ErrNoMappings
 		}
 	}
 
-	fileToMapping := make(map[string]*Mapping)
-	for idx := range mappings {
-		m := &mappings[idx]
-		if m.Path != libpf.NullString {
-			fileToMapping[m.Path.String()] = m
-		}
-	}
 	sp.fileToMapping = fileToMapping
-	return mappings, numParseErrors, nil
+	return numParseErrors, nil
 }
 
 func (sp *systemProcess) GetThreads() ([]ThreadInfo, error) {
@@ -388,7 +459,7 @@ func (sp *systemProcess) GetRemoteMemory() remotememory.RemoteMemory {
 	return sp.remoteMemory
 }
 
-func (sp *systemProcess) extractMapping(m *Mapping) (*bytes.Reader, error) {
+func (sp *systemProcess) extractMapping(m *RawMapping) (*bytes.Reader, error) {
 	data := make([]byte, m.Length)
 	_, err := sp.remoteMemory.ReadAt(data, int64(m.Vaddr))
 	if err != nil {
@@ -398,8 +469,8 @@ func (sp *systemProcess) extractMapping(m *Mapping) (*bytes.Reader, error) {
 	return bytes.NewReader(data), nil
 }
 
-func (sp *systemProcess) getMappingFile(m *Mapping) string {
-	if m.IsAnonymous() || m.IsVDSO() {
+func (sp *systemProcess) getMappingFile(m *RawMapping) string {
+	if !m.IsFileBacked() {
 		return ""
 	}
 	if sp.mainThreadExit {
@@ -407,12 +478,12 @@ func (sp *systemProcess) getMappingFile(m *Mapping) string {
 		// nor /proc/sp.pid/root exist if main thread has exited, so we use the
 		// mapping path directly under the sp.tid root.
 		rootPath := fmt.Sprintf("/proc/%v/task/%v/root", sp.pid, sp.tid)
-		return path.Join(rootPath, m.Path.String())
+		return path.Join(rootPath, m.Path)
 	}
 	return fmt.Sprintf("/proc/%v/map_files/%x-%x", sp.pid, m.Vaddr, m.Vaddr+m.Length)
 }
 
-func (sp *systemProcess) OpenMappingFile(m *Mapping) (ReadAtCloser, error) {
+func (sp *systemProcess) OpenMappingFile(m *RawMapping) (ReadAtCloser, error) {
 	filename := sp.getMappingFile(m)
 	if filename == "" {
 		return nil, errors.New("no backing file for anonymous memory")
@@ -420,7 +491,7 @@ func (sp *systemProcess) OpenMappingFile(m *Mapping) (ReadAtCloser, error) {
 	return os.Open(filename)
 }
 
-func (sp *systemProcess) GetMappingFileLastModified(m *Mapping) int64 {
+func (sp *systemProcess) GetMappingFileLastModified(m *RawMapping) int64 {
 	filename := sp.getMappingFile(m)
 	if filename != "" {
 		var st unix.Stat_t
@@ -435,7 +506,7 @@ func (sp *systemProcess) GetMappingFileLastModified(m *Mapping) int64 {
 // VDSO for the system.
 var vdsoFileID libpf.FileID
 
-func (sp *systemProcess) CalculateMappingFileID(m *Mapping) (libpf.FileID, error) {
+func (sp *systemProcess) CalculateMappingFileID(m *RawMapping) (libpf.FileID, error) {
 	if m.IsVDSO() {
 		if vdsoFileID != (libpf.FileID{}) {
 			return vdsoFileID, nil

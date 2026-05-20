@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
@@ -68,13 +67,13 @@ func determineYJITRegionSize(version uint32, pr process.Process) uint64 {
 }
 
 // mappings contains all readable or executable mappings, meaning rw-, rwx, -wx may be there, but not -w-
-func findYJITRegion(mappings []process.Mapping, expectedSize uint64) (start uint64, found bool) {
+func findYJITRegion(mappings []process.RawMapping, expectedSize uint64) (start uint64, found bool) {
 	var end uint64
 	_ = end
 	for i := range mappings {
 		m := &mappings[i]
 		if !found {
-			if m.Path == libpf.NullString && m.Flags == (elf.PF_R|elf.PF_X) {
+			if m.Path == "" && m.Flags == (elf.PF_R|elf.PF_X) {
 				found = true
 				start = m.Vaddr
 				end = start + expectedSize
@@ -83,12 +82,12 @@ func findYJITRegion(mappings []process.Mapping, expectedSize uint64) (start uint
 		}
 		withinFoundRange := m.Vaddr < end && m.Vaddr+m.Length <= end
 		if withinFoundRange {
-			if m.Path != libpf.NullString {
+			if m.Path != "" {
 				return 0, false
 			}
 			continue
 		}
-		if m.Path == libpf.NullString && m.Flags == (elf.PF_R|elf.PF_X) {
+		if m.Path == "" && m.Flags == (elf.PF_R|elf.PF_X) {
 			return 0, false
 		}
 
@@ -117,7 +116,7 @@ func forEachProcessArg(pr process.Process, fn func(string)) {
 }
 
 func detectYJITRegion(pr process.Process, version uint32,
-	mappings []process.Mapping) (start, end uint64, found bool) {
+	mappings []process.RawMapping) (start, end uint64, found bool) {
 	expectedSize := determineYJITRegionSize(version, pr)
 	if expectedSize == 0 {
 		return 0, 0, false

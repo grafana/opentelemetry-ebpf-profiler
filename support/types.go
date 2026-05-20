@@ -61,7 +61,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x68
+	MetricIDBeginCumulative = 0x69
 )
 
 const (
@@ -151,7 +151,7 @@ type TSDInfo struct {
 type DTVInfo struct {
 	Offset     int16
 	Multiplier uint8
-	Indirect   uint8
+	Pad_cgo_0  [1]byte
 }
 type Trace struct {
 	Pid                uint32
@@ -165,7 +165,7 @@ type Trace struct {
 	Num_frames         uint16
 	Num_kernel_frames  uint16
 	Origin             uint32
-	Offtime            uint64
+	Value              uint64
 	Frame_data         [3072]uint64
 }
 type UnwindInfo struct {
@@ -282,6 +282,9 @@ type PyProcInfo struct {
 type RubyProcInfo struct {
 	Version                      uint32
 	Current_ec_tpbase_tls_offset int64
+	Dtv_info                     DTVInfo
+	Current_ec_tls_offset        uint64
+	Tls_module_id                uint32
 	Current_ctx_ptr              uint64
 	Has_objspace                 bool
 	Jit_start                    uint64
@@ -335,7 +338,7 @@ const (
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
-	sizeof_RubyProcInfo   = 0x48
+	sizeof_RubyProcInfo   = 0x60
 )
 
 const (
@@ -494,4 +497,5 @@ var MetricsTranslation = []metrics.MetricID{
 	0x65: metrics.IDUnwindRubyErrReadSvar,
 	0x66: metrics.IDUnwindRubyErrReadRbasicFlags,
 	0x67: metrics.IDUnwindRubyErrCmeMaxEp,
+	0x68: metrics.IDUnwindErrBadDTVRead,
 }
