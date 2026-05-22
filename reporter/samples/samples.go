@@ -17,8 +17,10 @@ type TraceEventMeta struct {
 	Timestamp      libpf.UnixTime64
 	CPU            int
 	Origin         libpf.Origin
-	OffTime        int64
+	Value          int64
 	PID, TID       libpf.PID
+	SpanID         libpf.APMSpanID
+	TraceID        libpf.APMTraceID
 }
 
 // TraceEvents holds known information about a trace.
@@ -26,7 +28,7 @@ type TraceEvents struct {
 	Labels     map[libpf.String]libpf.String
 	Frames     libpf.Frames
 	Timestamps []uint64 // in nanoseconds
-	OffTimes   []int64  // in nanoseconds
+	Values     []int64
 }
 
 // TraceEventsTree stores samples and their related metadata in a tree-like
@@ -78,4 +80,7 @@ type SampleKey struct {
 
 	TID int64
 	CPU int64
+
+	SpanID  libpf.APMSpanID
+	TraceID libpf.APMTraceID
 }

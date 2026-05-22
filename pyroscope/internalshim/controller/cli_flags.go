@@ -22,6 +22,7 @@ const (
 	// Default values for CLI flags
 	defaultArgSamplesPerSecond    = 20
 	defaultArgReporterInterval    = 5.0 * time.Second
+	defaultArgReporterJitter      = 0.2
 	defaultArgMonitorInterval     = 5.0 * time.Second
 	defaultClockSyncInterval      = 3 * time.Minute
 	defaultProbabilisticThreshold = tracer.ProbabilisticThresholdMax
@@ -29,6 +30,7 @@ const (
 	defaultArgSendErrorFrames     = false
 	defaultOffCPUThreshold        = 0
 	defaultEnvVarsValue           = ""
+	defaultBPFFSRoot              = "/sys/fs/bpf/"
 
 	// This is the X in 2^(n + x) where n is the default hardcoded map size value
 	defaultArgMapScaleFactor = 0
@@ -58,14 +60,19 @@ var (
 		tracer.ProbabilisticThresholdMax-1, tracer.ProbabilisticThresholdMax-1)
 	probabilisticIntervalHelp = "Time interval for which probabilistic profiling will be " +
 		"enabled or disabled."
-	pprofHelp             = "Listening address (e.g. localhost:6060) to serve pprof information."
-	samplesPerSecondHelp  = "Set the frequency (in Hz) of stack trace sampling."
-	reporterIntervalHelp  = "Set the reporter's interval in seconds."
+	pprofHelp            = "Listening address (e.g. localhost:6060) to serve pprof information."
+	samplesPerSecondHelp = "Set the frequency (in Hz) of stack trace sampling."
+	reporterIntervalHelp = "Set the reporter's interval in seconds."
+	reporterJitterHelp   = fmt.Sprintf("Set the jitter applied to the reporter's interval as a fraction. "+
+		"Valid values are in the range [0..1]. "+
+		"Default is %.1f.",
+		defaultArgReporterJitter)
 	monitorIntervalHelp   = "Set the monitor interval in seconds."
 	clockSyncIntervalHelp = "Set the sync interval with the realtime clock. " +
 		"If zero, monotonic-realtime clock sync will be performed once, " +
 		"on agent startup, but not periodically."
 	sendErrorFramesHelp = "Send error frames (devfiler only, breaks Kibana)"
+	sendIdleFramesHelp  = "Unwind and report idle states of the Linux kernel."
 	offCPUThresholdHelp = fmt.Sprintf("The probability for an off-cpu event being recorded. "+
 		"Valid values are in the range [0..1]. 0 disables off-cpu profiling. "+
 		"Default is %d.",
@@ -73,9 +80,12 @@ var (
 	envVarsHelp = "Comma separated list of environment variables that will be reported with the" +
 		"captured profiling samples."
 	probeLinkHelper = "Attach a probe to a symbol of an executable. " +
-		"Expected format: /path/to/executable:symbol"
+		"Expected format: probe_type:target[:symbol]. probe_type can be kprobe, kretprobe, uprobe, or uretprobe."
 	loadProbeHelper = "Load generic eBPF program that can be attached externally to " +
 		"various user or kernel space hooks."
+	bpffsHelp = fmt.Sprintf("Set the root BPF FS path for pinned maps. Only used for OBI span/trace ID communication. Default is %s",
+		defaultBPFFSRoot)
+	obiProcessCtxHelp = "Load or create a pinned eBPF map for sharing process context information with OBI."
 )
 
 // Package-scope variable, so that conditionally compiled other components can refer
@@ -116,12 +126,15 @@ func ParseArgs() (*controller.Config, error) {
 
 	fs.DurationVar(&args.ReporterInterval, "reporter-interval", defaultArgReporterInterval,
 		reporterIntervalHelp)
+	fs.Float64Var(&args.ReporterJitter, "reporter-jitter", defaultArgReporterJitter,
+		reporterJitterHelp)
 
 	fs.IntVar(&args.SamplesPerSecond, "samples-per-second", defaultArgSamplesPerSecond,
 		samplesPerSecondHelp)
 
 	fs.BoolVar(&args.SendErrorFrames, "send-error-frames", defaultArgSendErrorFrames,
 		sendErrorFramesHelp)
+	fs.BoolVar(&args.SendIdleFrames, "send-idle-frames", false, sendIdleFramesHelp)
 
 	fs.StringVar(&args.Tracers, "t", "all", "Shorthand for -tracers.")
 	fs.StringVar(&args.Tracers, "tracers", "all", tracersHelp)
@@ -135,10 +148,14 @@ func ParseArgs() (*controller.Config, error) {
 
 	fs.StringVar(&args.IncludeEnvVars, "env-vars", defaultEnvVarsValue, envVarsHelp)
 
-	fs.Func("uprobe-link", probeLinkHelper, func(link string) error {
+	fs.StringVar(&args.BPFFSRoot, "bpffs-root", defaultBPFFSRoot, bpffsHelp)
+
+	fs.Func("probe-link", probeLinkHelper, func(link string) error {
 		args.ProbeLinks = append(args.ProbeLinks, link)
 		return nil
 	})
+
+	fs.BoolVar(&args.OBIProcessCtx, "obi-process-ctx", false, obiProcessCtxHelp)
 
 	fs.BoolVar(&args.LoadProbe, "load-probe", false, loadProbeHelper)
 
@@ -147,6 +164,7 @@ func ParseArgs() (*controller.Config, error) {
 	}
 
 	args.Fs = fs
+	args.ErrorMode = config.PropagateError
 
 	return args, ff.Parse(fs, nil,
 		ff.WithEnvVarPrefix("OTEL_PROFILING_AGENT"),

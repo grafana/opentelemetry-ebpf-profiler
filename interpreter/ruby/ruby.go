@@ -22,6 +22,7 @@ import (
 	"github.com/elastic/go-freelru"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
@@ -134,6 +135,13 @@ type rubyData struct {
 	// For statically-linked ruby, the direct TP-relative offset to ruby_current_ec
 	// extracted from disassembly of rb_current_ec_noinline
 	staticTLSOffset int64
+
+	// For DTV-based TLS access: offset of ruby_current_ec within its TLS block
+	currentEcTlsOffset libpf.Address
+
+	// For DTV-based TLS access: ELF offset where the TLS module ID is stored
+	// (from DTPMOD64 relocation, the actual module ID is written by the linker at load time)
+	tlsModuleIdOffset libpf.Address
 
 	// Address to global symbols, for id to string mappings
 	globalSymbolsAddr libpf.Address
@@ -317,11 +325,21 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 		tlsOffset = int64(rm.Uint64(bias + r.currentEcTpBaseTlsOffset + 8))
 	}
 
+	// For DTV-based access: read the actual module ID from process memory.
+	// The linker writes the module ID at the relocation offset at load time.
+	var modID uint32
+	if r.tlsModuleIdOffset != 0 {
+		modID = uint32(rm.Uint64(bias + r.tlsModuleIdOffset))
+		log.Debugf("Ruby TLS module ID: %d", modID)
+	}
+
 	cdata := support.RubyProcInfo{
 		Version: r.version,
 
 		Current_ctx_ptr:              uint64(r.currentCtxPtr + bias),
 		Current_ec_tpbase_tls_offset: tlsOffset,
+		Current_ec_tls_offset:        uint64(r.currentEcTlsOffset),
+		Tls_module_id:                modID,
 
 		Vm_stack:      r.vmStructs.execution_context_struct.vm_stack,
 		Vm_stack_size: r.vmStructs.execution_context_struct.vm_stack_size,
@@ -400,6 +418,12 @@ type rubyIseq struct {
 type rubyInstance struct {
 	interpreter.InstanceStubs
 
+	// procInfo stores the eBPF proc data for re-insertion when UpdateLibcInfo provides DTVInfo
+	procInfo *support.RubyProcInfo
+
+	// dtvInfoInserted tracks whether we have already updated procInfo with DTVInfo
+	dtvInfoInserted bool
+
 	// Ruby symbolization metrics
 	successCount atomic.Uint64
 	failCount    atomic.Uint64
@@ -409,8 +433,6 @@ type rubyInstance struct {
 
 	// lastId is a cached copy index of the final entry in the global symbol table
 	lastId uint32
-	// Store the procinfo so we can update it if mappings are updated
-	procInfo *support.RubyProcInfo
 
 	// globalSymbolsAddr is the offset of the global symbol table, for looking up ruby symbolic ids
 	globalSymbolsAddr libpf.Address
@@ -434,6 +456,33 @@ func (r *rubyInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error
 		_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
 	}
 	return ebpf.DeleteProcData(libpf.Ruby, pid)
+}
+
+// UpdateLibcInfo is called when libc introspection data becomes available.
+// Ruby uses this to receive DTVInfo for DTV-based TLS access to ruby_current_ec
+// when TLSDESC relocations are unavailable.
+func (r *rubyInstance) UpdateLibcInfo(ebpf interpreter.EbpfHandler, pid libpf.PID,
+	libcInfo libc.LibcInfo) error {
+	// Only need DTVInfo if we're using DTV-based access (have a module ID but no TLSDESC offset)
+	if r.procInfo.Tls_module_id == 0 {
+		return nil
+	}
+	if !libcInfo.HasDTVInfo() {
+		// DTV info not available yet (may arrive from a different DSO)
+		return nil
+	}
+	if r.dtvInfoInserted {
+		return nil
+	}
+
+	r.procInfo.Dtv_info = libcInfo.DTVInfo
+	if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(r.procInfo)); err != nil {
+		return err
+	}
+	r.dtvInfoInserted = true
+	log.Debugf("Ruby: updated proc data with DTVInfo (offset=%d, multiplier=%d)",
+		libcInfo.DTVInfo.Offset, libcInfo.DTVInfo.Multiplier)
+	return nil
 }
 
 // readRubyArrayDataPtr obtains the data pointer of a Ruby array (RArray).
@@ -1220,13 +1269,13 @@ func profileFrameFullLabel(classPath, label, baseLabel, methodName libpf.String,
 }
 
 func (r *rubyInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping) error {
+	_ reporter.ExecutableReporter, pr process.Process, mappings []process.RawMapping) error {
 	start, end, found := detectYJITRegion(pr, r.r.version, mappings)
 	log.Debugf("YJIT region %#x-%#x %+v", start, end, found)
 	if !found {
 		for i := range mappings {
 			m := &mappings[i]
-			if m.Flags&(elf.PF_R|elf.PF_X) != elf.PF_R|elf.PF_X || m.Path.String() != "" {
+			if m.Flags&(elf.PF_R|elf.PF_X) != elf.PF_R|elf.PF_X || m.Path != "" {
 				continue
 			}
 			log.Debugf("YJIT mapping {Vaddr: %#x, Length: %#x, Flags: %#x}",
@@ -1464,13 +1513,26 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 	}
 
-	log.Debugf("Discovered EC tls tpbase offset %x, static tls offset %d, fallback ctx %x, interp ranges: %v, global symbols: %x",
-		currentEcTpBaseTlsOffset, staticTLSOffset, currentCtxPtr, interpRanges, globalSymbols)
+	// Look for DTPMOD64 relocation to find the TLS module ID offset.
+	// This is used for DTV-based TLS access when TLSDESC is unavailable.
+	var tlsModuleIdOffset libpf.Address
+	if err = ef.VisitRelocations(func(r pfelf.ElfReloc, _ string) bool {
+		log.Debugf("Found DTPMOD64 relocation at offset %x", r.Off)
+		tlsModuleIdOffset = libpf.Address(r.Off)
+		return false
+	}, pfelf.RelDTPMOD64); err != nil {
+		log.Warnf("failed to find DTPMOD64 relocation: %v", err)
+	}
+
+	log.Debugf("Discovered EC tls tpbase offset %x, static tls offset %d, dtpmod offset %x, fallback ctx %x, interp ranges: %v, global symbols: %x",
+		currentEcTpBaseTlsOffset, staticTLSOffset, tlsModuleIdOffset, currentCtxPtr, interpRanges, globalSymbols)
 
 	rid := &rubyData{
 		version:                  version,
 		currentEcTpBaseTlsOffset: libpf.Address(currentEcTpBaseTlsOffset),
 		staticTLSOffset:          staticTLSOffset,
+		currentEcTlsOffset:       libpf.Address(currentEcSymbolAddress),
+		tlsModuleIdOffset:        tlsModuleIdOffset,
 		currentCtxPtr:            libpf.Address(currentCtxPtr),
 		hasGlobalSymbols:         globalSymbols != 0,
 		globalSymbolsAddr:        libpf.Address(globalSymbols),
