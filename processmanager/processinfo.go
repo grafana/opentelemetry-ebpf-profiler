@@ -819,6 +819,11 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 
 // todo create an upstream issue for this feature, without implementation suggestions
 func (pm *ProcessManager) profilingEnabled(pr process.Process) bool {
+	if pm.policy == nil {
+		// New() defaults a nil policy to AlwaysOnPolicy; this only happens for
+		// upstream tests that construct ProcessManager directly.
+		return true
+	}
 	if _, ok := pm.policy.(dynamicprofiling.AlwaysOnPolicy); ok {
 		// Optimization: skip containerId extraction for AlwaysOnPolicy - it always returns true.
 		// This also fixes compatibility with coredump tests where containerId extraction fails.
