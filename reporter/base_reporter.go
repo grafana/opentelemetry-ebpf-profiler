@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"go.opentelemetry.io/ebpf-profiler/support"
+	"go.opentelemetry.io/ebpf-profiler/traceutil"
 )
 
 // baseReporter encapsulates shared behavior between all the available reporters.
@@ -40,20 +40,15 @@ type baseReporter struct {
 	collectionStartTime time.Time
 }
 
-var errUnknownOrigin = errors.New("unknown trace origin")
+var errUnknownProfileType = errors.New("unknown trace profile type")
 
 func (b *baseReporter) Stop() {
 	b.runLoop.Stop()
 }
 
 func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
-	switch meta.Origin {
-	case support.TraceOriginSampling:
-	case support.TraceOriginOffCPU:
-	case support.TraceOriginProbe:
-	default:
-		return fmt.Errorf("skip reporting trace for %d origin: %w", meta.Origin,
-			errUnknownOrigin)
+	if meta.ProfileType == nil {
+		return fmt.Errorf("skip reporting trace: %w", errUnknownProfileType)
 	}
 
 	var extraMeta any
@@ -67,6 +62,7 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		PID:            int64(meta.PID),
 		ExecutablePath: meta.ExecutablePath,
 	}
+	traceHash := traceutil.HashTrace(trace)
 
 	eventsTree := b.traceEvents.WLock()
 	defer b.traceEvents.WUnlock(&eventsTree)
@@ -74,17 +70,17 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 	if _, exists := (*eventsTree)[key]; !exists {
 		(*eventsTree)[key] = samples.ResourceToProfiles{
 			EnvVars: meta.EnvVars,
-			Events:  make(map[libpf.Origin]samples.SampleToEvents),
+			Events:  make(map[*samples.TypeMetadata]samples.SampleToEvents),
 		}
 	}
 
 	rtp := (*eventsTree)[key]
-	if _, exists := rtp.Events[meta.Origin]; !exists {
-		rtp.Events[meta.Origin] = make(samples.SampleToEvents)
+	if _, exists := rtp.Events[meta.ProfileType]; !exists {
+		rtp.Events[meta.ProfileType] = make(samples.SampleToEvents)
 	}
 
 	sampleKey := samples.SampleKey{
-		Hash:      trace.Hash,
+		Hash:      traceHash,
 		Comm:      meta.Comm,
 		TID:       int64(meta.TID),
 		CPU:       int64(meta.CPU),
@@ -92,13 +88,13 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		TraceID:   meta.TraceID,
 		ExtraMeta: extraMeta,
 	}
-	if events, exists := rtp.Events[meta.Origin][sampleKey]; exists {
+	if events, exists := rtp.Events[meta.ProfileType][sampleKey]; exists {
 		events.Timestamps = append(events.Timestamps, uint64(meta.Timestamp))
 		events.Values = append(events.Values, meta.Value)
 		return nil
 	}
 
-	rtp.Events[meta.Origin][sampleKey] = &samples.TraceEvents{
+	rtp.Events[meta.ProfileType][sampleKey] = &samples.TraceEvents{
 		Frames:     trace.Frames,
 		Timestamps: []uint64{uint64(meta.Timestamp)},
 		Values:     []int64{meta.Value},

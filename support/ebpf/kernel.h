@@ -70,6 +70,10 @@ typedef u64 __be64;
 #define ATOMIC_ADD(ptr, n) __sync_fetch_and_add(ptr, n)
 
 struct task_struct;
+struct vm_area_struct;
+
+// VMA flags, defined in include/linux/mm.h.
+#define VM_EXEC 0x00000004UL
 
 // Defined in arch/{x86,arm64}/include/asm/ptrace.h
 #if defined(__x86_64)
@@ -197,6 +201,14 @@ enum {
 enum {
   BPF_F_NO_PREALLOC = (1U << 0),
   // (other values omitted here)
+};
+
+/* BPF_FUNC_bpf_ringbuf_commit, BPF_FUNC_bpf_ringbuf_discard, and
+ * BPF_FUNC_bpf_ringbuf_output flags.
+ */
+enum {
+  BPF_RB_NO_WAKEUP    = (1ULL << 0),
+  BPF_RB_FORCE_WAKEUP = (1ULL << 1),
 };
 
 // BPF helper function IDs

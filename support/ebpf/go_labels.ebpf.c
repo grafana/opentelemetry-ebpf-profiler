@@ -6,13 +6,13 @@
 #include "tsd.h"
 #include "types.h"
 
-// go_labels_procs stores Go label specific offsets per Go process.
-struct go_labels_procs_t {
+// go_procs stores Go runtime-specific offsets per Go process.
+struct go_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
   __type(key, pid_t);
-  __type(value, GoLabelsOffsets);
+  __type(value, GoRuntimeOffsets);
   __uint(max_entries, 1024);
-} go_labels_procs SEC(".maps");
+} go_procs SEC(".maps");
 
 static EBPF_INLINE bool
 get_go_custom_labels_from_slice(PerCPURecord *record, void *labels_slice_ptr)
@@ -38,12 +38,15 @@ get_go_custom_labels_from_slice(PerCPURecord *record, void *labels_slice_ptr)
     if (i >= labels_slice.len)
       break;
     CustomLabel *lbl = &out->labels[i];
-    u8 klen          = MIN(record->labels[i * 2].len, CUSTOM_LABEL_MAX_KEY_LEN - 1);
+
+    u8 klen = MIN(record->labels[i * 2].len, CUSTOM_LABEL_MAX_KEY_LEN - 1);
     if (bpf_probe_read_user(lbl->key, klen, record->labels[i * 2].str)) {
       DEBUG_PRINT(
         "cl: failed to read key for custom label (%lx)", (unsigned long)record->labels[i * 2].str);
       return false;
     }
+    lbl->key[klen] = 0;
+
     u8 vlen = MIN(record->labels[i * 2 + 1].len, CUSTOM_LABEL_MAX_VAL_LEN - 1);
     if (bpf_probe_read_user(lbl->val, vlen, record->labels[i * 2 + 1].str)) {
       DEBUG_PRINT(
@@ -51,6 +54,7 @@ get_go_custom_labels_from_slice(PerCPURecord *record, void *labels_slice_ptr)
         (unsigned long)record->labels[i * 2 + 1].str);
       return false;
     }
+    lbl->val[vlen] = 0;
   }
   out->len = num_to_read;
 
@@ -61,8 +65,9 @@ get_go_custom_labels_from_slice(PerCPURecord *record, void *labels_slice_ptr)
 #define GO_MAP_BUCKET_SIZE 8
 
 static EBPF_INLINE bool
-get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr, GoLabelsOffsets *offs)
+get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr)
 {
+  GoRuntimeOffsets *offs = &record->goOffsets;
   void *labels_map_ptr;
   if (bpf_probe_read_user(&labels_map_ptr, sizeof(labels_map_ptr), labels_map_ptr_ptr)) {
     DEBUG_PRINT(
@@ -114,18 +119,21 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr, Go
       CustomLabel *lbl = &out->labels[out->len];
       char tophash     = map_value->tophash[i];
       char *kstr       = map_value->keys[i].str;
-      unsigned klen    = map_value->keys[i].len;
-      char *vstr       = map_value->values[i].str;
-      unsigned vlen    = map_value->values[i].len;
       if (tophash != 0 && kstr != NULL) {
-        if (bpf_probe_read_user(lbl->key, MIN(klen, CUSTOM_LABEL_MAX_KEY_LEN - 1), kstr)) {
+        unsigned klen = MIN(map_value->keys[i].len, CUSTOM_LABEL_MAX_KEY_LEN - 1);
+        if (bpf_probe_read_user(lbl->key, klen, kstr)) {
           DEBUG_PRINT("cl: failed to read key for custom label (%lx)", (unsigned long)kstr);
           return false;
         }
-        if (bpf_probe_read_user(lbl->val, MIN(vlen, CUSTOM_LABEL_MAX_VAL_LEN - 1), vstr)) {
+        lbl->key[klen] = 0;
+
+        char *vstr    = map_value->values[i].str;
+        unsigned vlen = MIN(map_value->values[i].len, CUSTOM_LABEL_MAX_VAL_LEN - 1);
+        if (bpf_probe_read_user(lbl->val, vlen, vstr)) {
           DEBUG_PRINT("cl: failed to read value for custom label");
           return false;
         }
+        lbl->val[vlen] = 0;
         out->len++;
       }
     }
@@ -142,8 +150,9 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr, Go
 // may be nil if there is no user g, such as when running in the scheduler. If
 // curg is nil, then g is either a system stack (called g0) or a signal handler
 // g (gsignal). Neither one will ever have label.
-static EBPF_INLINE bool get_go_custom_labels(PerCPURecord *record, GoLabelsOffsets *offs)
+static EBPF_INLINE bool get_go_custom_labels(PerCPURecord *record)
 {
+  GoRuntimeOffsets *offs = &record->goOffsets;
   size_t curg_ptr_addr;
   if (bpf_probe_read_user(
         &curg_ptr_addr,
@@ -168,7 +177,7 @@ static EBPF_INLINE bool get_go_custom_labels(PerCPURecord *record, GoLabelsOffse
   }
 
   // go 1.23- labels is a map
-  return get_go_custom_labels_from_map(record, labels_ptr, offs);
+  return get_go_custom_labels_from_map(record, labels_ptr);
 }
 
 // go_labels is the entrypoint for extracting custom labels from Go runtime.
@@ -178,9 +187,8 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
   if (!record)
     return -1;
 
-  u32 pid                  = record->trace.pid;
-  GoLabelsOffsets *offsets = bpf_map_lookup_elem(&go_labels_procs, &pid);
-  if (!offsets) {
+  u32 pid = record->trace.pid;
+  if (record->goOffsets.m_offset == 0) {
     DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
     return -1;
   }
@@ -188,7 +196,7 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
     "cl: go offsets found, %d recognized as a go binary: m_ptr: %lx",
     pid,
     (unsigned long)record->customLabelsState.go_m_ptr);
-  bool success = get_go_custom_labels(record, offsets);
+  bool success = get_go_custom_labels(record);
   if (!success) {
     increment_metric(metricID_UnwindGoLabelsFailures);
   }

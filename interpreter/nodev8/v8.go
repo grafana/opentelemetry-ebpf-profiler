@@ -294,7 +294,8 @@ type v8Data struct {
 			FieldShift uint8  `name:"CodeKindFieldShift" zero:""`
 			// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/objects/code-kind.h#18
 			// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.5.2/tools/gen-postmortem-metadata.py#101
-			Baseline uint8 `name:"CodeKindBaseline"`
+			Baseline            uint8 `name:"CodeKindBaseline"`
+			InterpretedFunction uint8 `name:"CodeKindInterpretedFunction" zero:""`
 		} `name:""`
 
 		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/tools/gen-postmortem-metadata.py#341
@@ -938,6 +939,26 @@ func (i *v8Instance) analyzeScopeInfo(ptr libpf.Address) (name libpf.String,
 		return libpf.NullString, 0, 0
 	}
 
+	// Starting in this version, position start and end
+	// were moved to fixed locations before the variable-length data,
+	// so we no longer need a heuristic to find them (and in fact, our
+	// heuristic doesn't work).
+	// See https://chromium-review.googlesource.com/c/v8/v8/+/5627032
+	// for where the change was made.
+	isOld := i.d.version < v8Ver(12, 8, 44)
+	if !isOld {
+		// As of today [2026-05-13] these haven't changed since
+		// they were introduced [2024-06-13]. That's scarcely two years,
+		// so maybe they'll change in the future; at any rate, there doesn't seem to be a way to
+		// derive them from symbols.
+		//
+		// See https://chromium.googlesource.com/v8/v8.git/+/refs/tags/12.8.44/src/objects/scope-info.tq#125
+		positionInfoStartIdx := 3
+		positionInfoEndIdx := 4
+
+		startPos = int(npsr.Uint64(slotData, uint(positionInfoStartIdx*slotSize)))
+		endPos = int(npsr.Uint64(slotData, uint(positionInfoEndIdx*slotSize)))
+	}
 	// Skip reserved slots and the context locals
 	ndx := int(vms.ScopeInfoIndex.FirstVars)
 	ndx += 2 * int(decodeSMI(npsr.Uint64(slotData,
@@ -952,7 +973,12 @@ func (i *v8Instance) analyzeScopeInfo(ptr libpf.Address) (name libpf.String,
 			// assume that first valid string is the function name
 			name, _ = i.getString(libpf.Address(cur), 0)
 		}
-		if isSMI(cur) && isSMI(prev) {
+		// In recent versions, we'll have already found the begin/end positions at
+		// fixed indices, so just return. See the comment where isOld is defined for details.
+		if !isOld && name != libpf.NullString {
+			return name, startPos, endPos
+		}
+		if isOld && isSMI(cur) && isSMI(prev) {
 			// Assume that two numbers (first one lower than the second)
 			// is the start/end position pair. This also follows after
 			// function name, so break when found.
@@ -963,6 +989,10 @@ func (i *v8Instance) analyzeScopeInfo(ptr libpf.Address) (name libpf.String,
 			}
 		}
 		prev = cur
+	}
+	if !isOld {
+		// even if we didn't find name, we can be reasonably sure start/end are right, so return them
+		return name, startPos, endPos
 	}
 	return name, 0, 0
 }
@@ -1114,9 +1144,13 @@ func (i *v8Instance) getSFI(taggedPtr libpf.Address) (*v8SFI, error) {
 		} else {
 			log.Debugf("Bytecode, %d bytes, not available", length)
 		}
+		typ := vms.Type.ByteArray
+		if vms.SourcePositionTable.TrustedByteArray {
+			typ = vms.Type.TrustedByteArray
+		}
 		sfi.bytecodePositionTable, err = i.readFixedTablePtr(
 			fdAddr+libpf.Address(vms.BytecodeArray.SourcePositionTable),
-			vms.Type.ByteArray, 1, 0)
+			typ, 1, 0)
 		log.Debugf("Bytecode positions: %d bytes: %v", len(sfi.bytecodePositionTable), err)
 	}
 
@@ -1854,6 +1888,10 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 func (d *v8Data) Unload(_ interpreter.EbpfHandler) {
 }
 
+func (i *v8Instance) UsesAnonymousMappings() bool {
+	return true
+}
+
 func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 	// Read the variables from the pfelf.File so we avoid failures if the process
 	// exists during extraction of the introspection data.
@@ -2060,6 +2098,10 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 			vms.CodeKind.Baseline = 0xff
 		}
 	}
+	if vms.CodeKind.InterpretedFunction == 0 && vms.CodeKind.Baseline != 0 && vms.CodeKind.Baseline != 0xff {
+		// INTERPRETED_FUNCTION is always immediately before BASELINE in the CodeKind enum.
+		vms.CodeKind.InterpretedFunction = vms.CodeKind.Baseline - 1
+	}
 	if vms.BaselineData.Data == 0 && vms.CodeKind.FieldMask != 0 {
 		// Unfortunately no metadata currently. Has been static.
 		vms.BaselineData.Data = vms.HeapObject.Map + 2*pointerSize
@@ -2202,7 +2244,11 @@ func lookupRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
 	return rv, nil
 }
 
-func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+func GetLoader(_ Config) interpreter.Loader {
+	return loader
+}
+
+func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	if !v8Regex.MatchString(info.FileName()) {
 		return nil, nil
 	}
@@ -2248,7 +2294,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			sym.Address, sym.Size, sym.Size/3)
 		d.bytecodeSizes = make([]byte, sym.Size)
 		d.bytecodeCount = uint8(sym.Size / 3)
-		if _, err = ef.ReadVirtualMemory(d.bytecodeSizes, int64(sym.Address)); err != nil {
+		if _, err = ef.ReadAt(d.bytecodeSizes, int64(sym.Address)); err != nil {
 			return nil, fmt.Errorf("unable to read bytecode sizes: %v", err)
 		}
 		for _, opcodeLength := range d.bytecodeSizes {

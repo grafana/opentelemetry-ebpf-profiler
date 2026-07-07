@@ -14,6 +14,7 @@ import (
 	"github.com/peterbourgon/ff/v3"
 	"go.opentelemetry.io/ebpf-profiler/collector/config"
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
@@ -136,8 +137,9 @@ func ParseArgs() (*controller.Config, error) {
 		sendErrorFramesHelp)
 	fs.BoolVar(&args.SendIdleFrames, "send-idle-frames", false, sendIdleFramesHelp)
 
-	fs.StringVar(&args.Tracers, "t", "all", "Shorthand for -tracers.")
-	fs.StringVar(&args.Tracers, "tracers", "all", tracersHelp)
+	var tracers string
+	fs.StringVar(&tracers, "t", "all", "Shorthand for -tracers.")
+	fs.StringVar(&tracers, "tracers", "all", tracersHelp)
 
 	fs.BoolVar(&args.VerboseMode, "v", false, "Shorthand for -verbose.")
 	fs.BoolVar(&args.VerboseMode, "verbose", false, verboseModeHelp)
@@ -165,6 +167,10 @@ func ParseArgs() (*controller.Config, error) {
 
 	args.Fs = fs
 	args.ErrorMode = config.PropagateError
+
+	// No CLI args are passed here, so the -tracers flag always keeps its "all"
+	// default, matching parseTracers("all") in the main package.
+	args.Interpreters = interpreterconfig.AllInterpreters()
 
 	return args, ff.Parse(fs, nil,
 		ff.WithEnvVarPrefix("OTEL_PROFILING_AGENT"),

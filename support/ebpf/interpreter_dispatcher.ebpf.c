@@ -34,7 +34,7 @@ struct perf_progs_t {
   __uint(max_entries, NUM_TRACER_PROGS);
 } perf_progs SEC(".maps");
 
-// report_events notifies user space about events (GENERIC_PID and RELOAD_KALLSYMS).
+// report_events notifies user space about events (GENERIC_PID).
 //
 // As a key the CPU number is used and the value represents a perf event file descriptor.
 // Information transmitted is the event type only. We use 0 as the number of max entries
@@ -106,13 +106,14 @@ struct inhibit_events_t {
   __uint(max_entries, 2);
 } inhibit_events SEC(".maps");
 
-// Perf event ring buffer for sending completed traces to user-mode.
+// Ring buffer for sending completed traces to userspace.
 //
 // The map is periodically polled and read from in `tracer`.
+// NOTE: We use 0 as the number of max entries for this map as at load time
+// it will be adjusted based on the number of possible CPUs, sampling rate and
+// other factors.
 struct trace_events_t {
-  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-  __type(key, int);
-  __type(value, u32);
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, 0);
 } trace_events SEC(".maps");
 
@@ -137,32 +138,55 @@ struct apm_int_procs_t {
 // filter_error_frames is set during load time.
 BPF_RODATA_VAR(bool, filter_error_frames, false)
 
-static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindState *state)
+// go_labels_disabled gates Go custom-label extraction. It mirrors the Go labels
+// configuration (Config.IsLabelsDisabled). The Go runtime offsets are loaded
+// independently whenever Go support is enabled.
+BPF_RODATA_VAR(bool, go_labels_disabled, true)
+
+static EBPF_INLINE u64 go_get_g_register(UNUSED UnwindState *state)
 {
+#if defined(__aarch64__)
+  // On aarch64 for !iscgo programs the g is only stored in r28 register.
+  // CGO_ENABLED can be true even when runtime.iscgo is false; then we want to retrieve g from r28.
+  // See https://github.com/open-telemetry/opentelemetry-ebpf-profiler/issues/1455.
+  return state->r28;
+#else
+  return 0;
+#endif
+}
+
+static EBPF_INLINE u64 go_get_g_ptr(struct GoRuntimeOffsets *offs, UnwindState *state)
+{
+  u64 g_register = go_get_g_register(state);
+
+  if (offs->tls_offset == 0) {
+    DEBUG_PRINT("cl: TLS offset for g pointer missing; using register fallback if available");
+    return g_register;
+  }
+
   u64 g_addr     = 0;
   void *tls_base = NULL;
   if (tsd_get_base(&tls_base) < 0) {
-    DEBUG_PRINT("cl: failed to get tsd base; can't read m_ptr");
-    return NULL;
+    DEBUG_PRINT("cl: failed to get tsd base; using register fallback if available");
+    return g_register;
   }
   DEBUG_PRINT(
     "cl: read tsd_base at 0x%lx, g offset: %d", (unsigned long)tls_base, offs->tls_offset);
 
-  if (offs->tls_offset == 0) {
-#if defined(__aarch64__)
-    // On aarch64 for !iscgo programs the g is only stored in r28 register.
-    g_addr = state->r28;
-#elif defined(__x86_64__)
-    DEBUG_PRINT("cl: TLS offset for g pointer missing for amd64");
-    return NULL;
-#endif
+  if (bpf_probe_read_user(&g_addr, sizeof(void *), (void *)((s64)tls_base + offs->tls_offset))) {
+    DEBUG_PRINT(
+      "cl: failed to read g_addr, tls_base(%lx); using register fallback if available",
+      (unsigned long)tls_base);
   }
 
-  if (g_addr == 0) {
-    if (bpf_probe_read_user(&g_addr, sizeof(void *), (void *)((s64)tls_base + offs->tls_offset))) {
-      DEBUG_PRINT("cl: failed to read g_addr, tls_base(%lx)", (unsigned long)tls_base);
-      return NULL;
-    }
+  return g_addr ? g_addr : g_register;
+}
+
+static EBPF_INLINE void *go_get_m_ptr(struct GoRuntimeOffsets *offs, UnwindState *state)
+{
+  u64 g_addr = go_get_g_ptr(offs, state);
+  if (!g_addr) {
+    return NULL;
   }
 
   DEBUG_PRINT("cl: reading m_ptr_addr at 0x%lx + 0x%x", (unsigned long)g_addr, offs->m_offset);
@@ -177,14 +201,17 @@ static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindSt
 
 static EBPF_INLINE void maybe_add_go_custom_labels(struct pt_regs *ctx, PerCPURecord *record)
 {
-  u32 pid                  = record->trace.pid;
-  GoLabelsOffsets *offsets = bpf_map_lookup_elem(&go_labels_procs, &pid);
-  if (!offsets) {
-    DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
+  if (go_labels_disabled) {
     return;
   }
 
-  void *m_ptr_addr = get_m_ptr(offsets, &record->state);
+  if (record->goOffsets.m_offset == 0) {
+    DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", record->trace.pid);
+    return;
+  }
+  GoRuntimeOffsets *offsets = &record->goOffsets;
+
+  void *m_ptr_addr = go_get_m_ptr(offsets, &record->state);
   if (!m_ptr_addr) {
     return;
   }
@@ -292,6 +319,8 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
       state->unwind_error = ERR_EMPTY_STACK;
     }
   }
+
+  refine_missing_mapping_error(state, record->usesAnonymousMappings);
 
   // If unwinding was aborted due to a critical error, push an error frame.
   if (state->unwind_error) {
