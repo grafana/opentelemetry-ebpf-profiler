@@ -307,8 +307,7 @@ type RubyProcInfo struct {
 	Cme_method_def               uint8
 	Size_of_value                uint8
 	Running_ec                   uint16
-	Return_to_native             uint8
-	Pad_cgo_0                    [3]byte
+	Pad_cgo_0                    [4]byte
 }
 type V8ProcInfo struct {
 	Version                      uint32

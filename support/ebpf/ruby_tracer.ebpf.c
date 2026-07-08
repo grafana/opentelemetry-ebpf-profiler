@@ -279,7 +279,7 @@ static EBPF_INLINE ErrorCode read_ruby_frame(
         // If we detected a jit frame and are now in a cfunc, push the c frame
         // as we can no longer unwind native anymore
         frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
-      } else if (ruby_skip_native_resume || !rubyinfo->return_to_native) {
+      } else if (ruby_skip_native_resume) {
         // Push cfunc inline without transitioning to the native unwinder.
         frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
       } else {
@@ -485,8 +485,7 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
       // If ruby_skip_native_resume is set, stop instead of resuming native unwinding.
       // Likewise if this process has been JIT'd, the PC is invalid and we cannot resume
       // native unwinding so we are done.
-      *next_unwinder = (record->rubyUnwindState.jit_detected || ruby_skip_native_resume ||
-                        !rubyinfo->return_to_native)
+      *next_unwinder = (record->rubyUnwindState.jit_detected || ruby_skip_native_resume)
                          ? PROG_UNWIND_STOP
                          : PROG_UNWIND_NATIVE;
       goto save_state;
@@ -495,9 +494,8 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
       stack_ptr += rubyinfo->size_of_control_frame_struct;
     }
     // If the next winder is native, save state and move to next unwinder
-    if (*next_unwinder == PROG_UNWIND_NATIVE && rubyinfo->return_to_native) {
+    if (*next_unwinder == PROG_UNWIND_NATIVE)
       goto save_state;
-    }
   }
 
   *next_unwinder = PROG_UNWIND_RUBY;
