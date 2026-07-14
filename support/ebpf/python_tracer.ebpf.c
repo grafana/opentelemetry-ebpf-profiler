@@ -9,8 +9,9 @@
 
 // Number of loop iterations in unwind_python. Each iteration handles either
 // a Python or a native frame, so the name follows the *_FRAMES_PER_PROGRAM
-// convention of the other tracers even though it covers both. 10 fits the
-// 5.x / 6.0-6.5 verifier; the host agent bumps it to 15 on 6.6+.
+// convention of the other tracers even though it covers both. 10 fits verifier
+// versions that reject larger mixed Python/native batches; the host agent bumps
+// it to 15 only on kernel ranges known to accept that value.
 BPF_RODATA_VAR(u32, python_frames_per_program, 10)
 
 // Forward declaration to avoid warnings like

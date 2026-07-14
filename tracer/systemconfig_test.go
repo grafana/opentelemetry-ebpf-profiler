@@ -75,3 +75,67 @@ func TestCalculateFieldOffsetFindsAnonymousCompositeMembers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint(24), offset)
 }
+
+func TestPythonFramesPerProgram(t *testing.T) {
+	tests := map[string]struct {
+		goarch string
+		major  uint32
+		minor  uint32
+		want   uint32
+	}{
+		"5.x default": {
+			goarch: "amd64",
+			major:  5,
+			minor:  15,
+			want:   defaultPythonFramesPerProgram,
+		},
+		"6.5 default": {
+			goarch: "amd64",
+			major:  6,
+			minor:  5,
+			want:   defaultPythonFramesPerProgram,
+		},
+		"6.6 expanded": {
+			goarch: "amd64",
+			major:  6,
+			minor:  6,
+			want:   expandedPythonFramesPerProgram,
+		},
+		"6.16 expanded": {
+			goarch: "amd64",
+			major:  6,
+			minor:  16,
+			want:   expandedPythonFramesPerProgram,
+		},
+		"amd64 6.18 limited": {
+			goarch: "amd64",
+			major:  6,
+			minor:  18,
+			want:   limitedPythonFramesPerProgram,
+		},
+		"amd64 6.19 limited": {
+			goarch: "amd64",
+			major:  6,
+			minor:  19,
+			want:   limitedPythonFramesPerProgram,
+		},
+		"arm64 6.18 default": {
+			goarch: "arm64",
+			major:  6,
+			minor:  18,
+			want:   defaultPythonFramesPerProgram,
+		},
+		"7.x expanded": {
+			goarch: "amd64",
+			major:  7,
+			minor:  1,
+			want:   expandedPythonFramesPerProgram,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, pythonFramesPerProgramForArch(tc.goarch, tc.major, tc.minor))
+		})
+	}
+}

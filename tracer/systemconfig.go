@@ -498,6 +498,26 @@ func stripProgramExtInfos(insns asm.Instructions) {
 	}
 }
 
+const (
+	defaultPythonFramesPerProgram  = 10
+	limitedPythonFramesPerProgram  = 4
+	expandedPythonFramesPerProgram = 15
+)
+
+func pythonFramesPerProgram(major, minor uint32) uint32 {
+	return pythonFramesPerProgramForArch(runtime.GOARCH, major, minor)
+}
+
+func pythonFramesPerProgramForArch(goarch string, major, minor uint32) uint32 {
+	if goarch == "amd64" && major == 6 && minor >= 18 {
+		return limitedPythonFramesPerProgram
+	}
+	if (major == 6 && minor >= 6 && minor < 18) || major > 6 {
+		return expandedPythonFramesPerProgram
+	}
+	return defaultPythonFramesPerProgram
+}
+
 // loadRodataVars initializes RODATA variables for the eBPF programs.
 func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Config,
 	major, minor uint32,
@@ -508,14 +528,13 @@ func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Conf
 		}
 	}
 
-	// The Python/native hybrid unwinder's per program loop count defaults to 10
-	// which is the largest that fits the 5.x / 6.0-6.5 verifier. Kernels 6.6+ are
-	// more efficient and can support more, but 6.18's verifier is tighter than
-	// 6.6-6.16; 15 fits the floor across the 6.6+ CI matrix.
-	if major > 6 || (major == 6 && minor >= 6) {
-		if err := coll.Variables["python_frames_per_program"].Set(uint32(15)); err != nil {
-			return fmt.Errorf("failed to set python_frames_per_program: %v", err)
-		}
+	// The Python/native hybrid unwinder's per-program loop count defaults to 10,
+	// which fits the 5.x / 6.0-6.5 verifier. 6.6-6.16 and 7.x can support 15,
+	// while amd64 6.18+ needs a smaller batch to stay under the verifier's
+	// processed-instruction limit.
+	if err := coll.Variables["python_frames_per_program"].Set(
+		pythonFramesPerProgram(major, minor)); err != nil {
+		return fmt.Errorf("failed to set python_frames_per_program: %v", err)
 	}
 
 	if err := coll.Variables["off_cpu_threshold"].Set(cfg.OffCPUThreshold); err != nil {
