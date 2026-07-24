@@ -22,11 +22,6 @@ type ReaderAt struct {
 	refCount atomic.Int32
 
 	data []byte
-	f    *os.File
-}
-
-func (r *ReaderAt) OSFile() *os.File {
-	return r.f
 }
 
 // Take takes a reference on the data
@@ -42,10 +37,6 @@ func (r *ReaderAt) Close() error {
 		return nil
 	}
 	// No more references - unmap data
-	if r.f != nil {
-		_ = r.f.Close()
-		r.f = nil
-	}
 	if r.data == nil {
 		return nil
 	} else if len(r.data) == 0 {
@@ -98,6 +89,13 @@ func Open(filename string) (*ReaderAt, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+
+	return OpenFile(f)
+}
+
+// OpenFile memory-maps the OS file for reading.
+func OpenFile(f *os.File) (*ReaderAt, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -105,7 +103,6 @@ func Open(filename string) (*ReaderAt, error) {
 
 	size := fi.Size()
 	if size == 0 {
-		_ = f.Close()
 		// Treat (size == 0) as a special case, avoiding the syscall, since
 		// "man 2 mmap" says "the length... must be greater than 0".
 		//
@@ -116,21 +113,18 @@ func Open(filename string) (*ReaderAt, error) {
 		}, nil
 	}
 	if size < 0 {
-		_ = f.Close()
-		return nil, fmt.Errorf("mmap: file %q has negative size", filename)
+		return nil, fmt.Errorf("mmap: negative file size")
 	}
 	if size != int64(int(size)) {
-		_ = f.Close()
-		return nil, fmt.Errorf("mmap: file %q is too large", filename)
+		return nil, fmt.Errorf("mmap: too large file size")
 	}
 
 	data, err := syscall.Mmap(int(f.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 
-	r := &ReaderAt{data: data, f: f}
+	r := &ReaderAt{data: data}
 	r.refCount.Store(1)
 	runtime.SetFinalizer(r, (*ReaderAt).Close)
 	r.setRandom()

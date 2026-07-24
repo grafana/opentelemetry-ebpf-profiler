@@ -14,19 +14,19 @@ import (
 	"time"
 	"unsafe"
 
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 // #include <stdlib.h>
 // #include "../../support/ebpf/types.h"
 // int unwind_traces(u64 id, int debug, u64 tp_base, void *ctx);
-// void initialize_rodata_variables(u64 new_inv_pac_mask);
+// void initialize_rodata_variables(u64 new_inv_pac_mask, int new_ruby_skip_native_resume);
 import "C"
 
 // sliceBuffer creates a Go slice from C buffer
@@ -118,6 +118,13 @@ func (t *traceReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.Trace
 
 func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	lwpFilter libpf.Set[libpf.PID], faultAddresses map[uintptr]int) ([]ThreadInfo, error) {
+	return ExtractTracesWithInterpreters(ctx, pr, debug, lwpFilter, faultAddresses,
+		interpreterconfig.AllInterpreters())
+}
+
+func ExtractTracesWithInterpreters(ctx context.Context, pr process.Process, debug bool,
+	lwpFilter libpf.Set[libpf.PID], faultAddresses map[uintptr]int,
+	interpretersConfig interpreterconfig.Config) ([]ThreadInfo, error) {
 	todo, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -164,15 +171,16 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	defer ebpfCtx.release()
 
 	inverse_pac_mask := ^(pr.GetMachineData().CodePACMask)
-	C.initialize_rodata_variables(C.u64(inverse_pac_mask))
+	rubySkipNativeResume := C.int(0)
+	if interpretersConfig.Ruby.SkipNativeResume {
+		rubySkipNativeResume = 1
+	}
+	C.initialize_rodata_variables(C.u64(inverse_pac_mask), rubySkipNativeResume)
 
 	coredumpEbpfMaps := ebpfMapsCoredump{ctx: ebpfCtx}
 	traceReporter := traceReporter{}
 
-	// Instantiate managers and enable all tracers by default
-	includeTracers, _ := tracertypes.Parse("all")
-
-	manager, err := pm.New(todo, includeTracers, monitorInterval, executableUnloadDelay,
+	manager, err := pm.New(todo, interpretersConfig, monitorInterval, executableUnloadDelay,
 		&coredumpEbpfMaps, &traceReporter, nil, elfunwindinfo.NewStackDeltaProvider(),
 		false, dynamicprofiling.AlwaysOnPolicy{}, libpf.Set[string]{})
 	if err != nil {
@@ -196,7 +204,7 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 			return nil, fmt.Errorf("failed to unwind lwp %v: %v", thread.LWP, rc)
 		}
 		// Symbolize traces with interpreter manager
-		manager.HandleTrace(&ebpfCtx.trace)
+		manager.HandleTrace(&ebpfCtx.trace, nil)
 		info = append(info, ThreadInfo{
 			LWP:    thread.LWP,
 			Frames: traceReporter.frames,

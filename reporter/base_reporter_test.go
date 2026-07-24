@@ -14,7 +14,24 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"go.opentelemetry.io/ebpf-profiler/support"
+)
+
+var (
+	profileTypeSampling = &samples.TypeMetadata{
+		PeriodType: "cpu",
+		PeriodUnit: "nanoseconds",
+		SampleType: "samples",
+		SampleUnit: "count",
+	}
+	profileTypeOffCPU = &samples.TypeMetadata{
+		SampleType:   "off_cpu",
+		SampleUnit:   "nanoseconds",
+		ReportValues: true,
+	}
+	profileTypeProbe = &samples.TypeMetadata{
+		SampleType: "events",
+		SampleUnit: "count",
+	}
 )
 
 // createTestBaseReporter creates a minimal baseReporter for testing purposes
@@ -47,7 +64,6 @@ func TestBaseReporterGenerate(t *testing.T) {
 	reporter := createTestBaseReporter(t, nil)
 
 	trace1 := &libpf.Trace{
-		Hash: libpf.NewTraceHash(0x0102030400000000, 0x0000000000000000),
 		Frames: func() libpf.Frames {
 			frames := make(libpf.Frames, 0, 3)
 			frames.Append(&libpf.Frame{
@@ -70,7 +86,6 @@ func TestBaseReporterGenerate(t *testing.T) {
 	}
 
 	trace2 := &libpf.Trace{
-		Hash: libpf.NewTraceHash(0x0506070800000000, 0x0000000000000000),
 		Frames: func() libpf.Frames {
 			frames := make(libpf.Frames, 0, 2)
 			frames.Append(&libpf.Frame{
@@ -90,7 +105,7 @@ func TestBaseReporterGenerate(t *testing.T) {
 	now := time.Now()
 	meta1 := &samples.TraceEventMeta{
 		Timestamp:      libpf.UnixTime64(now.UnixNano()),
-		Comm:           libpf.Intern("app1"),
+		Comm:           libpf.NewCommFromString("app1"),
 		ProcessName:    libpf.Intern("app1"),
 		ExecutablePath: libpf.Intern("/usr/bin/app1"),
 		APMServiceName: "service1",
@@ -98,12 +113,12 @@ func TestBaseReporterGenerate(t *testing.T) {
 		PID:            1000,
 		TID:            1001,
 		CPU:            0,
-		Origin:         support.TraceOriginSampling,
+		ProfileType:    profileTypeSampling,
 	}
 
 	meta2 := &samples.TraceEventMeta{
 		Timestamp:      libpf.UnixTime64(now.Add(time.Second).UnixNano()),
-		Comm:           libpf.Intern("app2"),
+		Comm:           libpf.NewCommFromString("app2"),
 		ProcessName:    libpf.Intern("app2"),
 		ExecutablePath: libpf.Intern("/usr/bin/app2"),
 		APMServiceName: "service2",
@@ -111,7 +126,7 @@ func TestBaseReporterGenerate(t *testing.T) {
 		PID:            2000,
 		TID:            2001,
 		CPU:            1,
-		Origin:         support.TraceOriginOffCPU,
+		ProfileType:    profileTypeOffCPU,
 		Value:          5000000, // 5ms
 	}
 

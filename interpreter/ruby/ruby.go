@@ -364,8 +364,6 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 		Size_of_value: r.vmStructs.size_of_value,
 
 		Running_ec: r.vmStructs.rb_ractor_struct.running_ec,
-
-		Return_to_native: uint8(returnToNative()),
 	}
 
 	if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(&cdata)); err != nil {
@@ -1373,7 +1371,11 @@ func determineRubyVersion(ef *pfelf.File) (uint32, error) {
 	return rubyVersion(uint32(major), uint32(minor), uint32(release)), nil
 }
 
-func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+func GetLoader(_ Config) interpreter.Loader {
+	return loader
+}
+
+func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	isBinRuby := binRubyRegex.MatchString(info.FileName())
 	if !libRubyRegex.MatchString(info.FileName()) && !isBinRuby {
 		return nil, nil

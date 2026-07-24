@@ -4,7 +4,6 @@
 package hotspot // import "go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfbufio"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
@@ -308,8 +308,6 @@ func (vmd *hotspotVMData) parseIntrospection(it *hotspotIntrospectionTable,
 
 			castedValue := reflect.ValueOf(value).Convert(f.Type().Elem())
 			f.SetMapIndex(reflect.ValueOf(fieldName), castedValue)
-		default:
-			panic(fmt.Sprintf("bug: unexpected field type in vmStructs: %v", f.Kind()))
 		}
 	}
 	return nil
@@ -387,6 +385,10 @@ func (d *hotspotData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.
 func (d *hotspotData) Unload(_ interpreter.EbpfHandler) {
 }
 
+func (i *hotspotInstance) UsesAnonymousMappings() bool {
+	return true
+}
+
 // locateJvmciVMStructs attempts to heuristically locate the JVMCI VM structs by
 // searching for references to the string `Klass_vtable_start_offset`. In all JVM
 // versions >= 9.0, this corresponds to the first entry in the VM structs:
@@ -396,40 +398,34 @@ func (d *hotspotData) Unload(_ interpreter.EbpfHandler) {
 //
 //nolint:lll
 func locateJvmciVMStructs(ef *pfelf.File) (libpf.Address, error) {
-	const maxDataReadSize = 1 * 1024 * 1024   // seen in practice: 192 KiB
-	const maxRodataReadSize = 4 * 1024 * 1024 // seen in practice: 753 KiB
+	rdr := pfbufio.GetReader()
+	defer pfbufio.PutReader(rdr)
 
-	rodataSec := ef.Section(".rodata")
-	if rodataSec == nil {
+	rodata := ef.Section(".rodata")
+	if rodata == nil {
 		return 0, errors.New("unable to find `.rodata` section")
 	}
 
-	rodata, err := rodataSec.Data(maxRodataReadSize)
-	if err != nil {
-		return 0, err
-	}
+	rdr.Init(ef.Underlying(), int64(rodata.Offset), int64(rodata.FileSize))
 
-	offs := bytes.Index(rodata, []byte("Klass_vtable_start_offset"))
-	if offs == -1 {
+	offs, err := rdr.SearchSlice([]byte("Klass_vtable_start_offset"))
+	if err != nil {
 		return 0, errors.New("unable to find string for heuristic")
 	}
 
-	ptr := rodataSec.Addr + uint64(offs)
+	ptr := rodata.Addr + uint64(offs)
 	ptrEncoded := make([]byte, 8)
 	binary.LittleEndian.PutUint64(ptrEncoded, ptr)
 
-	dataSec := ef.Section(".data")
-	if dataSec == nil {
+	data := ef.Section(".data")
+	if data == nil {
 		return 0, errors.New("unable to find `.data` section")
 	}
 
-	data, err := dataSec.Data(maxDataReadSize)
-	if err != nil {
-		return 0, err
-	}
+	rdr.Init(ef.Underlying(), int64(data.Offset), int64(data.FileSize))
 
-	offs = bytes.Index(data, ptrEncoded)
-	if offs == -1 {
+	offs, err = rdr.SearchSlice(ptrEncoded)
+	if err != nil {
 		return 0, errors.New("unable to find string pointer")
 	}
 
@@ -437,7 +433,7 @@ func locateJvmciVMStructs(ef *pfelf.File) (libpf.Address, error) {
 	// gHotSpotVMStructEntryFieldNameOffset. This value unfortunately lives in
 	// BSS, so we have no choice but to hard-code it. Fortunately enough this
 	// offset hasn't changed since at least JDK 9.
-	return libpf.Address(dataSec.Addr + uint64(offs) - 8), nil
+	return libpf.Address(data.Addr + uint64(offs) - 8), nil
 }
 
 // forEachItem walks the given struct reflection fields recursively, and calls the visitor
@@ -462,8 +458,6 @@ func forEachItem(prefix string, t reflect.Value, visitor func(reflect.Value, str
 			}
 		case reflect.Map:
 			continue
-		default:
-			panic("unsupported type")
 		}
 	}
 	return nil

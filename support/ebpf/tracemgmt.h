@@ -32,6 +32,9 @@
 
 #endif // TESTING_COREDUMP
 
+#define DEBUG_UNWIND_STATE(state)                                                                  \
+  DEBUG_PRINT("pc: %llx sp: %llx fp: %llx", (state)->pc, (state)->sp, (state)->fp)
+
 // inverse_pac_mask is declared in native_stack_trace.ebpf.c
 extern u64 inverse_pac_mask;
 
@@ -40,6 +43,33 @@ extern u32 task_stack_offset;
 
 // stack_ptregs_offset is declared in native_stack_trace.ebpf.c
 extern u32 stack_ptregs_offset;
+
+// vma_lookup_enabled is declared in native_stack_trace.ebpf.c
+extern bool vma_lookup_enabled;
+
+// vma_vm_file_offset is declared in native_stack_trace.ebpf.c
+extern u32 vma_vm_file_offset;
+
+// vma_vm_flags_offset is declared in native_stack_trace.ebpf.c
+extern u32 vma_vm_flags_offset;
+
+// Strips the PAC tag from a pointer.
+//
+// While all pointers can contain PAC tags, we only apply this function to code pointers, because
+// that's where normalization is required to make the stack delta lookups work. Note that if that
+// should ever change, we'd need a different mask for the data pointers, because it might diverge
+// from the mask for code pointers.
+static inline EBPF_INLINE u64 normalize_pac_ptr(u64 ptr)
+{
+#if defined(__aarch64__)
+  // Mask off PAC bits. Since we're always applying this to usermode pointers that should have all
+  // the high bits set to 0, we don't need to consider the case of having to fill up the resulting
+  // hole with 1s (like we'd have to for kernel ptrs).
+  return ptr & inverse_pac_mask;
+#else
+  return ptr;
+#endif
+}
 
 // increment_metric increments the value of the given metricID by 1
 static inline EBPF_INLINE void increment_metric(u32 metricID)
@@ -53,8 +83,7 @@ static inline EBPF_INLINE void increment_metric(u32 metricID)
 }
 
 // Send immediate notifications for event triggers to Go.
-// Notifications for GENERIC_PID and RELOAD_KALLSYMS will be
-// automatically inhibited until HA resets the type.
+// Notifications for GENERIC_PID will be automatically inhibited until HA resets the type.
 static inline EBPF_INLINE void event_send_trigger(struct pt_regs *ctx, u32 event_type)
 {
   int inhibit_key    = event_type;
@@ -95,15 +124,26 @@ static inline EBPF_INLINE void event_send_trigger(struct pt_regs *ctx, u32 event
 // Forward declaration
 struct bpf_perf_event_data;
 
-// pid_information_exists checks if the given pid exists in pid_page_to_mapping_info or not.
-static inline EBPF_INLINE bool pid_information_exists(int pid)
+// pid_information looks up the per-PID marker in pid_page_to_mapping_info.
+static inline EBPF_INLINE PIDPageMappingInfo *pid_information(int pid)
 {
   PIDPage key   = {};
   key.prefixLen = BIT_WIDTH_PID + BIT_WIDTH_PAGE;
   key.pid       = __constant_cpu_to_be32((u32)pid);
   key.page      = 0;
 
-  return bpf_map_lookup_elem(&pid_page_to_mapping_info, &key) != NULL;
+  return bpf_map_lookup_elem(&pid_page_to_mapping_info, &key);
+}
+
+// pid_information_exists checks if the given pid exists in pid_page_to_mapping_info or not.
+static inline EBPF_INLINE bool pid_information_exists(int pid)
+{
+  return pid_information(pid) != NULL;
+}
+
+static inline EBPF_INLINE bool pid_uses_anonymous_mappings(PIDPageMappingInfo *info)
+{
+  return (info->file_id & PID_PAGE_MAPPING_INFO_FLAG_USES_ANONYMOUS_MAPPINGS) != 0;
 }
 
 // Reset the ratelimit cache
@@ -242,7 +282,9 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->unwindersDone                     = 0;
   record->tailCalls                         = 0;
   record->ratelimitAction                   = RATELIMIT_ACTION_DEFAULT;
+  record->usesAnonymousMappings             = false;
   record->customLabelsState.go_m_ptr        = NULL;
+  record->goOffsets.m_offset                = 0;
 
   Trace *trace             = &record->trace;
   trace->frame_data_len    = 0;
@@ -294,19 +336,64 @@ static inline EBPF_INLINE void unwinder_mark_nonleaf_frame(UnwindState *state)
 #endif
 }
 
+// unwinder_analyze_frame_pointer is intended to be called once at the beginning
+// of an unwinder program that wants to use frame pointer unwinding. It prepares
+// the state. This can be improved in the future to analyze and recover from
+// an epilogue/prologue.
+static inline EBPF_INLINE void unwinder_analyze_frame_pointer(UnwindState *state)
+{
+  if (state->sp) {
+    state->fp_bound = state->sp;
+  }
+}
+
+// unwinder_check_frame_size checks that the current frame size does not exceed
+// 'sz' maximum size, and that it is linear. Do not use with split stacks.
+static inline EBPF_INLINE bool unwinder_check_frame_size(UnwindState *state, size_t sz)
+{
+  u64 fp = state->fp, fp_bound = state->fp_bound;
+  if (fp < fp_bound || fp >= fp_bound + sz) {
+    DEBUG_PRINT("frame size too large: %llx / %llx", fp, fp_bound);
+    return false;
+  }
+  return true;
+}
+
+// unwinder_unwind_frame_pointer_regs unwinds using the already read Frame FP/PC.
+static inline EBPF_INLINE bool unwinder_unwind_frame_pointer_regs(UnwindState *state, u64 *regs)
+{
+  u64 fp = state->fp;
+
+#if defined(__x86_64__)
+  // On x86-64 the epilogue and prologue guarantee that sp correlates to
+  // the frame pointer. Only return address, and previous FP are pushed
+  // to the stack when the frame pointer is set from the stack pointer.
+  state->sp = fp + 2 * sizeof(u64);
+#else
+  // Make no assumption about SP relation to FP. This is true on aarch64.
+  // SP can still restore by the unwinder when frame pointer based unwinder
+  // is done: V8 restores it for Entry Frame, and the Dotnet runtime native
+  // code calling JIT code have .eh_frame rules of the format CFA=FP+n
+  // (restoring SP from FP).
+  state->sp = 0;
+#endif
+  // At least RA and FP must be in the Frame.
+  state->fp_bound = fp + 2 * sizeof(u64);
+  state->fp       = regs[0];
+  state->pc       = normalize_pac_ptr(regs[1]);
+  unwinder_mark_nonleaf_frame(state);
+  return true;
+}
+
 // unwinder_unwind_frame_pointer unwinds using the Frame Pointer.
 static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
 {
-  unsigned long regs[2];
+  u64 regs[2];
 
   if (bpf_probe_read_user(regs, sizeof(regs), (void *)state->fp)) {
     return false;
   }
-  state->sp = state->fp + sizeof(regs);
-  state->fp = regs[0];
-  state->pc = regs[1];
-  unwinder_mark_nonleaf_frame(state);
-  return true;
+  return unwinder_unwind_frame_pointer_regs(state, regs);
 }
 
 static inline EBPF_INLINE u64 frame_header(u8 frame_type, u8 flags, u8 length, u64 data)
@@ -387,8 +474,8 @@ static inline EBPF_INLINE void push_kernel_frames(void *ctx, Trace *trace)
   }
 }
 
-// Send a trace to user-land via the `trace_events` perf event buffer.
-static inline EBPF_INLINE void send_trace(void *ctx, Trace *trace)
+// Send a trace to userspace via the `trace_events` ringbuffer.
+static inline EBPF_INLINE void send_trace(UNUSED void *ctx, Trace *trace)
 {
   // Explicitly clamp frame_data_len for the verifier. In production the value
   // is always within bounds, but when send_trace is inlined into the same
@@ -401,7 +488,16 @@ static inline EBPF_INLINE void send_trace(void *ctx, Trace *trace)
   const u64 send_size =
     sizeof(Trace) - sizeof(trace->frame_data) + sizeof(trace->frame_data[0]) * len;
 
-  bpf_perf_event_output(ctx, &trace_events, BPF_F_CURRENT_CPU, trace, send_size);
+  trace->cpu_id = bpf_get_smp_processor_id();
+
+  // We specify BPF_RB_NO_WAKEUP here as userspace is polling on a timer (instead
+  // of blocking on epoll). If epoll blocking is implemented we should remove
+  // BPF_RB_NO_WAKEUP to switch to 'adaptive' notifications. Unlike perf events,
+  // there's no "lost events" counter that userspace can access. We can however
+  // capture an error here and increment the associated metric.
+  if (bpf_ringbuf_output(&trace_events, trace, send_size, BPF_RB_NO_WAKEUP) < 0) {
+    increment_metric(metricID_BPFRingbufOutputErr);
+  }
 }
 
 // is_kernel_address checks if the given address looks like virtual address to kernel memory.
@@ -416,6 +512,64 @@ decode_bias_and_unwind_program(u64 bias_and_unwind_program, u64 *bias, int *unwi
 {
   *bias           = bias_and_unwind_program & 0x00FFFFFFFFFFFFFF;
   *unwind_program = bias_and_unwind_program >> 56;
+}
+
+typedef struct VMAInfo {
+  // found is set when bpf_find_vma invokes find_vma_callback for the PC.
+  // It does not imply that executable/anonymous shape fields were readable.
+  bool found;
+  // executable and anonymous are best-effort VMA shape values. They keep
+  // neutral defaults if offsets are unavailable or probe reads fail.
+  bool executable;
+  bool anonymous;
+} VMAInfo;
+
+static inline EBPF_INLINE bool vma_shape_available()
+{
+  return vma_vm_file_offset != 0 && vma_vm_flags_offset != 0;
+}
+
+// Keep this symbol name stable: disableVMAHelperCalls matches the find_vma_callback prefix
+// when removing callback references and subprogram bodies on kernels without VMA lookup support.
+static long
+find_vma_callback(UNUSED struct task_struct *task, struct vm_area_struct *vma, void *callback_ctx)
+{
+  VMAInfo *info = callback_ctx;
+  // The callback only runs when the kernel found a VMA containing the PC.
+  info->found   = true;
+
+  // Keep defaults neutral if the shape reads below are unavailable or fail.
+  info->executable = true;
+  info->anonymous  = false;
+
+  if (!vma_shape_available()) {
+    return 0;
+  }
+
+  u64 vm_file  = 0;
+  u64 vm_flags = 0;
+
+  if (bpf_probe_read_kernel(&vm_file, sizeof(vm_file), (void *)((u64)vma + vma_vm_file_offset))) {
+    return 0;
+  }
+  if (bpf_probe_read_kernel(
+        &vm_flags, sizeof(vm_flags), (void *)((u64)vma + vma_vm_flags_offset))) {
+    return 0;
+  }
+
+  info->anonymous  = (vm_file == 0);
+  info->executable = ((vm_flags & VM_EXEC) != 0);
+  return 0;
+}
+
+static inline EBPF_INLINE VMAInfo find_vma_info_for_pc(u64 pc)
+{
+  VMAInfo info = {};
+
+  struct task_struct *task = bpf_get_current_task_btf();
+  bpf_find_vma(task, pc, find_vma_callback, &info, 0);
+
+  return info;
 }
 
 // resolve_unwind_mapping decodes the current PC's mapping and prepares unwinding information.
@@ -472,6 +626,46 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
     state->text_section_offset);
 
   return ERR_OK;
+}
+
+static inline EBPF_INLINE void
+refine_missing_mapping_error(UnwindState *state, bool interpreter_uses_anonymous_mappings)
+{
+  if (state->error_metric != metricID_UnwindNativeErrWrongTextSection) {
+    return;
+  }
+
+  if (!vma_lookup_enabled) {
+    return;
+  }
+
+  bool update_unwind_error = state->unwind_error == ERR_NATIVE_NO_PID_PAGE_MAPPING;
+  VMAInfo vma              = find_vma_info_for_pc(state->pc);
+  if (!vma.found) {
+    state->error_metric = metricID_UnwindNativeErrNoVMA;
+    if (update_unwind_error) {
+      state->unwind_error = ERR_NATIVE_NO_VMA;
+    }
+    return;
+  }
+
+  if (!vma_shape_available()) {
+    return;
+  }
+
+  if (!vma.executable) {
+    state->error_metric = metricID_UnwindNativeErrNonExecutableVMA;
+    if (update_unwind_error) {
+      state->unwind_error = ERR_NATIVE_NON_EXECUTABLE_VMA;
+    }
+    return;
+  }
+  if (vma.anonymous && !interpreter_uses_anonymous_mappings) {
+    state->error_metric = metricID_UnwindNativeErrUnsupportedAnonymousMapping;
+    if (update_unwind_error) {
+      state->unwind_error = ERR_NATIVE_UNSUPPORTED_MAPPING;
+    }
+  }
 }
 
 // matches_interpreter_range checks if the given text section offset falls within
@@ -579,23 +773,6 @@ static inline EBPF_INLINE void tail_call(void *ctx, int next)
   #define __USER_DS                   (GDT_ENTRY_DEFAULT_USER_DS * 8 + 3)
 #endif
 
-#ifdef __aarch64__
-// Strips the PAC tag from a pointer.
-//
-// While all pointers can contain PAC tags, we only apply this function to code pointers, because
-// that's where normalization is required to make the stack delta lookups work. Note that if that
-// should ever change, we'd need a different mask for the data pointers, because it might diverge
-// from the mask for code pointers.
-static inline EBPF_INLINE u64 normalize_pac_ptr(u64 ptr)
-{
-  // Mask off PAC bits. Since we're always applying this to usermode pointers that should have all
-  // the high bits set to 0, we don't need to consider the case of having to fill up the resulting
-  // hole with 1s (like we'd have to for kernel ptrs).
-  ptr &= inverse_pac_mask;
-  return ptr;
-}
-#endif
-
 // Initialize state from pt_regs
 static inline EBPF_INLINE ErrorCode
 copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kernelmode)
@@ -611,6 +788,8 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->sp  = regs->sp;
   state->fp  = regs->bp;
   state->rax = regs->ax;
+  state->rdi = regs->di;
+  state->r8  = regs->r8;
   state->r9  = regs->r9;
   state->r11 = regs->r11;
   state->r13 = regs->r13;
@@ -719,7 +898,6 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
     error = copy_state_regs(state, ctx, false);
   }
   if (error == ERR_OK) {
-    DEBUG_PRINT("Read regs: pc: %llx sp: %llx fp: %llx", state->pc, state->sp, state->fp);
     *has_usermode_regs = true;
   }
   return error;
@@ -769,6 +947,12 @@ static inline EBPF_INLINE int collect_trace(
     return 0;
   }
 
+  // Preload this trace's go_procs entry into record->goOffsets.
+  GoRuntimeOffsets *go_offsets = bpf_map_lookup_elem(&go_procs, &pid);
+  if (go_offsets) {
+    record->goOffsets = *go_offsets;
+  }
+
   // Recursive unwind frames
   int unwinder           = PROG_UNWIND_STOP;
   bool has_usermode_regs = false;
@@ -777,13 +961,19 @@ static inline EBPF_INLINE int collect_trace(
     goto exit;
   }
 
-  if (!pid_information_exists(pid)) {
+  PIDPageMappingInfo *pidInfo = pid_information(pid);
+  if (!pidInfo) {
     u64 pid_tgid = (u64)pid << 32 | tid;
     if (report_pid(ctx, pid_tgid, RATELIMIT_ACTION_DEFAULT)) {
       increment_metric(metricID_NumProcNew);
     }
     return 0;
   }
+
+  DEBUG_UNWIND_STATE(&record->state);
+
+  record->usesAnonymousMappings = pid_uses_anonymous_mappings(pidInfo);
+
   error = get_next_unwinder_after_native_frame(record, &unwinder);
 
 exit:

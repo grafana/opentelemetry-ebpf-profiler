@@ -14,6 +14,11 @@ struct ruby_procs_t {
   __uint(max_entries, 1024);
 } ruby_procs SEC(".maps");
 
+// ruby_skip_native_resume is set during load time. When enabled, cfunc frames
+// are pushed inline without transitioning back to the native unwinder. This
+// saves tail calls at the cost of losing native frames within cfuncs.
+BPF_RODATA_VAR(bool, ruby_skip_native_resume, false)
+
 // The number of Ruby frames to unwind per frame-unwinding eBPF program. If
 // we start running out of instructions in the walk_ruby_stack program, one
 // option is to adjust this number downwards.
@@ -274,7 +279,8 @@ static EBPF_INLINE ErrorCode read_ruby_frame(
         // If we detected a jit frame and are now in a cfunc, push the c frame
         // as we can no longer unwind native anymore
         frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
-      } else if (!rubyinfo->return_to_native) {
+      } else if (ruby_skip_native_resume) {
+        // Push cfunc inline without transitioning to the native unwinder.
         frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
       } else {
         // We save this cfp on in the "Record" entry, and when we start the unwinder
@@ -476,9 +482,10 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
 
     if (last_stack_frame <= stack_ptr) {
       // We have processed all frames in the Ruby VM and can stop here.
-      // if this process has been JIT'd, the PC is invalid and we cannot resume native unwinding so
-      // we are done
-      *next_unwinder = (record->rubyUnwindState.jit_detected || !rubyinfo->return_to_native)
+      // If ruby_skip_native_resume is set, stop instead of resuming native unwinding.
+      // Likewise if this process has been JIT'd, the PC is invalid and we cannot resume
+      // native unwinding so we are done.
+      *next_unwinder = (record->rubyUnwindState.jit_detected || ruby_skip_native_resume)
                          ? PROG_UNWIND_STOP
                          : PROG_UNWIND_NATIVE;
       goto save_state;
@@ -487,9 +494,8 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
       stack_ptr += rubyinfo->size_of_control_frame_struct;
     }
     // If the next winder is native, save state and move to next unwinder
-    if (*next_unwinder == PROG_UNWIND_NATIVE && rubyinfo->return_to_native) {
+    if (*next_unwinder == PROG_UNWIND_NATIVE)
       goto save_state;
-    }
   }
 
   *next_unwinder = PROG_UNWIND_RUBY;
