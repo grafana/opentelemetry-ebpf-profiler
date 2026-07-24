@@ -572,10 +572,6 @@ func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Conf
 		log.Infof("PID namespace translation enabled (dev=%d, ino=%d), only processes traces within the profiler namespace will be collected", dev, ino)
 	}
 
-	if err := setOriginIDs(coll, cfg, origins); err != nil {
-		return err
-	}
-
 	if err := coll.Variables["off_cpu_threshold"].Set(cfg.OffCPUThreshold); err != nil {
 		return fmt.Errorf("failed to set off_cpu_threshold: %v", err)
 	}
