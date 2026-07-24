@@ -1,4 +1,5 @@
 name: Setup protoc
+description: Install the pinned protoc compiler
 
 runs:
   using: composite

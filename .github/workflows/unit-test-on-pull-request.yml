@@ -208,9 +208,9 @@ jobs:
           mv ci-kernels/boot/ ci-kernels/${{ matrix.kernel }}/
       - name: Test on kernel ${{ matrix.kernel }}
         run: |
-          ls -ltr *.test
-          file *test
-          chmod a+rx *.test
+          ls -ltr ./*.test
+          file ./*.test
+          chmod a+rx ./*.test
           case "${{ matrix.target_arch }}" in
             amd64) export QEMU_ARCH=x86_64;;
             arm64) export QEMU_ARCH=aarch64;;

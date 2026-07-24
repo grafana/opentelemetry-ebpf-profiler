@@ -1,4 +1,5 @@
 name: Common environment setup
+description: Install the common build environment
 
 runs:
   using: composite
