@@ -297,18 +297,18 @@ static EBPF_INLINE ErrorCode python_step_native(PerCPURecord *record, int *unwin
   *unwinder    = PROG_UNWIND_STOP;
 
   increment_metric(metricID_UnwindNativeAttempts);
-  ErrorCode error = push_native(
-    &record->state,
-    trace,
-    record->state.text_section_id,
-    record->state.text_section_offset,
-    record->state.return_address);
-  if (error) {
-    return error;
-  }
+  // ra is read before unwinding, which marks the frame non-leaf and overwrites it.
+  u64 file = record->state.text_section_id;
+  u64 line = record->state.text_section_offset;
+  bool ra  = record->state.return_address;
 
   bool stop;
-  error = unwind_one_frame(record, &stop);
+  ErrorCode error = unwind_one_frame(record, &stop);
+
+  ErrorCode push_error = push_native(&record->state, trace, file, line, ra);
+  if (push_error) {
+    return push_error;
+  }
   if (error || stop) {
     return error;
   }
