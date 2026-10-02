@@ -87,6 +87,17 @@ static EBPF_INLINE ErrorCode process_python_frame(
     return ERR_OK;
   }
 
+  // CPython 3.14's terminal frame is FRAME_OWNED_BY_INTERPRETER and its
+  // `f_executable` holds a sentinel, not a code object. A PyObject* is at
+  // least 8-byte aligned, so an unaligned value is never worth symbolizing:
+  // reading it yields garbage fields, and the address is then handed to user
+  // space where getCodeObject reports
+  // "extracted invalid Python method/function name from address 0x...".
+  if (py_codeobject && ((unsigned long)py_codeobject & 0x7)) {
+    *continue_with_next = true;
+    return ERR_OK;
+  }
+
   // See experiments/python/README.md for a longer version of this. In short, we
   // cannot directly obtain the correct Python line number. It has to be calculated
   // using information found in the PyCodeObject for the current frame. This
