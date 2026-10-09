@@ -49,6 +49,8 @@ var (
 
 	//go:embed pprof_stable_cgo_pie
 	pprof_stable_cgo_pie []byte
+
+	allCPUs = []int{}
 )
 
 type mockIntervals struct{}
@@ -111,7 +113,7 @@ func Test_Golabels(t *testing.T) {
 			defer trc.Close()
 
 			trc.StartPIDEventProcessor(ctx)
-			require.NoError(t, trc.AttachTracer())
+			require.NoError(t, trc.AttachTracer(allCPUs))
 
 			t.Log("Attached tracer program")
 			require.NoError(t, trc.EnableProfiling())

@@ -397,7 +397,7 @@ func (pm *ProcessManager) newFrameMapping(pr process.Process, m *process.RawMapp
 
 	elfSpaceVA, ok := info.addressMapper.FileOffsetToVirtualAddress(m.FileOffset)
 	if !ok {
-		log.Warnf("Failed to map file offset of PID %d, file %s, offset %d",
+		log.Debugf("Failed to map file offset of PID %d, file %s, offset %d",
 			pr.PID(), m.Path, m.FileOffset)
 		return libpf.FrameMapping{}, anonymousMappingsWanted, errInvalidVirtualAddress
 	}
@@ -633,10 +633,8 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	numParseErrors, err := pr.IterateMappings(func(m process.RawMapping) bool {
 		if processcontext.IsContextMapping(m.IsExecutable(), m.Path) {
 			processContextInfo = readProcessContext(m.Vaddr, pr, oldProcessContextInfo)
-			// Even if process context is not found, it might be published in the future.
-			// For now, we rely on a new call to synchronizeMappings to pick it up.
-			// TODO: Add some kind of polling mechanism or a hook on prctl to be notified
-			// when the process context is published.
+			// The eBPF hook on prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME) will trigger a
+			// PID resynchronization when the process names its context mapping "OTEL_CTX".
 		}
 
 		interpreterMapping := isInterpreterMapping(&m)
@@ -749,7 +747,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	collectAnonymousMappings = pm.processRemovedInterpreters(pid, interpretersValid)
 	if collectAnonymousMappings != previousAnonymousMappingsWanted {
 		if err := pm.updatePIDAnonymousMappingInterest(pid, collectAnonymousMappings); err != nil {
-			log.Errorf("Failed to update anonymous mapping interest for PID %d: %v", pid, err)
+			log.Debugf("Failed to update anonymous mapping interest for PID %d: %v", pid, err)
 		}
 	}
 	pm.mu.Unlock()
@@ -787,7 +785,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		err := instance.SynchronizeMappings(pm.ebpf, pm.exeReporter, pr, interpreterMappings.mappings())
 		if err != nil {
 			if alive, _ := isPIDLive(pid); alive {
-				log.Errorf("Failed to handle new anonymous mapping for PID %d: %v", pid, err)
+				log.Debugf("Failed to handle new anonymous mapping for PID %d: %v", pid, err)
 			} else {
 				log.Debugf("Failed to handle new anonymous mapping for PID %d: process exited",
 					pid)
@@ -867,8 +865,8 @@ func (pm *ProcessManager) CleanupPIDs() {
 	}
 }
 
-// MetaForPID returns the process metadata for given PID.
-func (pm *ProcessManager) MetaForPID(pid libpf.PID) process.ProcessMeta {
+// metaForPID returns the process metadata for given PID.
+func (pm *ProcessManager) metaForPID(pid libpf.PID) process.ProcessMeta {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	if procInfo, ok := pm.pidToProcessInfo[pid]; ok {
@@ -967,7 +965,7 @@ func readProcessContext(mappingAddr uint64, pr process.Process, oldProcessContex
 	if errors.Is(err, processcontext.ErrConcurrentUpdate) {
 		// If the context cannot be read because of a concurrent update, keep the resource and thread context since they are immutable,
 		// but discard the extra attributes as they may be stale.
-		oldProcessContextInfo.ClearExtraAttributes()
+		oldProcessContextInfo.ClearAttributes()
 		return oldProcessContextInfo
 	}
 

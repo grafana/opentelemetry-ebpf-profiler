@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
+	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/pyroscope/dynamicprofiling"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
@@ -32,6 +33,7 @@ const (
 	defaultArgSendErrorFrames     = false
 	defaultOffCPUThreshold        = 0
 	defaultEnvVarsValue           = ""
+	defaultArgFrameCacheSize      = pm.DefaultFrameCacheSize
 	defaultBPFFSRoot              = "/sys/fs/bpf/"
 
 	// This is the X in 2^(n + x) where n is the default hardcoded map size value
@@ -73,14 +75,18 @@ var (
 	clockSyncIntervalHelp = "Set the sync interval with the realtime clock. " +
 		"If zero, monotonic-realtime clock sync will be performed once, " +
 		"on agent startup, but not periodically."
-	sendErrorFramesHelp = "Send error frames (devfiler only, breaks Kibana)"
-	sendIdleFramesHelp  = "Unwind and report idle states of the Linux kernel."
+	sendErrorFramesHelp     = "Send error frames (devfiler only, breaks Kibana)"
+	sendIdleFramesHelp      = "Unwind and report idle states of the Linux kernel."
+	filterMinProcessAgeHelp = "Skip samples from processes younger than this minimum age. " +
+		"Set to 0 to disable minimum process age filtering."
 	offCPUThresholdHelp = fmt.Sprintf("The probability for an off-cpu event being recorded. "+
 		"Valid values are in the range [0..1]. 0 disables off-cpu profiling. "+
 		"Default is %d.",
 		defaultOffCPUThreshold)
 	envVarsHelp = "Comma separated list of environment variables that will be reported with the" +
 		"captured profiling samples."
+	frameCacheSizeHelp = fmt.Sprintf("Set the maximum number of entries in the frame cache. "+
+		"Default is %d.", defaultArgFrameCacheSize)
 	probeLinkHelper = "Attach a probe to a symbol of an executable. " +
 		"Expected format: probe_type:target[:symbol]. probe_type can be kprobe, kretprobe, uprobe, or uretprobe."
 	loadProbeHelper = "Load generic eBPF program that can be attached externally to " +
@@ -88,6 +94,11 @@ var (
 	bpffsHelp = fmt.Sprintf("Set the root BPF FS path for pinned maps. Only used for OBI span/trace ID communication. Default is %s",
 		defaultBPFFSRoot)
 	obiProcessCtxHelp = "Load or create a pinned eBPF map for sharing process context information with OBI."
+	pinnedCPUIDsHelp  = "Range of CPUs to profile in the format like \"0-15,20,31\". Only for on-CPU sampling. " +
+		"WARNING: This filter is effective only if your target workloads (processes, IRQ handlers, etc.) " +
+		"are explicitly pinned to provided CPUs. " +
+		"In non-pinned environments, profiling a subset of CPUs will produce biased or incomplete results. " +
+		"For profiling specific applications, consider using sidecar deployments or custom probes instead."
 )
 
 // Package-scope variable, so that conditionally compiled other components can refer
@@ -108,6 +119,11 @@ func parseArgs() (*controller.Config, error) {
 
 	fs.BoolVar(&args.DisableTLS, "disable-tls", false, disableTLSHelp)
 
+	fs.DurationVar(&args.FilterMinProcessAge, "filter-min-process-age", 0, filterMinProcessAgeHelp)
+
+	fs.UintVar(&args.FrameCacheSize, "frame-cache-size",
+		uint(defaultArgFrameCacheSize), frameCacheSizeHelp)
+
 	fs.UintVar(&args.MapScaleFactor, "map-scale-factor",
 		defaultArgMapScaleFactor, mapScaleFactorHelp)
 
@@ -119,6 +135,15 @@ func parseArgs() (*controller.Config, error) {
 
 	fs.BoolVar(&args.NoKernelVersionCheck, "no-kernel-version-check", false,
 		noKernelVersionCheckHelp)
+
+	fs.Func("pin-cpu-ids", pinnedCPUIDsHelp, func(cpuRange string) error {
+		CPUIDs, err := tracer.ReadCPURange(cpuRange)
+		if err != nil {
+			return fmt.Errorf("failed to parse pinned CPUs range '%s': %v", cpuRange, err)
+		}
+		args.PinnedCPUIDs = CPUIDs
+		return nil
+	})
 
 	fs.StringVar(&args.PprofAddr, "pprof", "", pprofHelp)
 
@@ -229,6 +254,9 @@ func parseTracers(tracers string) (interpreterconfig.Config, error) {
 			cfg.Go.Labels.Disabled = false
 		case "beam":
 			cfg.BEAM.Disabled = false
+		case "luajit":
+			log.Warn("The LuaJIT interpreter is incomplete and may not work properly")
+			cfg.LuaJIT.Disabled = false
 		case "native":
 			log.Warn("Enabling the `native` tracer explicitly is deprecated (it's always-on)")
 		case "":
