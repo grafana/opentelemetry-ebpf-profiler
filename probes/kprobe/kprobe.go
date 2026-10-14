@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	cebpf "github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/link"
 
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
@@ -19,10 +18,10 @@ import (
 
 const progName = "kprobe__generic"
 
-// Config holds the YAML configuration for the kprobe probe.
+// Config holds the YAML configuration for the kprobe extension.
 //
-//	probes:
-//	  - type: kprobe
+//	extensions:
+//	  kprobe/vfs_open:
 //	    mode: kprobe        # kprobe (default) | kretprobe | uprobe | uretprobe
 //	    symbol: vfs_open
 //	    target: ""          # executable path; required for uprobe/uretprobe
@@ -36,33 +35,23 @@ type probe struct {
 	spec *tracer.ProbeSpec
 }
 
-// New validates cfg and returns a Probe backed by the generic unwinder program.
-// Mode defaults to "kprobe" when omitted. Symbol is always required. Target is
-// required for uprobe/uretprobe. The caller is responsible for decoding the raw
-// YAML value into Config.
-func New(cfg Config) (*probe, error) {
-	if cfg.Mode == "" {
-		cfg.Mode = "kprobe"
+// Validate implements confmap.Validator.
+func (c *Config) Validate() error {
+	if c.Symbol == "" {
+		return fmt.Errorf("kprobe: symbol is required")
 	}
-	if cfg.Symbol == "" {
-		return nil, fmt.Errorf("kprobe: symbol is required")
+	mode := c.Mode
+	if mode == "" {
+		mode = "kprobe"
 	}
-
-	probeMode, err := parseProbeMode(cfg.Mode)
+	probeMode, err := parseProbeMode(mode)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	if (probeMode == tracer.ProbeModeUprobe || probeMode == tracer.ProbeModeUretprobe) && cfg.Target == "" {
-		return nil, fmt.Errorf("kprobe: target is required for %s", cfg.Mode)
+	if (probeMode == tracer.ProbeModeUprobe || probeMode == tracer.ProbeModeUretprobe) && c.Target == "" {
+		return fmt.Errorf("kprobe: target is required for %s", mode)
 	}
-
-	spec := &tracer.ProbeSpec{
-		Mode:   probeMode,
-		Symbol: cfg.Symbol,
-		Target: cfg.Target,
-	}
-	return &probe{spec: spec}, nil
+	return nil
 }
 
 func parseProbeMode(s string) (tracer.ProbeMode, error) {
@@ -80,51 +69,56 @@ func parseProbeMode(s string) (tracer.ProbeMode, error) {
 	}
 }
 
-func (g *probe) Load(_ context.Context, reg tracer.ProbeRegistrar, ctx *tracer.ProbeContext) (link.Link, error) {
+func (g *probe) Load(_ context.Context, reg tracer.ProbeRegistrar, probeCtx *tracer.ProbeContext) error {
 	originID, err := reg.Register(&samples.TypeMetadata{
 		SampleType: "events",
 		SampleUnit: "count",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("registering probe origin: %w", err)
+		return fmt.Errorf("registering probe origin: %w", err)
 	}
 
-	coll, err := ctx.CollectionSpecWith(
+	coll, err := probeCtx.CollectionSpecWith(
 		nil,
 		[]string{progName},
 		[]string{"origin_id_probe"},
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	v, ok := coll.Variables["origin_id_probe"]
 	if !ok {
-		return nil, fmt.Errorf("origin_id_probe variable not found in collection spec")
+		return fmt.Errorf("origin_id_probe variable not found in collection spec")
 	}
 	if err := v.Set(originID); err != nil {
-		return nil, err
+		return err
 	}
 
-	if err := ctx.RewriteMaps(coll, nil); err != nil {
-		return nil, err
+	if err := probeCtx.RewriteMaps(coll, nil); err != nil {
+		return err
 	}
 
 	ebpfProgs := make(map[string]*cebpf.Program)
-	if err := ctx.LoadProbeUnwinders(coll, ebpfProgs, []tracer.ProgLoaderHelper{
+	if err := probeCtx.LoadProbeUnwinders(coll, ebpfProgs, []tracer.ProgLoaderHelper{
 		{
 			Name:             progName,
 			NoTailCallTarget: true,
 			Enable:           true,
 		},
 	}, 0); err != nil {
-		return nil, err
+		return err
 	}
 
 	prog, ok := ebpfProgs[progName]
 	if !ok {
-		return nil, fmt.Errorf("program %q not found after loading", progName)
+		return fmt.Errorf("program %q not found after loading", progName)
 	}
 
-	return tracer.AttachProbe(prog, g.spec)
+	lnk, err := tracer.AttachProbe(prog, g.spec)
+	if err != nil {
+		return err
+	}
+	probeCtx.AddLink(lnk)
+	return nil
 }

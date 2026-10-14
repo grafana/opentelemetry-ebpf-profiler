@@ -26,9 +26,11 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/elastic/go-perf"
+
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
@@ -143,14 +145,17 @@ type Tracer struct {
 	// to custom probes via Enable so they can reference the same layout.
 	sysConfigVars SysConfigVars
 
-	// kprobeChainLoaded records whether the kprobe tail-call unwinder chain was
-	// loaded at startup. Enable requires this; without it a custom probe's tail
-	// calls into kprobe_progs silently miss at runtime.
-	kprobeChainLoaded bool
-
 	// origins is the tracer-wide registry origin IDs are assigned from and
 	// profile type metadata is looked up by.
 	origins *originRegistry
+
+	// preTraceHandlers maps origin ID to pre-trace handlers registered for
+	// that origin. Only traces with a matching origin are dispatched.
+	preTraceHandlers map[uint16][]PreTraceHandler
+
+	// postTraceHandlers maps origin ID to post-trace handlers registered for
+	// that origin. Only traces with a matching origin are dispatched.
+	postTraceHandlers map[uint16][]PostTraceHandler
 
 	// done is closed when the tracer encounters an unrecoverable error.
 	// Use Done() to obtain a read-only channel for use in select statements.
@@ -204,19 +209,17 @@ type Config struct {
 	ProbabilisticInterval time.Duration
 	// ProbabilisticThreshold is the threshold for probabilistic profiling.
 	ProbabilisticThreshold uint
-	// OffCPUThreshold is the user defined threshold for off-cpu profiling.
-	OffCPUThreshold uint32
-	Policy          dynamicprofiling.Policy
+	Policy                 dynamicprofiling.Policy
 	// IncludeEnvVars holds a list of environment variables that should be captured and reported
 	// from processes
 	IncludeEnvVars libpf.Set[string]
-	// LoadProbe indicates whether the generic eBPF program should be loaded
-	// without being attached to something.
-	LoadProbe bool
 	// BPFFSRoot is the root path to BPF filesystem for pinned maps and programs.
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
 	OBIProcessCtx bool
+	// ProcessMetaEnrichers are optional hooks for enriching process metadata at
+	// process discovery time. Multiple enrichers are called in order.
+	ProcessMetaEnrichers []process.MetaEnricher
 	// PIDNamespaceTranslation toggles translation of host-level PIDs/TGIDs into
 	// their container-namespace equivalents. Useful for sidecar deployments where
 	// the profiler and the target application share a PID namespace but not host PIDs.
@@ -304,6 +307,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		FilterErrorFrames:     cfg.FilterErrorFrames,
 		Policy:                cfg.Policy,
 		IncludeEnvVars:        cfg.IncludeEnvVars,
+		ProcessMetaEnrichers:  cfg.ProcessMetaEnrichers,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
@@ -328,7 +332,8 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		done:                   make(chan libpf.Void),
 		origins:                origins,
 		sysConfigVars:          sysConfigVars,
-		kprobeChainLoaded:      kprobeChainRequired(cfg),
+		preTraceHandlers:       make(map[uint16][]PreTraceHandler),
+		postTraceHandlers:      make(map[uint16][]PostTraceHandler),
 	}
 
 	return tracer, nil
@@ -356,13 +361,6 @@ func (t *Tracer) Close() {
 	t.processManager.Close()
 	t.kernelSymbolizer.Close()
 	t.signalDone()
-}
-
-// kprobeChainRequired reports whether the kprobe tail-call unwinder chain must be loaded.
-// It is the single source of truth consulted both during initialization and when recording
-// kprobeChainLoaded on the Tracer.
-func kprobeChainRequired(cfg *Config) bool {
-	return cfg.OffCPUThreshold > 0 || cfg.LoadProbe
 }
 
 // initializeMapsAndPrograms loads the definitions for the eBPF maps and programs provided
@@ -443,66 +441,19 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config, origins *orig
 	}
 
 	tailCallProgs := []ProgLoaderHelper{
-		{
-			ProgID: uint32(support.ProgUnwindStop),
-			Name:   "unwind_stop",
-			Enable: true,
-		},
-		{
-			ProgID: uint32(support.ProgUnwindNative),
-			Name:   "unwind_native",
-			Enable: true,
-		},
-		{
-			ProgID: uint32(support.ProgUnwindHotspot),
-			Name:   "unwind_hotspot",
-			Enable: !cfg.InterpretersConfig.Hotspot.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindPerl),
-			Name:   "unwind_perl",
-			Enable: !cfg.InterpretersConfig.Perl.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindPHP),
-			Name:   "unwind_php",
-			Enable: !cfg.InterpretersConfig.PHP.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindPython),
-			Name:   "unwind_python",
-			Enable: !cfg.InterpretersConfig.Python.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindRuby),
-			Name:   "unwind_ruby",
-			Enable: !cfg.InterpretersConfig.Ruby.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindV8),
-			Name:   "unwind_v8",
-			Enable: !cfg.InterpretersConfig.V8.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindDotnet),
-			Name:   "unwind_dotnet",
-			Enable: !cfg.InterpretersConfig.Dotnet.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindDotnet10),
-			Name:   "unwind_dotnet10",
-			Enable: !cfg.InterpretersConfig.Dotnet.IsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgGoLabels),
-			Name:   "go_labels",
-			Enable: !cfg.InterpretersConfig.Go.IsLabelsDisabled(),
-		},
-		{
-			ProgID: uint32(support.ProgUnwindBEAM),
-			Name:   "unwind_beam",
-			Enable: !cfg.InterpretersConfig.BEAM.IsDisabled(),
-		},
+		{ProgID: uint32(support.ProgUnwindStop), Name: "unwind_stop", Enable: true},
+		{ProgID: uint32(support.ProgUnwindNative), Name: "unwind_native", Enable: true},
+	}
+	for _, l := range cfg.InterpretersConfig.Loaders() {
+		for _, r := range l.Resources() {
+			if r.ProgName != "" {
+				tailCallProgs = append(tailCallProgs, ProgLoaderHelper{
+					ProgID: r.ProgID,
+					Name:   r.ProgName,
+					Enable: true,
+				})
+			}
+		}
 	}
 
 	if err = loadPerfUnwinders(coll, ebpfProgs, ebpfMaps["perf_progs"], tailCallProgs,
@@ -510,36 +461,14 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config, origins *orig
 		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if kprobeChainRequired(cfg) {
-		// Load the tail call destinations if any kind of event profiling is enabled.
-		// loadProbeUnwinders repoints the probe unwinder's per_cpu_records references
-		// to per_cpu_records_kp so a perf sampler can't clobber an in-flight uprobe unwind;
-		// the perf unwinder keeps per_cpu_records.
-		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
-			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
-			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
-		}
-	}
-
-	if cfg.OffCPUThreshold > 0 {
-		offCPUProgs := []ProgLoaderHelper{
-			{
-				Name:             "finish_task_switch",
-				NoTailCallTarget: true,
-				Enable:           true,
-			},
-			{
-				Name:             "tracepoint__sched_switch",
-				NoTailCallTarget: true,
-				Enable:           true,
-			},
-		}
-		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], offCPUProgs,
-			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
-			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
-		}
+	// Load the tail call destinations so custom probes can use it.
+	// loadProbeUnwinders repoints the probe unwinder's per_cpu_records references
+	// to per_cpu_records_kp so a perf sampler can't clobber an in-flight uprobe unwind;
+	// the perf unwinder keeps per_cpu_records.
+	if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
+		cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
+		ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 	}
 
 	if err = removeTemporaryMaps(ebpfMaps); err != nil {
@@ -702,8 +631,6 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 
 	adaption["stack_delta_page_to_info"] = 1 << uint32(stackDeltaPageToInfoSize+cfg.MapScaleFactor)
 
-	adaption["sched_times"] = schedTimesSize(cfg.OffCPUThreshold)
-
 	// Allow for 1s of 'burst' trace data (sizing by Trace length worst-case)
 	// TODO: Base this on present CPUs instead, as runtime.NumCPU is fixed for the lifetime
 	// of the process?
@@ -718,8 +645,8 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	noPrealloc := probeNoPrealloc()
 
 	for mapName, mapSpec := range coll.Maps {
-		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
-			// Off CPU Profiling is disabled. So do not load this map.
+		if mapName == "sched_times" {
+			// sched_times is owned by the off-CPU probe and created there on demand.
 			continue
 		}
 		if mapName == obiSpanTracesMap {
@@ -787,25 +714,6 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	return nil
-}
-
-// schedTimesSize calculates the size of the sched_times map based on the
-// configured off-cpu threshold.
-// To not lose too many scheduling events but also not oversize sched_times,
-// calculate a size based on an assumed upper bound of scheduler events per
-// second (1000hz) multiplied by an average time a task remains off CPU (3s),
-// scaled by the probability of capturing a trace.
-func schedTimesSize(threshold uint32) uint32 {
-	size := uint32((4096 * uint64(threshold)) / math.MaxUint32)
-	if size < 16 {
-		// Guarantee a minimal size of 16.
-		return 16
-	}
-	if size > 4096 {
-		// Guarantee a maximum size of 4096.
-		return 4096
-	}
-	return size
 }
 
 // loadPerfUnwinders loads all perf eBPF Programs and their tail call targets.
@@ -1012,7 +920,7 @@ func (t *Tracer) monitorPIDEventsMap(keys *[]libpf.PIDTID) error {
 		}
 
 		if err != nil {
-			return fmt.Errorf("Failed to batch lookup and delete entries from pid_events map: %v", err)
+			return fmt.Errorf("failed to batch lookup and delete entries from pid_events map: %v", err)
 		}
 	}
 
@@ -1201,12 +1109,14 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libp
 	// calculate and store delta values.
 	previousMetricValue := make([]metrics.MetricValue, len(translateIDs))
 
-	periodiccaller.Start(ctx, t.intervals.MonitorInterval(), func() {
-		metrics.AddSlice(eventMetricCollector())
-		metrics.AddSlice(traceEventMetricCollector())
-		metrics.AddSlice(t.eBPFMetricsCollector(translateIDs, previousMetricValue))
-		metrics.AddSlice(t.customLabels.getAndResetMetrics())
-	})
+	if metrics.Enabled() {
+		periodiccaller.Start(ctx, t.intervals.MonitorInterval(), func() {
+			metrics.AddSlice(eventMetricCollector())
+			metrics.AddSlice(traceEventMetricCollector())
+			metrics.AddSlice(t.eBPFMetricsCollector(translateIDs, previousMetricValue))
+			metrics.AddSlice(t.customLabels.getAndResetMetrics())
+		})
+	}
 
 	return nil
 }
@@ -1344,88 +1254,23 @@ func (t *Tracer) StartProbabilisticProfiling(ctx context.Context) {
 	})
 }
 
-// StartOffCPUProfiling starts off-cpu profiling by attaching the programs to the hooks.
-func (t *Tracer) StartOffCPUProfiling() error {
-	// Attach the second hook for off-cpu profiling first.
-	kprobeProg, ok := t.ebpfProgs["finish_task_switch"]
-	if !ok {
-		return errors.New("off-cpu program finish_task_switch is not available")
-	}
-
-	kmod, err := t.kernelSymbolizer.Snapshot().GetModuleByName(kallsyms.Kernel)
-	if err != nil {
-		return err
-	}
-
-	hookSymbolPrefix := "finish_task_switch"
-	kprobeSymbs := kmod.LookupSymbolsByPrefix(hookSymbolPrefix)
-	if len(kprobeSymbs) == 0 {
-		return errors.New("no finish_task_switch symbols found")
-	}
-
-	attached := false
-	// Attach to all symbols with the prefix finish_task_switch.
-	for _, symb := range kprobeSymbs {
-		kprobeLink, linkErr := link.Kprobe(string(symb.Name), kprobeProg, nil)
-		if linkErr != nil {
-			log.Warnf("Failed to attach to %s: %v", symb.Name, linkErr)
-			continue
-		}
-		attached = true
-		h := t.hooks.WLock()
-		h.m[hookPoint{group: "kprobe", name: string(symb.Name)}] = kprobeLink
-		t.hooks.WUnlock(&h)
-	}
-	if !attached {
-		return fmt.Errorf("failed to attach to one of %d symbols with prefix '%s'",
-			len(kprobeSymbs), hookSymbolPrefix)
-	}
-
-	// Attach the first hook that enables off-cpu profiling.
-	tpProg, ok := t.ebpfProgs["tracepoint__sched_switch"]
-	if !ok {
-		return errors.New("tracepoint__sched_switch is not available")
-	}
-	tpLink, err := link.Tracepoint("sched", "sched_switch", tpProg, nil)
-	if err != nil {
-		return fmt.Errorf("failed to attach sched_switch tracepoint: %w", err)
-	}
-	h := t.hooks.WLock()
-	h.m[hookPoint{group: "sched", name: "sched_switch"}] = tpLink
-	t.hooks.WUnlock(&h)
-
-	return nil
-}
-
-func (t *Tracer) AttachProbes(probes []string) error {
-	for _, probeStr := range probes {
-		probeSpec, err := ParseProbe(probeStr)
-		if err != nil {
-			return err
-		}
-
-		uProbeProg, ok := t.ebpfProgs[probeSpec.ProgName]
-		if !ok {
-			return fmt.Errorf("%s is not available", probeSpec.ProgName)
-		}
-
-		probeLink, err := AttachProbe(uProbeProg, probeSpec)
-		if err != nil {
-			return err
-		}
-
-		h := t.hooks.WLock()
-		h.m[hookPoint{group: probeSpec.Mode.String(), name: probeStr}] = probeLink
-		t.hooks.WUnlock(&h)
-	}
-	return nil
-}
-
 func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {
-	t.processManager.HandleTrace(bpfTrace, t.origins.lookup(bpfTrace.Origin))
+	// Pre-handlers gated by origin may consume traces before symbolization.
+	for _, h := range t.preTraceHandlers[bpfTrace.Origin] {
+		if !h.PreHandleTrace(bpfTrace) {
+			t.tracePool.Put(bpfTrace)
+			return
+		}
+	}
 
-	// Reclaim the EbpfTrace
+	origin := bpfTrace.Origin
+	trace := t.processManager.HandleTrace(bpfTrace, t.origins.lookup(origin))
 	t.tracePool.Put(bpfTrace)
+
+	// Post-handlers gated by origin receive the symbolized result.
+	for _, h := range t.postTraceHandlers[origin] {
+		h.PostHandleTrace(trace)
+	}
 }
 
 // originRegistry is the tracer-wide registry origin IDs are assigned from
@@ -1440,7 +1285,7 @@ type originRegistry struct {
 	types sync.Map
 }
 
-// register hands out a fresh origin ID and stores metadata for it, keyed by
+// Register hands out a fresh origin ID and stores metadata for it, keyed by
 // that ID.
 func (r *originRegistry) Register(metadata *samples.TypeMetadata) (uint16, error) {
 	if last := r.lastID.Load(); last >= math.MaxUint16 {
