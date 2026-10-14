@@ -29,6 +29,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/internal/perfutil"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -58,6 +59,60 @@ const (
 	// threshold.
 	ProbabilisticThresholdMax = 100
 )
+
+// PIDNamespaceTranslationMode controls which PID namespaces are translated.
+type PIDNamespaceTranslationMode uint8
+
+const (
+	// PIDNamespaceTranslationModeNone disables PID namespace translation.
+	PIDNamespaceTranslationModeNone PIDNamespaceTranslationMode = iota
+	// PIDNamespaceTranslationModeAuto translates nested namespaces recursively when the required kernel BTF is available.
+	PIDNamespaceTranslationModeAuto
+	// PIDNamespaceTranslationModeExact translates tasks in the profiler's PID namespace.
+	PIDNamespaceTranslationModeExact
+	// PIDNamespaceTranslationModeRecursive also translates tasks in descendant PID namespaces.
+	PIDNamespaceTranslationModeRecursive
+)
+
+func (m *PIDNamespaceTranslationMode) UnmarshalText(text []byte) error {
+	mode := strings.ToLower(string(text))
+	switch mode {
+	case "none", "":
+		*m = PIDNamespaceTranslationModeNone
+	case "auto":
+		*m = PIDNamespaceTranslationModeAuto
+	case "exact":
+		*m = PIDNamespaceTranslationModeExact
+	case "recursive":
+		*m = PIDNamespaceTranslationModeRecursive
+	default:
+		return fmt.Errorf("unknown PID namespace translation mode %q", mode)
+	}
+	return nil
+}
+
+func (m PIDNamespaceTranslationMode) String() string {
+	switch m {
+	case PIDNamespaceTranslationModeNone:
+		return "none"
+	case PIDNamespaceTranslationModeAuto:
+		return "auto"
+	case PIDNamespaceTranslationModeExact:
+		return "exact"
+	case PIDNamespaceTranslationModeRecursive:
+		return "recursive"
+	default:
+		return fmt.Sprintf("unknown(%d)", m)
+	}
+}
+
+// Validate checks whether the PIDNamespaceTranslationMode is valid.
+func (m PIDNamespaceTranslationMode) Validate() error {
+	if m > PIDNamespaceTranslationModeRecursive {
+		return fmt.Errorf("unknown mode %d", m)
+	}
+	return nil
+}
 
 // Constants that define the status of probabilistic profiling.
 const (
@@ -102,6 +157,13 @@ type Tracer struct {
 
 	// perfEntrypoints holds a list of frequency based perf events that are opened on the system.
 	perfEntrypoints xsync.RWMutex[[]*perf.Event]
+
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	mmapEventOnce   func() error
+	// mmapEventMu serializes lazy monitor startup with Close.
+	mmapEventMu sync.Mutex
+	mmapReader  *perfutil.PerfSidebandReader
 
 	// hooks holds references to loaded eBPF hooks.
 	hooks xsync.RWMutex[hooksState]
@@ -220,10 +282,10 @@ type Config struct {
 	// ProcessMetaEnrichers are optional hooks for enriching process metadata at
 	// process discovery time. Multiple enrichers are called in order.
 	ProcessMetaEnrichers []process.MetaEnricher
-	// PIDNamespaceTranslation toggles translation of host-level PIDs/TGIDs into
-	// their container-namespace equivalents. Useful for sidecar deployments where
-	// the profiler and the target application share a PID namespace but not host PIDs.
-	PIDNamespaceTranslation bool
+	// PIDNamespaceTranslationMode controls the scope of PID namespace translation.
+	// It supports None (disabled, default), Auto (translates recursively when kernel BTF
+	// layout is available, otherwise Exact), Exact, and Recursive (requires BTF).
+	PIDNamespaceTranslationMode PIDNamespaceTranslationMode
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -294,7 +356,8 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
 
-	processManager, err := pm.New(ctx, pm.Config{
+	lifecycleCtx, lifecycleCancel := context.WithCancel(ctx)
+	processManager, err := pm.New(lifecycleCtx, pm.Config{
 		InterpretersConfig:    cfg.InterpretersConfig,
 		MonitorInterval:       cfg.Intervals.MonitorInterval(),
 		ExecutableUnloadDelay: cfg.Intervals.ExecutableUnloadDelay(),
@@ -310,12 +373,15 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		ProcessMetaEnrichers:  cfg.ProcessMetaEnrichers,
 	})
 	if err != nil {
+		lifecycleCancel()
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
 
 	perfEventList := []*perf.Event{}
 
 	tracer := &Tracer{
+		lifecycleCtx:           lifecycleCtx,
+		lifecycleCancel:        lifecycleCancel,
 		kernelSymbolizer:       kernelSymbolizer,
 		processManager:         processManager,
 		triggerPIDProcessing:   make(chan bool, 1),
@@ -335,6 +401,9 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		preTraceHandlers:       make(map[uint16][]PreTraceHandler),
 		postTraceHandlers:      make(map[uint16][]PostTraceHandler),
 	}
+	tracer.mmapEventOnce = sync.OnceValue(func() error {
+		return tracer.startMmapEventMonitor(tracer.lifecycleCtx)
+	})
 
 	return tracer, nil
 }
@@ -342,6 +411,17 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 // Close provides functionality for Tracer to perform cleanup tasks.
 // NOTE: Close may be called multiple times in succession.
 func (t *Tracer) Close() {
+	if t.lifecycleCancel != nil {
+		t.lifecycleCancel()
+	}
+	// Ensure startup has registered the reader before tearing it down. If it
+	// started, its goroutines observe the canceled lifecycle context above.
+	t.mmapEventMu.Lock()
+	if t.mmapReader != nil {
+		t.mmapReader.Close()
+	}
+	t.mmapEventMu.Unlock()
+
 	events := t.perfEntrypoints.WLock()
 	terminatePerfEvents(*events)
 	*events = nil
@@ -634,7 +714,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// Allow for 1s of 'burst' trace data (sizing by Trace length worst-case)
 	// TODO: Base this on present CPUs instead, as runtime.NumCPU is fixed for the lifetime
 	// of the process?
-	ringbufSize := uint64(cfg.SamplesPerSecond * runtime.NumCPU() * support.Sizeof_Trace)
+	ringbufSize := uint64(cfg.SamplesPerSecond * runtime.NumCPU() * support.Sizeof_TraceWithData)
 	adaption["trace_events"] = uint32(min(util.NextPowerOfTwo(ringbufSize), 1<<31))
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
@@ -992,18 +1072,17 @@ var (
 
 // loadBpfTrace parses a raw BPF trace into a `host.Trace` instance.
 func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
-	frameListOffs := int(unsafe.Offsetof(support.Trace{}.Frame_data))
-
-	if len(raw) < frameListOffs {
-		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs, errRecordTooSmall)
+	traceHeaderSize := int(support.Sizeof_TraceHeader)
+	if len(raw) < traceHeaderSize {
+		return nil, fmt.Errorf("%d < %d: %w", len(raw), traceHeaderSize, errRecordTooSmall)
 	}
 
-	ptr := traceFromRaw(raw)
+	ptr := (*support.Trace)(unsafe.Pointer(unsafe.SliceData(raw)))
 	frameDataLen := int(ptr.Frame_data_len) * 8
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
-	if len(raw) < frameListOffs+frameDataLen {
-		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs+frameDataLen,
+	if len(raw) < traceHeaderSize+frameDataLen {
+		return nil, fmt.Errorf("%d < %d: %w", len(raw), traceHeaderSize+frameDataLen,
 			errRecordUnexpectedSize)
 	}
 
@@ -1055,7 +1134,8 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	trace.FrameData = trace.FrameDataBuf[:frameDataWords]
 	// Kernel frames are raw addresses at the front of FrameData. The process
 	// manager splits and symbolizes them so all frame processing shares one cache.
-	copy(trace.FrameData, ptr.Frame_data[:frameDataWords])
+	frameData := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(raw[traceHeaderSize:]))), frameDataWords)
+	copy(trace.FrameData, frameData)
 
 	return trace, nil
 }

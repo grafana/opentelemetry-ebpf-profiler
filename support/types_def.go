@@ -106,12 +106,14 @@ type Event C.Event
 type OffsetRange C.OffsetRange
 type PIDPage C.PIDPage
 type PIDPageMappingInfo C.PIDPageMappingInfo
+type PIDNamespaceLayout C.PIDNamespaceLayout
 type StackDelta C.StackDelta
 type StackDeltaPageInfo C.StackDeltaPageInfo
 type StackDeltaPageKey C.StackDeltaPageKey
 type SystemAnalysis C.SystemAnalysis
 type TSDInfo C.TSDInfo
 type DTVInfo C.DTVInfo
+type TLSVarInfo C.TLSVarInfo
 type Trace C.Trace
 type UnwindInfo C.UnwindInfo
 
@@ -124,16 +126,19 @@ type PHPProcInfo C.PHPProcInfo
 type PerlProcInfo C.PerlProcInfo
 type PyProcInfo C.PyProcInfo
 type RubyProcInfo C.RubyProcInfo
+type ThreadContextProcInfo C.ThreadContextProcInfo
 type V8ProcInfo C.V8ProcInfo
 
 const (
-	Sizeof_StackDelta = C.sizeof_StackDelta
-	Sizeof_Trace      = C.sizeof_Trace
+	Sizeof_StackDelta    = C.sizeof_StackDelta
+	Sizeof_TraceHeader   = C.sizeof_Trace
+	Sizeof_TraceWithData = C.sizeof_Trace + C.sizeof_TraceFrameData
 
-	sizeof_ApmIntProcInfo = C.sizeof_ApmIntProcInfo
-	sizeof_DotnetProcInfo = C.sizeof_DotnetProcInfo
-	sizeof_PHPProcInfo    = C.sizeof_PHPProcInfo
-	sizeof_RubyProcInfo   = C.sizeof_RubyProcInfo
+	sizeof_ApmIntProcInfo        = C.sizeof_ApmIntProcInfo
+	sizeof_DotnetProcInfo        = C.sizeof_DotnetProcInfo
+	sizeof_PHPProcInfo           = C.sizeof_PHPProcInfo
+	sizeof_RubyProcInfo          = C.sizeof_RubyProcInfo
+	sizeof_ThreadContextProcInfo = C.sizeof_ThreadContextProcInfo
 )
 
 const (
@@ -165,6 +170,7 @@ const (
 	UnwindCommandSignal       int32 = C.UNWIND_COMMAND_SIGNAL
 	UnwindCommandFramePointer int32 = C.UNWIND_COMMAND_FRAME_POINTER
 	UnwindCommandGoAsmcgocall int32 = C.UNWIND_COMMAND_GO_ASMCGOCALL
+	UnwindCommandGoMorestack  int32 = C.UNWIND_COMMAND_GO_MORESTACK
 
 	// UnwindDeref handling from the C header file
 	UnwindDerefMask       int32 = C.UNWIND_DEREF_MASK
@@ -318,4 +324,8 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindGoAsmcgocallAttempts:                 metrics.IDUnwindGoAsmcgocallAttempts,
 	C.metricID_UnwindGoAsmcgocallSuccess:                  metrics.IDUnwindGoAsmcgocallSuccess,
 	C.metricID_UnwindGoAsmcgocallUnwindFailure:            metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	C.metricID_UnwindThreadContextErrReadTlsPtr:           metrics.IDUnwindThreadContextErrReadTlsPtr,
+	C.metricID_UnwindThreadContextErrReadThreadCtxBuf:     metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	C.metricID_UnwindThreadContextReadSuccesses:           metrics.IDUnwindThreadContextReadSuccesses,
+	C.metricID_UnwindThreadContextAttrsTruncated:          metrics.IDUnwindThreadContextAttrsTruncated,
 }

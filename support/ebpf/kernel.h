@@ -62,8 +62,6 @@ typedef _Bool bool;
   #define NULL ((void *)0)
 #endif
 
-typedef int pid_t;
-
 typedef u32 __be32;
 typedef u64 __be64;
 
@@ -76,7 +74,7 @@ struct vm_area_struct;
 #define VM_EXEC 0x00000004UL
 
 // Defined in arch/{x86,arm64}/include/asm/ptrace.h
-#if defined(__x86_64)
+#if defined(__x86_64__)
 struct pt_regs {
   unsigned long r15;
   unsigned long r14;
@@ -100,6 +98,7 @@ struct pt_regs {
   unsigned long sp;
   unsigned long ss;
 };
+typedef struct pt_regs bpf_user_pt_regs_t;
 #elif defined(__aarch64__)
 struct pt_regs {
   u64 regs[31];
@@ -110,12 +109,19 @@ struct pt_regs {
   s32 syscallno;
   u32 unused2;
 };
+struct user_pt_regs {
+  u64 regs[31];
+  u64 sp;
+  u64 pc;
+  u64 pstate;
+};
+typedef struct user_pt_regs bpf_user_pt_regs_t;
 #else
   #error "Unsupported architecture"
 #endif
 
 struct bpf_perf_event_data {
-  struct pt_regs regs;
+  bpf_user_pt_regs_t regs;
 };
 
 // The following works with clang and gcc.
