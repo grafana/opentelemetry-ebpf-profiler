@@ -3,6 +3,7 @@
 
 #include "bpfdefs.h"
 #include "extmaps.h"
+#include "go_runtime.h"
 #include "tracemgmt.h"
 
 // Unwind info value for invalid stack delta
@@ -11,20 +12,6 @@
 
 // The number of native frames to unwind per frame-unwinding eBPF program.
 #define NATIVE_FRAMES_PER_PROGRAM 5
-
-// Record a native frame
-static EBPF_INLINE ErrorCode
-push_native(UnwindState *state, Trace *trace, u64 file, u64 line, bool return_address)
-{
-  const u8 ra_flag = return_address ? FRAME_FLAG_RETURN_ADDRESS : 0;
-
-  u64 *data = push_frame(state, trace, FRAME_MARKER_NATIVE, ra_flag, line, 1);
-  if (!data) {
-    return ERR_STACK_LENGTH_EXCEEDED;
-  }
-  data[0] = file;
-  return ERR_OK;
-}
 
 // A single step for the bsearch into the big_stack_deltas array. This is really a textbook bsearch
 // step, built in a way to update the value of *lo and *hi. This function will be called repeatedly
@@ -74,7 +61,7 @@ static EBPF_INLINE void *get_stack_delta_map(int mapID)
 static EBPF_INLINE ErrorCode get_stack_delta(UnwindState *state, int *addrDiff, u32 *unwindInfo)
 {
   unsigned long exe_id = state->text_section_id;
-  unsigned long offset = state->text_section_offset - (int)state->return_address;
+  unsigned long offset = state->text_section_offset - (unsigned long)state->return_address;
 
   // Look up the stack delta page information for this address.
   StackDeltaPageKey key = {};
@@ -119,7 +106,7 @@ static EBPF_INLINE ErrorCode get_stack_delta(UnwindState *state, int *addrDiff, 
 
     // Do the binary search, up to 16 iterations. Deltas are paged to 64kB pages.
     // They can contain at most 64kB deltas even if everything is single byte opcodes.
-    int i;
+    u64 i;
     for (i = 0; i < 16; i++) {
       if (!bsearch_step(inner_map, &lo, &hi, page_offset)) {
         break;
@@ -176,7 +163,7 @@ static EBPF_INLINE ErrorCode get_stack_delta(UnwindState *state, int *addrDiff, 
 // format "BASE_REG + param".
 static EBPF_INLINE u64 unwind_calc_register(UnwindState *state, u8 baseReg, s32 param)
 {
-  return state->regs[baseReg % (sizeof(state->regs) / sizeof(state->regs[0]))] + param;
+  return state->regs[baseReg % (sizeof(state->regs) / sizeof(state->regs[0]))] + (u64)(s64)param;
 }
 
 #if defined(__x86_64__)
@@ -187,7 +174,8 @@ static EBPF_INLINE u64 unwind_calc_register(UnwindState *state, u8 baseReg, s32 
 static EBPF_INLINE u64
 unwind_calc_register_with_deref(UnwindState *state, u8 baseReg, s32 param, bool deref)
 {
-  s32 preDeref = param, postDeref = 0;
+  s32 preDeref  = param;
+  u64 postDeref = 0;
 
   if (deref) {
     // For expressions that dereference the base expression, the parameter is constructed
@@ -204,7 +192,7 @@ unwind_calc_register_with_deref(UnwindState *state, u8 baseReg, s32 param, bool 
   }
 
   // Dereference, and add the postDereference adder.
-  unsigned long val;
+  u64 val;
   if (bpf_probe_read_user(&val, sizeof(val), (void *)addr)) {
     DEBUG_PRINT("unwind failed to dereference address 0x%lx", (unsigned long)addr);
     return 0;
@@ -229,8 +217,13 @@ unwind_calc_register_with_deref(UnwindState *state, u8 baseReg, s32 param, bool 
 // if the main ebpf unwinder should exit. This is the case if the current PC
 // is marked with UNWIND_COMMAND_STOP which marks entry points (main function,
 // thread spawn function, signal handlers, ...).
+//
+// delegate_command selects the flavor: NULL unwinds every command, non-NULL reports
+// STACK_DELTA_NATIVE_COMMAND_BIT commands through the flag instead, leaving state and
+// trace untouched so the caller can hand the frame to the fully capable flavor.
 #if defined(__x86_64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
+static EBPF_INLINE ErrorCode
+unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
 {
   *stop = false;
 
@@ -247,13 +240,33 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
   }
 
   if (unwindInfo & STACK_DELTA_COMMAND_FLAG) {
-    switch (unwindInfo & ~STACK_DELTA_COMMAND_FLAG) {
+    u32 command = unwindInfo & ~STACK_DELTA_COMMAND_FLAG;
+    if (command & STACK_DELTA_NATIVE_COMMAND_BIT) {
+      // Implemented by the native unwinder only. Callers that cannot afford the
+      // implementation inlined into them report the frame instead, which also keeps
+      // the bodies below out of their program.
+      if (delegate_command) {
+        *delegate_command = true;
+        return ERR_OK;
+      }
+      switch (command) {
+      case UNWIND_COMMAND_GO_MORESTACK: {
+        if (go_unwind_morestack(record, state) != ERR_OK) {
+          goto err_native_pc_read;
+        }
+        goto frame_ok;
+      }
+      default: return ERR_UNREACHABLE;
+      }
+    }
+
+    switch (command) {
     case UNWIND_COMMAND_PLT:
       // The toolchains routinely emit a fixed DWARF expression to unwind the full
       // PLT table with one expression to reduce .eh_frame size.
       // This is the hard coded implementation of this expression. For further details,
       // see https://hal.inria.fr/hal-02297690/document, page 4. (DOI: 10.1145/3360572)
-      cfa = state->sp + 8 + ((((state->pc & 15) >= 11) ? 1 : 0) << 3);
+      cfa = state->sp + 8UL + ((((state->pc & 15) >= 11) ? 1UL : 0UL) << 3);
       DEBUG_PRINT("PLT, cfa=0x%lx", (unsigned long)cfa);
       break;
     case UNWIND_COMMAND_SIGNAL: {
@@ -308,23 +321,23 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
 
     // Resolve the frame's CFA (previous PC is fixed to CFA) address, and
     // the previous FP address if any.
-    state->cfa = cfa = unwind_calc_register_with_deref(
-      state, info->baseReg, param, (info->flags & UNWIND_FLAG_DEREF_CFA) != 0);
-    u64 aux = unwind_calc_register(state, info->auxBaseReg, info->auxParam);
-
-    if (info->flags & UNWIND_FLAG_REGISTER_RA) {
-      // RA was recovered from a register (e.g. __vfork stores RA in %rdi).
-      // FP is not preserved across such calls, clear it for the next frame.
-      state->pc = aux;
-      state->fp = 0;
-      goto nonleaf_frame_ok;
-    }
+    bool deref = (info->flags & UNWIND_FLAG_DEREF_CFA) != 0;
+    u8 baseReg = info->baseReg & 0xf;
+    u8 raReg   = info->baseReg >> 4;
+    state->cfa = cfa = unwind_calc_register_with_deref(state, baseReg, param, deref);
+    u64 aux          = unwind_calc_register(state, info->auxBaseReg, info->auxParam);
 
     if (aux) {
       bpf_probe_read_user(&state->fp, sizeof(state->fp), (void *)aux);
-    } else if (info->baseReg == UNWIND_REG_FP) {
+    } else if (baseReg == UNWIND_REG_FP || raReg == UNWIND_REG_FP) {
       // FP used for recovery, but no new FP value received, clear FP
       state->fp = 0;
+    }
+
+    if (raReg != UNWIND_REG_INVALID) {
+      // RA was recovered from a register (e.g. __vfork stores RA in %rdi).
+      state->pc = unwind_calc_register(state, raReg, 0);
+      goto nonleaf_frame_ok;
     }
   }
 
@@ -341,7 +354,8 @@ frame_ok:
   return ERR_OK;
 }
 #elif defined(__aarch64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
+static EBPF_INLINE ErrorCode
+unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
 {
   *stop = false;
 
@@ -357,7 +371,36 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
   }
 
   if (unwindInfo & STACK_DELTA_COMMAND_FLAG) {
-    switch (unwindInfo & ~STACK_DELTA_COMMAND_FLAG) {
+    u32 command = unwindInfo & ~STACK_DELTA_COMMAND_FLAG;
+    if (command & STACK_DELTA_NATIVE_COMMAND_BIT) {
+      // Implemented by the native unwinder only. Callers that cannot afford the
+      // implementation inlined into them report the frame instead, which also keeps
+      // the bodies below out of their program.
+      if (delegate_command) {
+        *delegate_command = true;
+        return ERR_OK;
+      }
+      switch (command) {
+      case UNWIND_COMMAND_GO_ASMCGOCALL: {
+        error = go_unwind_asmcgocall(record, state);
+        if (error == ERR_OK) {
+          goto frame_ok;
+        }
+        DEBUG_PRINT("go asmcgocall unwind failed: %d", error);
+        *stop = true;
+        return ERR_OK;
+      }
+      case UNWIND_COMMAND_GO_MORESTACK: {
+        if (go_unwind_morestack(record, state) != ERR_OK) {
+          goto err_native_pc_read;
+        }
+        goto frame_ok;
+      }
+      default: return ERR_UNREACHABLE;
+      }
+    }
+
+    switch (command) {
     case UNWIND_COMMAND_SIGNAL: {
       // Use the PerCPURecord scratch union instead of a stack-local buffer to avoid
       // exceeding the 512-byte BPF stack limit when inlined into interpreters.
@@ -440,7 +483,7 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
     DEBUG_PRINT("RA: %016llX", (u64)ra);
 
     // read the value of RA from stack
-    int err;
+    long err;
     u64 fpra[2];
     fpra[0] = state->fp;
     if (info->flags & UNWIND_FLAG_FRAME) {

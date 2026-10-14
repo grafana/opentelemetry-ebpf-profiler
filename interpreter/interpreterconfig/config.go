@@ -17,21 +17,23 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/threadcontext"
 )
 
 // Config holds configuration for all interpreters.
 // By default all interpreters are enabled.
 type Config struct {
-	Python  python.Config  `mapstructure:"python" json:"python,omitempty"`
-	Perl    perl.Config    `mapstructure:"perl" json:"perl,omitempty"`
-	PHP     php.Config     `mapstructure:"php" json:"php,omitempty"`
-	Hotspot hotspot.Config `mapstructure:"hotspot" json:"hotspot,omitempty"`
-	Ruby    ruby.Config    `mapstructure:"ruby" json:"ruby,omitempty"`
-	V8      nodev8.Config  `mapstructure:"v8" json:"v8,omitempty"`
-	Dotnet  dotnet.Config  `mapstructure:"dotnet" json:"dotnet,omitempty"`
-	Go      golang.Config  `mapstructure:"go" json:"go,omitempty"`
-	BEAM    beam.Config    `mapstructure:"beam" json:"beam,omitempty"`
-	LuaJIT  luajit.Config  `mapstructure:"luajit" json:"luajit,omitempty"`
+	Python        python.Config        `mapstructure:"python" json:"python"`
+	Perl          perl.Config          `mapstructure:"perl" json:"perl"`
+	PHP           php.Config           `mapstructure:"php" json:"php"`
+	Hotspot       hotspot.Config       `mapstructure:"hotspot" json:"hotspot"`
+	Ruby          ruby.Config          `mapstructure:"ruby" json:"ruby"`
+	V8            nodev8.Config        `mapstructure:"v8" json:"v8"`
+	Dotnet        dotnet.Config        `mapstructure:"dotnet" json:"dotnet"`
+	Go            golang.Config        `mapstructure:"go" json:"go"`
+	BEAM          beam.Config          `mapstructure:"beam" json:"beam"`
+	LuaJIT        luajit.Config        `mapstructure:"luajit" json:"luajit"`
+	ThreadContext threadcontext.Config `mapstructure:"thread_context" json:"thread_context"`
 }
 
 // AllInterpreters returns a Config with all interpreters enabled.
@@ -41,17 +43,58 @@ func AllInterpreters() Config { return Config{} }
 func NoInterpreters() Config {
 	disabled := interpreter.BaseConfig{Disabled: true}
 	return Config{
-		Python:  python.Config{BaseConfig: disabled},
-		Perl:    perl.Config{BaseConfig: disabled},
-		PHP:     php.Config{BaseConfig: disabled},
-		Hotspot: hotspot.Config{BaseConfig: disabled},
-		Ruby:    ruby.Config{BaseConfig: disabled},
-		V8:      nodev8.Config{BaseConfig: disabled},
-		Dotnet:  dotnet.Config{BaseConfig: disabled},
-		Go:      golang.Config{BaseConfig: disabled},
-		BEAM:    beam.Config{BaseConfig: disabled},
-		LuaJIT:  luajit.Config{BaseConfig: disabled},
+		Python:        python.Config{BaseConfig: disabled},
+		Perl:          perl.Config{BaseConfig: disabled},
+		PHP:           php.Config{BaseConfig: disabled},
+		Hotspot:       hotspot.Config{BaseConfig: disabled},
+		Ruby:          ruby.Config{BaseConfig: disabled},
+		V8:            nodev8.Config{BaseConfig: disabled},
+		Dotnet:        dotnet.Config{BaseConfig: disabled},
+		Go:            golang.Config{BaseConfig: disabled},
+		BEAM:          beam.Config{BaseConfig: disabled},
+		LuaJIT:        luajit.Config{BaseConfig: disabled},
+		ThreadContext: threadcontext.Config{BaseConfig: disabled},
 	}
+}
+
+// Loaders returns active loaders for all enabled interpreters.
+func (cfg *Config) Loaders() []interpreter.Loader {
+	loaders := make([]interpreter.Loader, 0, 12)
+	if !cfg.Perl.IsDisabled() {
+		loaders = append(loaders, perl.GetLoader(cfg.Perl))
+	}
+	if !cfg.Python.IsDisabled() {
+		loaders = append(loaders, python.GetLoader(cfg.Python))
+	}
+	if !cfg.PHP.IsDisabled() {
+		loaders = append(loaders, php.GetLoader(cfg.PHP))
+		loaders = append(loaders, php.GetOpcacheLoader(cfg.PHP))
+	}
+	if !cfg.Hotspot.IsDisabled() {
+		loaders = append(loaders, hotspot.GetLoader(cfg.Hotspot))
+	}
+	if !cfg.Ruby.IsDisabled() {
+		loaders = append(loaders, ruby.GetLoader(cfg.Ruby))
+	}
+	if !cfg.V8.IsDisabled() {
+		loaders = append(loaders, nodev8.GetLoader(cfg.V8))
+	}
+	if !cfg.Dotnet.IsDisabled() {
+		loaders = append(loaders, dotnet.GetLoader(cfg.Dotnet))
+	}
+	if !cfg.BEAM.IsDisabled() {
+		loaders = append(loaders, beam.GetLoader(cfg.BEAM))
+	}
+	if !cfg.LuaJIT.IsDisabled() {
+		loaders = append(loaders, luajit.GetLoader(cfg.LuaJIT))
+	}
+	if !cfg.Go.IsDisabled() {
+		loaders = append(loaders, golang.GetLoader(cfg.Go))
+	}
+	if !cfg.ThreadContext.IsDisabled() {
+		loaders = append(loaders, threadcontext.GetLoader(cfg.ThreadContext))
+	}
+	return loaders
 }
 
 // IsMapEnabled returns true if for the given mapName the respective
@@ -76,9 +119,10 @@ func (cfg *Config) IsMapEnabled(mapName string) bool {
 		return !cfg.BEAM.IsDisabled()
 	case luajit.BPFMapName:
 		return !cfg.LuaJIT.IsDisabled()
-	case golang.BPFMapName, apmint.BPFMapName:
-		// go_procs is read from collect_trace (preloaded into the PerCPURecord)
-		// and apm_int_procs from unwind_stop, so both must always be loaded.
+	case golang.BPFMapName, apmint.BPFMapName, threadcontext.BPFMapName:
+		// go_procs is read from collect_trace (preloaded into the PerCPURecord),
+		// and apm_int_procs and thread_context_procs from unwind_stop, so all
+		// three must always be loaded regardless of interpreter configuration.
 		return true
 	default:
 		return true // Not an interpreter map, so it should be loaded

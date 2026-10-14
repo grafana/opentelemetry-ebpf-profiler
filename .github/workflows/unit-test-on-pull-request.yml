@@ -10,24 +10,26 @@ permissions:
   contents: read
 
 jobs:
-  legal:
+  license-check:
     name: Check licenses of dependencies
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: 'false'
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Check for changes in licenses of dependencies
+      - name: Check licenses of dependencies
+        run: make license-check
+      - name: Check LICENSES is up to date
         run: |
-          make legal
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "run \"make legal\"."
+          make license-save
+          if [ -n "$(git status --porcelain LICENSES)" ]; then
+            echo 'LICENSES is out of date, run "make license-save".'
             exit 1
           fi
 
@@ -37,15 +39,20 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target_arch: amd64, runner: ubuntu-24.04 }
-          - { target_arch: arm64, runner: ubuntu-24.04-arm }
+          - { target_arch: amd64, runner: ubuntu-26.04 }
+          - { target_arch: arm64, runner: ubuntu-26.04-arm }
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: 'false'
+          persist-credentials: false
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
+      - name: Install binutils-gold
+        # Work around for https://github.com/golang/go/issues/22040
+        # until the project moved on to Go 1.27.
+        run:
+          sudo apt install -y --no-install-recommends --no-install-suggests binutils-gold
       - name: linter
         env:
           CGO_ENABLED: 1
@@ -53,14 +60,14 @@ jobs:
 
   format:
     name: Format Go and C code
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: 'false'
+          persist-credentials: false
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
       - name: formatter
         env:
           CGO_ENABLED: 1
@@ -70,7 +77,7 @@ jobs:
 
   otel-col-goos:
     name: Crosscompile OTel Collector component on (${{ matrix.goos }}/${{ matrix.goarch }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         goos: ['linux', 'windows']
@@ -81,7 +88,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
       - name: Cross compile
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./collector/...
 
@@ -92,17 +99,17 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target_arch: amd64, runner: ubuntu-24.04, go_flags: "" }
-          - { target_arch: amd64, runner: ubuntu-24.04, go_flags: "-race" }
-          - { target_arch: arm64, runner: ubuntu-24.04-arm, go_flags: "" }
-          - { target_arch: arm64, runner: ubuntu-24.04-arm, go_flags: "-race" }
+          - { target_arch: amd64, runner: ubuntu-26.04, go_flags: "" }
+          - { target_arch: amd64, runner: ubuntu-26.04, go_flags: "-race" }
+          - { target_arch: arm64, runner: ubuntu-26.04-arm, go_flags: "" }
+          - { target_arch: arm64, runner: ubuntu-26.04-arm, go_flags: "-race" }
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
       - name: Cache coredump modules
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -114,6 +121,20 @@ jobs:
       - name: Tests
         run: make test TARGET_ARCH=${{ matrix.target_arch }} GO_FLAGS="${{ matrix.go_flags }}"
 
+  luajit-offsets-test:
+    name: LuaJIT offsets test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Clone code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up environment
+        uses: $/.github/workflows/env
+      - name: Tests
+        run: make test-luajit-offsets
+
   build-integration-test-binaries:
     name: Build integration test binaries (${{ matrix.target_arch }})
     runs-on: ${{ matrix.runner }}
@@ -121,15 +142,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target_arch: amd64, runner: ubuntu-24.04 }
-          - { target_arch: arm64, runner: ubuntu-24.04-arm }
+          - { target_arch: amd64, runner: ubuntu-26.04 }
+          - { target_arch: arm64, runner: ubuntu-26.04-arm }
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: 'false'
+          persist-credentials: false
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
       - name: Prepare integration test binaries for qemu tests
         run: make integration-test-binaries TARGET_ARCH=${{ matrix.target_arch }}
       - run: ls -ltr support
@@ -165,7 +186,7 @@ jobs:
 
   integration-tests:
     name: Integration tests (v${{ matrix.kernel }} ${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: build-integration-test-binaries
     timeout-minutes: 10
     strategy:
@@ -194,7 +215,7 @@ jobs:
           - { target_arch: arm64, kernel: 6.12.16 }
           - { target_arch: arm64, kernel: 6.16 }
           - { target_arch: arm64, kernel: 6.18 }
-          - { target_arch: arm64, kernel: 7.1 }
+          - { target_arch: arm64, kernel: 7.1.1 }
     steps:
       - name: Disable man-db
         run: |
@@ -203,7 +224,7 @@ jobs:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: 'false'
+          persist-credentials: false
       - name: Install dependencies
         run: |
           sudo apt-get update -y && sudo apt-get -y install file
@@ -235,3 +256,27 @@ jobs:
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
           support/run-tests.sh ${{ matrix.kernel }}
+
+  # Not in the qemu matrix: that initramfs cannot load shared libraries.
+  host-integration-tests:
+    name: Integration tests (processcontext ${{ matrix.target_arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        include:
+          - { target_arch: amd64, runner: ubuntu-26.04 }
+          - { target_arch: arm64, runner: ubuntu-26.04-arm }
+    steps:
+      - name: Clone code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up environment
+        uses: $/.github/workflows/env
+      - name: Install musl-dev
+        run: |
+          sudo apt-get update -y
+          sudo apt-get -y --no-install-recommends --no-install-suggests install musl-dev
+      - name: Run host integration tests
+        run: make host-integration-tests

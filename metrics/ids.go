@@ -695,6 +695,27 @@ const (
 	// Number of priority PID events deferred (recorded but not signalled) due to rate limiting
 	IDNumPriorityEventDeferred = 302
 
+	// Number of attempted Go asmcgocall stack-switch unwinds
+	IDUnwindGoAsmcgocallAttempts = 303
+
+	// Number of successful Go asmcgocall unwinds
+	IDUnwindGoAsmcgocallSuccess = 304
+
+	// Number of Go asmcgocall unwind failures
+	IDUnwindGoAsmcgocallUnwindFailure = 305
+
+	// Number of failures to read the thread context buffer pointer out of TLS
+	IDUnwindThreadContextErrReadTlsPtr = 306
+
+	// Number of failures to read the thread context buffer, header or payload
+	IDUnwindThreadContextErrReadThreadCtxBuf = 307
+
+	// Number of successful reads of thread context info
+	IDUnwindThreadContextReadSuccesses = 308
+
+	// Number of thread context attribute payloads truncated to fit the buffer
+	IDUnwindThreadContextAttrsTruncated = 309
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 303
+	IDMax = 310
 )

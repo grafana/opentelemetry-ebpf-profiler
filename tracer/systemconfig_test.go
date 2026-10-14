@@ -4,7 +4,6 @@
 package tracer
 
 import (
-	"errors"
 	"io/fs"
 	"os"
 	"runtime"
@@ -20,7 +19,7 @@ import (
 func TestGetCurrentNS_FileNotFound(t *testing.T) {
 	_, _, err := getCurrentNS("/nonexistent/path/pid")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, fs.ErrNotExist))
+	require.ErrorIs(t, err, fs.ErrNotExist)
 }
 
 func TestGetCurrentNS_ProcSelfNsPid(t *testing.T) {
@@ -37,6 +36,69 @@ func TestGetCurrentNS_ProcSelfNsPid(t *testing.T) {
 	require.NotZero(t, ino, "pid namespace inode should be non-zero")
 }
 
+func TestPIDNamespaceTranslationMode(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		mode    PIDNamespaceTranslationMode
+		text    string
+		invalid bool
+	}{
+		{name: "none", mode: PIDNamespaceTranslationModeNone, text: "none"},
+		{name: "auto", mode: PIDNamespaceTranslationModeAuto, text: "auto"},
+		{name: "exact", mode: PIDNamespaceTranslationModeExact, text: "exact"},
+		{name: "recursive", mode: PIDNamespaceTranslationModeRecursive, text: "recursive"},
+		{name: "invalid", invalid: true, text: "invalid"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var m PIDNamespaceTranslationMode
+			err := m.UnmarshalText([]byte(tt.text))
+			if tt.invalid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.mode, m)
+			require.Equal(t, tt.text, m.String())
+			require.NoError(t, m.Validate())
+		})
+	}
+	require.Error(t, PIDNamespaceTranslationMode(99).Validate())
+}
+
+func TestParsePIDNamespaceLayoutMissingType(t *testing.T) {
+	builder := &btf.Builder{}
+	_, err := builder.Add(&btf.Struct{Name: "task_struct"})
+	require.NoError(t, err)
+	spec, err := builder.Spec()
+	require.NoError(t, err)
+	var layout support.PIDNamespaceLayout
+	err = parsePIDNamespaceLayout(spec, &layout)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "resolve kernel BTF type")
+}
+
+func TestPIDNamespaceVars(t *testing.T) {
+	v := SysConfigVars{
+		pid_ns_translation_mode: ebpfPIDNSTranslationModeRecursive,
+		target_pid_ns_level:     2,
+		target_pid_ns_dev:       123,
+		target_pid_ns_inode:     456,
+	}
+	vars := v.pidNamespaceVars()
+	expected := map[string]any{
+		"pid_ns_translation_mode": ebpfPIDNSTranslationModeRecursive,
+		"target_pid_ns_level":     uint32(2),
+		"target_pid_ns_dev":       uint64(123),
+		"target_pid_ns_inode":     uint64(456),
+		"pid_namespace_layout":    support.PIDNamespaceLayout{},
+	}
+	require.Len(t, vars, len(expected))
+	for _, sv := range vars {
+		require.Contains(t, expected, sv.name)
+		require.Equal(t, expected[sv.name], sv.val)
+	}
+}
+
 func TestValidateSystemAnalysisResult(t *testing.T) {
 	address := libpf.SymbolValue(0x1234)
 
@@ -50,7 +112,7 @@ func TestValidateSystemAnalysisResult(t *testing.T) {
 	t.Run("helper failure", func(t *testing.T) {
 		err := validateSystemAnalysisResult(support.SystemAnalysis{Err: -14}, address)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errSystemAnalysisFailed))
+		require.ErrorIs(t, err, errSystemAnalysisFailed)
 		require.ErrorContains(t, err, "helper err=-14")
 	})
 

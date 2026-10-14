@@ -3,6 +3,7 @@
 // perf event and will call the appropriate tracer for a given process
 
 #include "bpfdefs.h"
+#include "go_runtime.h"
 #include "kernel.h"
 #include "tracemgmt.h"
 #include "tsd.h"
@@ -141,10 +142,17 @@ struct traces_ctx_v1_t {
 
 struct apm_int_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, ApmIntProcInfo);
   __uint(max_entries, 128);
 } apm_int_procs SEC(".maps");
+
+struct thread_context_procs_t {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, u32);
+  __type(value, ThreadContextProcInfo);
+  __uint(max_entries, 1024);
+} thread_context_procs SEC(".maps");
 
 // filter_error_frames is set during load time.
 BPF_RODATA_VAR(bool, filter_error_frames, false)
@@ -153,62 +161,6 @@ BPF_RODATA_VAR(bool, filter_error_frames, false)
 // configuration (Config.IsLabelsDisabled). The Go runtime offsets are loaded
 // independently whenever Go support is enabled.
 BPF_RODATA_VAR(bool, go_labels_disabled, true)
-
-static EBPF_INLINE u64 go_get_g_register(UNUSED UnwindState *state)
-{
-#if defined(__aarch64__)
-  // On aarch64 for !iscgo programs the g is only stored in r28 register.
-  // CGO_ENABLED can be true even when runtime.iscgo is false; then we want to retrieve g from r28.
-  // See https://github.com/open-telemetry/opentelemetry-ebpf-profiler/issues/1455.
-  return state->r28;
-#else
-  return 0;
-#endif
-}
-
-static EBPF_INLINE u64 go_get_g_ptr(struct GoRuntimeOffsets *offs, UnwindState *state)
-{
-  u64 g_register = go_get_g_register(state);
-
-  if (offs->tls_offset == 0) {
-    DEBUG_PRINT("cl: TLS offset for g pointer missing; using register fallback if available");
-    return g_register;
-  }
-
-  u64 g_addr     = 0;
-  void *tls_base = NULL;
-  if (tsd_get_base(&tls_base) < 0) {
-    DEBUG_PRINT("cl: failed to get tsd base; using register fallback if available");
-    return g_register;
-  }
-  DEBUG_PRINT(
-    "cl: read tsd_base at 0x%lx, g offset: %d", (unsigned long)tls_base, offs->tls_offset);
-
-  if (bpf_probe_read_user(&g_addr, sizeof(void *), (void *)((s64)tls_base + offs->tls_offset))) {
-    DEBUG_PRINT(
-      "cl: failed to read g_addr, tls_base(%lx); using register fallback if available",
-      (unsigned long)tls_base);
-  }
-
-  return g_addr ? g_addr : g_register;
-}
-
-static EBPF_INLINE void *go_get_m_ptr(struct GoRuntimeOffsets *offs, UnwindState *state)
-{
-  u64 g_addr = go_get_g_ptr(offs, state);
-  if (!g_addr) {
-    return NULL;
-  }
-
-  DEBUG_PRINT("cl: reading m_ptr_addr at 0x%lx + 0x%x", (unsigned long)g_addr, offs->m_offset);
-  void *m_ptr_addr;
-  if (bpf_probe_read_user(&m_ptr_addr, sizeof(void *), (void *)(g_addr + offs->m_offset))) {
-    DEBUG_PRINT("cl: failed m_ptr_addr");
-    return NULL;
-  }
-  DEBUG_PRINT("cl: m_ptr_addr 0x%lx", (unsigned long)m_ptr_addr);
-  return m_ptr_addr;
-}
 
 static EBPF_INLINE void maybe_add_go_custom_labels(struct pt_regs *ctx, PerCPURecord *record)
 {
@@ -304,6 +256,18 @@ static EBPF_INLINE void maybe_add_apm_info(Trace *trace)
     corr_buf.trace_flags);
 }
 
+// Stub: only looks the process up, so thread_context_procs stays loaded
+// regardless of whether the tracer is enabled. Reading and decoding the
+// thread context lands in a later change.
+static EBPF_INLINE void maybe_add_thread_context_info(Trace *trace)
+{
+  u32 pid                     = trace->pid;
+  ThreadContextProcInfo *proc = bpf_map_lookup_elem(&thread_context_procs, &pid);
+  if (!proc) {
+    return;
+  }
+}
+
 // unwind_stop is the tail call destination for PROG_UNWIND_STOP.
 static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
 {
@@ -349,7 +313,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
       increment_metric(metricID_NumUnknownPC);
     }
     // fallthrough
-  default: increment_metric(state->error_metric);
+  default: increment_metric((u32)state->error_metric);
   }
 
   // TEMPORARY HACK
@@ -369,8 +333,11 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   }
   // TEMPORARY HACK END
 
-  // Must be last since it may not return (it will call send_trace).
+  // Does not return once it dispatches, so anything below runs only when the
+  // Go path did not fill custom labels.
   maybe_add_go_custom_labels(ctx, record);
+
+  maybe_add_thread_context_info(trace);
 
   send_trace(ctx, trace);
 

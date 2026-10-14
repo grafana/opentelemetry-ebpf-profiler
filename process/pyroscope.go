@@ -4,6 +4,7 @@ import (
 	"time"
 
 	lru "github.com/elastic/go-freelru"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 

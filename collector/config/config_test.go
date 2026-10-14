@@ -11,11 +11,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/confmap"
+
+	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
 // validConfig returns a config with valid defaults for testing.
 func validConfig() *Config {
 	return &Config{
+		ReporterInterval:       5 * time.Second,
+		MonitorInterval:        5 * time.Second,
 		SamplesPerSecond:       20,
 		FrameCacheSize:         minFrameCacheSize,
 		ProbabilisticInterval:  1 * time.Minute,
@@ -25,11 +29,53 @@ func validConfig() *Config {
 	}
 }
 
-func TestValidate(t *testing.T) {
-	cfg := &Config{
-		SamplesPerSecond: 0,
-		ErrorMode:        PropagateError,
+func TestValidateIntervals(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		configure func(*Config)
+		wantErr   string
+	}{
+		{
+			name: "zero reporter interval",
+			configure: func(cfg *Config) {
+				cfg.ReporterInterval = 0
+			},
+			wantErr: "invalid reporter interval: 0s",
+		},
+		{
+			name: "negative reporter interval",
+			configure: func(cfg *Config) {
+				cfg.ReporterInterval = -time.Second
+			},
+			wantErr: "invalid reporter interval: -1s",
+		},
+		{
+			name: "zero monitor interval",
+			configure: func(cfg *Config) {
+				cfg.MonitorInterval = 0
+			},
+			wantErr: "invalid monitor interval: 0s",
+		},
+		{
+			name: "negative monitor interval",
+			configure: func(cfg *Config) {
+				cfg.MonitorInterval = -time.Second
+			},
+			wantErr: "invalid monitor interval: -1s",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.configure(cfg)
+
+			require.EqualError(t, confmap.Validate(cfg), tt.wantErr)
+		})
 	}
+}
+
+func TestValidate(t *testing.T) {
+	cfg := validConfig()
+	cfg.SamplesPerSecond = 0
 	err := confmap.Validate(cfg)
 	require.Error(t, err)
 	require.Equal(t, "invalid sampling frequency: 0", err.Error())
@@ -115,6 +161,34 @@ func TestUnmarshalText(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.want, e)
+		})
+	}
+}
+
+func TestPIDNamespaceTranslationModeUnmarshal(t *testing.T) {
+	for _, tt := range []struct {
+		value   string
+		want    tracer.PIDNamespaceTranslationMode
+		wantErr bool
+	}{
+		{value: "none", want: tracer.PIDNamespaceTranslationModeNone},
+		{value: "", want: tracer.PIDNamespaceTranslationModeNone},
+		{value: "auto", want: tracer.PIDNamespaceTranslationModeAuto},
+		{value: "exact", want: tracer.PIDNamespaceTranslationModeExact},
+		{value: "recursive", want: tracer.PIDNamespaceTranslationModeRecursive},
+		{value: "invalid", wantErr: true},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			cfg := validConfig()
+			err := confmap.NewFromStringMap(map[string]any{
+				"pid_namespace_translation_mode": tt.value,
+			}).Unmarshal(cfg)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, cfg.PIDNamespaceTranslationMode)
 		})
 	}
 }

@@ -1,6 +1,8 @@
 .PHONY: all all-common clean ebpf generate generate-collector test test-deps \
-	test-junit protobuf docker-image agent legal integration-test-binaries \
+	test-junit test-luajit-offsets protobuf docker-image agent license-check license-save \
+	integration-test-binaries \
 	codespell lint ebpf-profiler format format-ebpf format-go pprof-execs \
+	processctx-execs host-integration-tests \
 	pprof_1_23 pprof_1_24 pprof_1_24_cgo otelcol-ebpf-profiler \
 	rust-components rust-targets rust-tests vanity-import-check vanity-import-fix \
 	otel-from-tree otel-from-lib
@@ -62,6 +64,7 @@ all: ebpf-profiler
 clean:
 	@go clean -cache -i
 	@$(MAKE) -s -C support/ebpf clean
+	@$(MAKE) -C process/processcontext/integrationtests/testdata clean
 	@chmod -Rf u+w go/ || true
 	@rm -rf go .cache support/*.test interpreter/go/integrationtests/pprof_1_*
 	@rm -f otelcol-ebpf-profiler cmd/otelcol-ebpf-profiler/{*.go,go.mod,go.sum} || true
@@ -77,8 +80,7 @@ ebpf: generate
 generate-collector:
 	GOARCH=$(NATIVE_ARCH) go tool $(GO_TOOLS) builder \
 		--skip-compilation=true \
-		--config cmd/otelcol-ebpf-profiler/manifest.yaml \
-		--output-path cmd/otelcol-ebpf-profiler
+		--config cmd/otelcol-ebpf-profiler/manifest.yaml
 
 ebpf-profiler: ebpf
 	go build -tags $(GO_TAGS)
@@ -136,6 +138,11 @@ test: generate ebpf test-deps
 	# tools/coredump tests build ebpf C-code using CGO to test it against coredumps
 	CGO_ENABLED=1 go test $(GO_FLAGS) -tags $(GO_TAGS) ./...
 
+# Lives in its own module to keep heavy dependencies (testcontainers,
+# Docker, etc.) out of the main go.mod.
+test-luajit-offsets: generate
+	go test -C ./tools/luajitoffsets $(GO_FLAGS) -tags luajit_offsets_test ./...
+
 test-junit: generate ebpf test-deps
 	mkdir -p $(JUNIT_OUT_DIR)
 	CGO_ENABLED=1 go tool $(GO_TOOLS) gotestsum --junitfile $(JUNIT_OUT_DIR)/junit.xml -- $(GO_FLAGS) -tags $(GO_TAGS) ./...
@@ -153,6 +160,14 @@ test-deps: $(GOLABELS_TESTDATA_TARGETS)
 	)
 
 TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf kallsyms support interpreter/go/integrationtests
+
+processctx-execs:
+	$(MAKE) -C process/processcontext/integrationtests/testdata
+
+# Host-only: the qemu initramfs cannot load shared libraries, which the
+# lib/dlopen testdata variants will need.
+host-integration-tests: processctx-execs
+	go test -exec sudo -v -tags host_integration ./process/processcontext/integrationtests/
 
 pprof-execs: pprof_1_23 pprof_1_24 pprof_1_24_cgo pprof_1_24_cgo_pie pprof_stable pprof_stable_buildinfo_cgo pprof_stable_cgo pprof_stable_cgo_pie
 
@@ -194,8 +209,19 @@ docker-image:
 agent:
 	./tools/docker-agent-build.sh "$(TARGET_ARCH)"
 
-legal:
-	go tool $(GO_TOOLS) go-licenses save --force . --save_path=LICENSES
+# Allowed licenses follow the CNCF allowlist:
+# https://github.com/cncf/foundation/blob/main/policies-guidance/allowed-third-party-license-policy.md
+# github.com/hashicorp/go-version (MPL-2.0) is ignored: it's an indirect
+# dependency pulled in by go.opentelemetry.io/collector/featuregate, not
+# something this project imports directly.
+license-check:
+	go tool $(GO_TOOLS) go-licenses check \
+		--allowed_licenses=Apache-2.0,0BSD,BSD-2-Clause,BSD-2-Clause-FreeBSD,BSD-3-Clause,MIT,MIT-0,ISC,OpenSSL,PSF-2.0,Python-2.0,Python-2.0.1,PostgreSQL,UPL-1.0,X11,Zlib \
+		--ignore github.com/hashicorp/go-version \
+		./...
+
+license-save:
+	go tool $(GO_TOOLS) go-licenses save --force ./... --save_path=LICENSES
 
 codespell:
 	@codespell

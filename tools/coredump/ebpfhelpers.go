@@ -111,7 +111,7 @@ func __bpf_map_lookup_elem(id C.u64, mapdef unsafe.Pointer, keyptr unsafe.Pointe
 	case unsafe.Pointer(&C.dotnet_procs), unsafe.Pointer(&C.perl_procs),
 		unsafe.Pointer(&C.php_procs), unsafe.Pointer(&C.py_procs),
 		unsafe.Pointer(&C.hotspot_procs), unsafe.Pointer(&C.ruby_procs),
-		unsafe.Pointer(&C.v8_procs):
+		unsafe.Pointer(&C.v8_procs), unsafe.Pointer(&C.go_procs):
 		if innerMap, ok := ctx.maps[mapdef]; ok {
 			if val, ok := innerMap[*(*C.u32)(keyptr)]; ok {
 				return val
@@ -131,11 +131,11 @@ func __bpf_map_lookup_elem(id C.u64, mapdef unsafe.Pointer, keyptr unsafe.Pointe
 		return stackDeltaInnerMap
 	case unsafe.Pointer(&C.unwind_info_array):
 		key := uintptr(*(*C.u32)(keyptr))
-		return unsafe.Pointer(uintptr(ctx.unwindInfoArray) + key*C.sizeof_UnwindInfo)
+		return unsafe.Add(ctx.unwindInfoArray, key*C.sizeof_UnwindInfo)
 	case stackDeltaInnerMap:
 		key := uintptr(*(*C.u32)(keyptr))
 		if deltas, ok := ctx.exeIDToStackDeltaMaps[ctx.stackDeltaFileID]; ok {
-			return unsafe.Pointer(uintptr(deltas) + key*C.sizeof_StackDelta)
+			return unsafe.Add(deltas, key*C.sizeof_StackDelta)
 		}
 	}
 	return unsafe.Pointer(uintptr(0))

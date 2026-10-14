@@ -9,7 +9,7 @@
 // we require in order to build the stack trace
 struct ruby_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, RubyProcInfo);
   __uint(max_entries, 1024);
 } ruby_procs SEC(".maps");
@@ -50,7 +50,7 @@ BPF_RODATA_VAR(bool, ruby_skip_native_resume, false)
 #define IMEMO_MENT          6
 
 // https://github.com/ruby/ruby/blob/36809a8d0c7ab67ff0919b331db926529a3e98a9/vm_core.h#L1375
-#define GC_GUARDED_PTR_REF_MASK 0x03
+#define GC_GUARDED_PTR_REF_MASK 0x03UL
 
 // https://github.com/ruby/ruby/blob/v3_4_5/vm_core.h#L1380-L1385
 #define VM_FRAME_MAGIC_MASK  0x7fff0001
@@ -275,12 +275,10 @@ static EBPF_INLINE ErrorCode read_ruby_frame(
         // continue unwinding Ruby VM frames. Due to this issue, the ordering of Ruby and native
         // frames will almost certainly be incorrect for Ruby versions < 2.6.
         frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
-      } else if (record->rubyUnwindState.jit_detected) {
-        // If we detected a jit frame and are now in a cfunc, push the c frame
-        // as we can no longer unwind native anymore
-        frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
-      } else if (ruby_skip_native_resume) {
-        // Push cfunc inline without transitioning to the native unwinder.
+      } else if (ruby_skip_native_resume || record->rubyUnwindState.jit_detected) {
+        // Push cfunc inline when native resume is disabled. Also push it inline
+        // if JIT is active but frame pointers are not available, because we
+        // cannot unwind through JIT frames to get back to native code.
         frame_type = RUBY_FRAME_TYPE_CME_CFUNC;
       } else {
         // We save this cfp on in the "Record" entry, and when we start the unwinder
@@ -404,6 +402,11 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
   void *stack_ptr        = record->rubyUnwindState.stack_ptr;
   // last_stack_frame points to the last frame on the Ruby VM stack we want to process
   void *last_stack_frame = record->rubyUnwindState.last_stack_frame;
+  // If no Ruby stack walk state is present yet, this is the first Ruby unwinder
+  // entry for this trace. Native frames may already have been pushed if the
+  // sample landed in native code called from JIT, but a JIT PC found now should
+  // still be emitted as the first Ruby/JIT owner frame.
+  bool first_ruby_unwind = stack_ptr == NULL && last_stack_frame == NULL;
 
   if (!stack_ptr || !last_stack_frame) {
     // stack_ptr_current points to the current frame in the Ruby VM call stack
@@ -458,34 +461,44 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
     record->rubyUnwindState.cfunc_saved_frame = 0;
   }
 
-  if (
-    rubyinfo->jit_start > 0 && record->state.pc > rubyinfo->jit_start &&
-    record->state.pc < rubyinfo->jit_end) {
+  // Detect if the CPU PC is in the JIT region.
+  bool in_jit = rubyinfo->jit_start > 0 && record->state.pc >= rubyinfo->jit_start &&
+                record->state.pc < rubyinfo->jit_end && !record->rubyUnwindState.jit_detected;
+
+  if (in_jit) {
     record->rubyUnwindState.jit_detected = true;
 
-    // If the first frame is a jit PC, the leaf ruby frame should be the jit "owner"
-    // the cpu PC is also pushed as the address,
-    // as in theory this can be used to symbolize the JIT frame later
-    if (trace->num_frames == 0) {
-      ErrorCode error =
+    // Push a JIT frame with the raw machine PC as the first Ruby/JIT owner
+    // frame. If Ruby unwinding already started earlier in this trace, the JIT
+    // PC was reached after a native resume and should not be inserted above
+    // existing Ruby frames.
+    if (first_ruby_unwind) {
+      ErrorCode jit_error =
         push_ruby(&record->state, trace, RUBY_FRAME_TYPE_JIT, (u64)record->state.pc, 0, 0);
-      if (error) {
-        return error;
+      if (jit_error) {
+        return jit_error;
       }
     }
   }
 
-  for (u32 i = 0; i < FRAMES_PER_WALK_RUBY_STACK; ++i) {
+  for (u64 i = 0; i < FRAMES_PER_WALK_RUBY_STACK; ++i) {
     error = read_ruby_frame(record, rubyinfo, stack_ptr, next_unwinder);
     if (error != ERR_OK)
       return error;
 
     if (last_stack_frame <= stack_ptr) {
       // We have processed all frames in the Ruby VM and can stop here.
-      // If ruby_skip_native_resume is set, stop instead of resuming native unwinding.
-      // Likewise if this process has been JIT'd, the PC is invalid and we cannot resume
-      // native unwinding so we are done.
-      *next_unwinder = (record->rubyUnwindState.jit_detected || ruby_skip_native_resume)
+      // Stop instead of resuming native unwinding when native resume is disabled.
+      // Also stop if JIT was detected, because the PC is in the JIT region and
+      // native unwinding would fail. If native resume was requested, add an error
+      // frame to make the intentional truncation visible in the profile.
+      if (record->rubyUnwindState.jit_detected && !ruby_skip_native_resume) {
+        error = push_error(
+          &record->state, trace, FRAME_MARKER_RUBY, ERR_RUBY_JIT_NATIVE_RESUME_UNSUPPORTED);
+        if (error != ERR_OK)
+          return error;
+      }
+      *next_unwinder = (ruby_skip_native_resume || record->rubyUnwindState.jit_detected)
                          ? PROG_UNWIND_STOP
                          : PROG_UNWIND_NATIVE;
       goto save_state;
@@ -544,7 +557,7 @@ static EBPF_INLINE int unwind_ruby(struct pt_regs *ctx)
       goto exit;
     }
 
-    u64 tls_current_ec_addr = tsd_base + rubyinfo->current_ec_tpbase_tls_offset;
+    u64 tls_current_ec_addr = tsd_base + (u64)rubyinfo->current_ec_tpbase_tls_offset;
 
     if (bpf_probe_read_user(
           &current_ctx_addr, sizeof(current_ctx_addr), (void *)(tls_current_ec_addr))) {

@@ -4,7 +4,6 @@
 package ruby // import "go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 
 import (
-	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -382,6 +381,7 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 		procInfo:          &cdata,
 		globalSymbolsAddr: r.globalSymbolsAddr + bias,
 		addrToString:      addrToString,
+		prefixes:          make(map[lpm.Prefix]uint32),
 		memPool: sync.Pool{
 			New: func() any {
 				buf := make([]byte, 512)
@@ -445,15 +445,31 @@ type rubyInstance struct {
 	// in getRubyLineNo.
 	maxSize atomic.Uint32
 
-	// prefixes added to ebpf maps for the YJIT region, cleaned up in Detach
-	prefixes []lpm.Prefix
+	// prefixes is indexed by the prefix added to ebpf maps (to be cleaned up) to its generation.
+	// Entries are pruned each SynchronizeMappings call; the map size is bounded by the LPM
+	// representation of the single Ruby JIT region (typically only a handful of prefixes).
+	prefixes map[lpm.Prefix]uint32
+	// mappingGeneration is the current generation (so old entries can be pruned)
+	mappingGeneration uint32
 }
 
 func (r *rubyInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
-	for _, prefix := range r.prefixes {
-		_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+	var err error
+	err = ebpf.DeleteProcData(libpf.Ruby, pid)
+
+	for prefix := range r.prefixes {
+		if err2 := ebpf.DeletePidInterpreterMapping(pid, prefix); err2 != nil {
+			err = errors.Join(err,
+				fmt.Errorf("failed to remove ruby prefix 0x%x/%d: %v",
+					prefix.Key, prefix.Length, err2))
+		}
 	}
-	return ebpf.DeleteProcData(libpf.Ruby, pid)
+
+	return err
+}
+
+func (r *rubyInstance) UsesAnonymousMappings() bool {
+	return true
 }
 
 // UpdateLibcInfo is called when libc introspection data becomes available.
@@ -1062,7 +1078,7 @@ func (r *rubyInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 		cframe = true
 		methodDefinition := r.rm.Ptr(frameAddr + libpf.Address(vms.rb_method_entry_struct.def))
 		if methodDefinition == 0 {
-			return fmt.Errorf("Unable to read method definition for cfunc")
+			return fmt.Errorf("unable to read method definition for cfunc")
 		}
 
 		originalId := r.rm.Uint64(methodDefinition + libpf.Address(vms.rb_method_definition_struct.original_id))
@@ -1080,7 +1096,7 @@ func (r *rubyInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 
 		methodDefinition := r.rm.Ptr(frameAddr + libpf.Address(vms.rb_method_entry_struct.def))
 		if methodDefinition == 0 {
-			return fmt.Errorf("Unable to read method definition for CME")
+			return fmt.Errorf("unable to read method definition for CME")
 		}
 
 		methodBody := r.rm.Ptr(methodDefinition + libpf.Address(vms.rb_method_definition_struct.body))
@@ -1138,7 +1154,7 @@ func (r *rubyInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 		})
 		return nil
 	default:
-		return fmt.Errorf("Unable to get CME or ISEQ from frame address (%d)", frameAddrType)
+		return fmt.Errorf("unable to get CME or ISEQ from frame address (%d)", frameAddrType)
 	}
 
 	if cme && r.r.hasClassPath {
@@ -1236,13 +1252,11 @@ func profileFrameFullLabel(classPath, label, baseLabel, methodName libpf.String,
 	baseLabelStr := baseLabel.String()
 	labelLength := len(labelStr)
 	baseLabelLength := len(baseLabelStr)
-	prefixLen := max(
+	prefixLen := min(
 		// Ensure prefixLen doesn't exceed label length (defensive programming)
-		labelLength-baseLabelLength, 0)
+		max(
 
-	if prefixLen > labelLength {
-		prefixLen = labelLength
-	}
+			labelLength-baseLabelLength, 0), labelLength)
 
 	qualifiedStr := qualified.String()
 
@@ -1266,51 +1280,122 @@ func profileFrameFullLabel(classPath, label, baseLabel, methodName libpf.String,
 	return libpf.Intern(profileLabel)
 }
 
+// findJITRegion detects the Ruby JIT code reservation from process memory mappings.
+// Ruby reserves address ranges via rb_jit_reserve_addr_space() and then uses
+// mprotect to activate pages as r-x or temporarily rw. Code GC can turn pages
+// back into PROT_NONE, so the reservation may appear as multiple VMAs.
+// On systems with CONFIG_ANON_VMA_NAME, Ruby labels the region via prctl(PR_SET_VMA)
+// giving it a path like "[anon:Ruby:rb_jit_reserve_addr_space]". Otherwise we use
+// a conservative fallback spanning the observed anonymous executable mappings.
+// This includes non-executable holes between executable fragments, but does not
+// extend through a trailing anonymous mapping whose ownership cannot be proven.
+// Returns (start, end, found).
+func findJITRegion(mappings []process.RawMapping) (uint64, uint64, bool) {
+	var jitStart, jitEnd uint64
+	labelFound := false
+
+	for idx := range mappings {
+		m := &mappings[idx]
+
+		// Check for prctl-labeled JIT region. These mappings may be ---p (PROT_NONE),
+		// rw-p while YJIT is writing, or r-xp when executable.
+		if strings.Contains(m.Path, "jit_reserve_addr_space") {
+			if !labelFound || m.Vaddr < jitStart {
+				jitStart = m.Vaddr
+			}
+			if !labelFound || m.Vaddr+m.Length > jitEnd {
+				jitEnd = m.Vaddr + m.Length
+			}
+			labelFound = true
+		}
+	}
+	if labelFound {
+		return jitStart, jitEnd, true
+	}
+
+	anonExecFound := false
+	for idx := range mappings {
+		m := &mappings[idx]
+		if !m.IsExecutable() || !m.IsAnonymous() {
+			continue
+		}
+
+		if !anonExecFound || m.Vaddr < jitStart {
+			jitStart = m.Vaddr
+		}
+		if !anonExecFound || m.Vaddr+m.Length > jitEnd {
+			jitEnd = m.Vaddr + m.Length
+		}
+		anonExecFound = true
+	}
+	if anonExecFound {
+		return jitStart, jitEnd, true
+	}
+
+	return 0, 0, false
+}
+
 func (r *rubyInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	_ reporter.ExecutableReporter, pr process.Process, mappings []process.RawMapping) error {
-	start, end, found := detectYJITRegion(pr, r.r.version, mappings)
-	log.Debugf("YJIT region %#x-%#x %+v", start, end, found)
-	if !found {
-		for i := range mappings {
-			m := &mappings[i]
-			if m.Flags&(elf.PF_R|elf.PF_X) != elf.PF_R|elf.PF_X || m.Path != "" {
-				continue
-			}
-			log.Debugf("YJIT mapping {Vaddr: %#x, Length: %#x, Flags: %#x}",
-				m.Vaddr, m.Length, uint32(m.Flags))
-		}
-		return nil
-	}
-
-	if r.procInfo.Jit_start != 0 {
-		if start != r.procInfo.Jit_start || end != r.procInfo.Jit_end {
-			log.Warnf("YJIT region changed: %#x-%#x -> %#x-%#x",
-				r.procInfo.Jit_start, r.procInfo.Jit_end, start, end)
-		}
-		return nil
-	}
-
 	pid := pr.PID()
+	r.mappingGeneration++
 
-	size := end - start
-	log.Debugf("Found YJIT region %#x-%#x (size %d MiB)", start, end, size/(1024*1024))
+	log.Debugf("Synchronizing ruby mappings")
 
-	prefixes, err := lpm.CalculatePrefixList(start, end)
-	if err != nil {
-		return fmt.Errorf("YJIT region lpm failure %#x/%#x: %w", start, size, err)
+	// Register one prefix set for the labeled reservation or the conservative
+	// executable envelope. Non-executable gaps inside either range are safe to
+	// include because they cannot be sampled as PCs.
+	jitStart, jitEnd, jitFound := findJITRegion(mappings)
+	if !jitFound {
+		jitStart = 0
+		jitEnd = 0
+	}
+
+	var prefixes []lpm.Prefix
+	if jitFound {
+		var err error
+		prefixes, err = lpm.CalculatePrefixList(jitStart, jitEnd)
+		if err != nil {
+			return fmt.Errorf("ruby jit region lpm failure %#x-%#x: %w", jitStart, jitEnd, err)
+		}
+	}
+
+	// Publish the JIT range before publishing new interpreter prefixes. Once a
+	// prefix is visible to eBPF, samples in that range may enter the Ruby unwinder
+	// and need procInfo to already contain the matching range for JIT-frame checks.
+	if r.procInfo.Jit_start != jitStart || r.procInfo.Jit_end != jitEnd {
+		updatedProcInfo := *r.procInfo
+		updatedProcInfo.Jit_start = jitStart
+		updatedProcInfo.Jit_end = jitEnd
+		if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(&updatedProcInfo)); err != nil {
+			return err
+		}
+		r.procInfo.Jit_start = jitStart
+		r.procInfo.Jit_end = jitEnd
+		log.Debugf("Updated JIT region %#x-%#x in ruby proc info", jitStart, jitEnd)
 	}
 
 	for _, prefix := range prefixes {
-		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindRuby, 0, 0); err != nil {
-			return err
+		if _, exists := r.prefixes[prefix]; !exists {
+			if err := ebpf.UpdatePidInterpreterMapping(pid, prefix,
+				support.ProgUnwindRuby, 0, 0); err != nil {
+				return fmt.Errorf("failed to publish Ruby JIT prefix %#v; JIT proc data was "+
+					"already published and mapping state may be partial until the next "+
+					"synchronization: %w", prefix, err)
+			}
 		}
+		r.prefixes[prefix] = r.mappingGeneration
 	}
-	r.prefixes = prefixes
 
-	r.procInfo.Jit_start = start
-	r.procInfo.Jit_end = end
-	if err := ebpf.UpdateProcData(libpf.Ruby, pid, unsafe.Pointer(r.procInfo)); err != nil {
-		return err
+	// Remove prefixes not seen.
+	for prefix, gen := range r.prefixes {
+		if gen == r.mappingGeneration {
+			continue
+		}
+		if err := ebpf.DeletePidInterpreterMapping(pid, prefix); err != nil {
+			log.Debugf("Failed to delete Ruby prefix %#v: %v", prefix, err)
+		}
+		delete(r.prefixes, prefix)
 	}
 
 	return nil
@@ -1372,7 +1457,9 @@ func determineRubyVersion(ef *pfelf.File) (uint32, error) {
 }
 
 func GetLoader(_ Config) interpreter.Loader {
-	return loader
+	return interpreter.NewLoader(loader, []interpreter.InterpreterResource{
+		{MapName: BPFMapName, ProgID: uint32(support.ProgUnwindRuby), ProgName: "unwind_ruby"},
+	})
 }
 
 func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
@@ -1518,7 +1605,7 @@ func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	// Look for DTPMOD64 relocation to find the TLS module ID offset.
 	// This is used for DTV-based TLS access when TLSDESC is unavailable.
 	var tlsModuleIdOffset libpf.Address
-	if err = ef.VisitRelocations(func(r pfelf.ElfReloc, _ string) bool {
+	if err = ef.VisitRelocations(func(r pfelf.ElfReloc, _ string, _ pfelf.RelocType) bool {
 		log.Debugf("Found DTPMOD64 relocation at offset %x", r.Off)
 		tlsModuleIdOffset = libpf.Address(r.Off)
 		return false
