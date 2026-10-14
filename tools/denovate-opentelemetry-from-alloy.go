@@ -101,8 +101,7 @@ func runExitCode(repoRoot string, name string, args ...string) (int, error) {
 	if err == nil {
 		return 0, nil
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exitErr.ExitCode(), nil
 	}
 	return -1, fmt.Errorf("%s %s failed: %w", name, strings.Join(args, " "), err)
