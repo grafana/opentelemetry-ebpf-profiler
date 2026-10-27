@@ -67,6 +67,7 @@ type perlData struct {
 		xpvcv struct {
 			xcv_flags uint
 			xcv_gv    uint
+			xcv_stash uint
 		}
 		// xpvgv struct (XPVGV) is "Glob Value object" (the data GV points to)
 		// https://github.com/Perl/perl5/blob/v5.32.0/sv.h#L571-L575
@@ -258,6 +259,7 @@ func newData(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo,
 	vms.sv.sizeof = 0x18
 	vms.xpvcv.xcv_flags = 0x5c
 	vms.xpvcv.xcv_gv = 0x38
+	vms.xpvcv.xcv_stash = 0x20
 	vms.xpvgv.xivu_namehek = 0x20
 	vms.xpvgv.xgv_stash = 0x28
 	vms.xpvhv.xhv_max = 0x18

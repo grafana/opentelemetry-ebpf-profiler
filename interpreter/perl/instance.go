@@ -120,6 +120,7 @@ func (i *perlInstance) UpdateLibcInfo(ebpf interpreter.EbpfHandler, pid libpf.PI
 		Svu_gp:    uint8(vms.sv.svu_gp),
 		Xcv_flags: uint8(vms.xpvcv.xcv_flags),
 		Xcv_gv:    uint8(vms.xpvcv.xcv_gv),
+		Xcv_stash: uint8(vms.xpvcv.xcv_stash),
 		Gp_egv:    uint8(vms.gp.gp_egv),
 	}
 
@@ -348,6 +349,23 @@ func (i *perlInstance) getGV(gvAddr libpf.Address, nameOnly bool) (libpf.String,
 	return value, nil
 }
 
+// getNamedCV builds the qualified name of a CVf_NAMED CV from its name HEK and
+// its stash, per Perl_cv_name. A zero stash denotes a lexical sub.
+func (i *perlInstance) getNamedCV(hekAddr, stashAddr libpf.Address) (libpf.String, error) {
+	name, err := i.getHEK(hekAddr)
+	if err != nil || stashAddr == 0 {
+		return name, err
+	}
+	packageName, err := i.getHVName(stashAddr)
+	if err != nil {
+		return libpf.NullString, err
+	}
+	if packageName == libpf.NullString {
+		return libpf.Intern("__ANON__::" + name.String()), nil
+	}
+	return libpf.Intern(packageName.String() + "::" + name.String()), nil
+}
+
 // getCOP reads and caches a Control OP from remote interpreter.
 // On success, the COP is returned. On error, the error.
 func (i *perlInstance) getCOP(copAddr libpf.Address, funcName libpf.String) (
@@ -408,7 +426,14 @@ func (i *perlInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ lib
 	defer sfCounter.DefaultToFailure()
 
 	functionName := interpreter.TopLevelFunctionName
-	if gvAddr := libpf.Address(ef.Variable(0)); gvAddr != 0 {
+	if ef.Data() == support.PerlFrameNamedCV {
+		hekAddr := libpf.Address(ef.Variable(0))
+		stashAddr := libpf.Address(ef.Variable(2))
+		var err error
+		if functionName, err = i.getNamedCV(hekAddr, stashAddr); err != nil {
+			return fmt.Errorf("failed to get Perl named CV %x/%x: %v", hekAddr, stashAddr, err)
+		}
+	} else if gvAddr := libpf.Address(ef.Variable(0)); gvAddr != 0 {
 		var err error
 		if functionName, err = i.getGV(gvAddr, false); err != nil {
 			return fmt.Errorf("failed to get Perl GV %x: %v", gvAddr, err)
