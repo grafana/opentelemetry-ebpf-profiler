@@ -63,7 +63,8 @@
 
 // Code Value flags (CVf)
 // https://github.com/Perl/perl5/blob/v5.32.0/cv.h#L115-L140
-#define CVf_NAMED 0x8000
+#define CVf_NAMED   0x8000
+#define CVf_LEXICAL 0x10000
 
 // Map from Perl process IDs to a structure containing addresses of variables
 // we require in order to build the stack trace
@@ -75,24 +76,44 @@ struct perl_procs_t {
 } perl_procs SEC(".maps");
 
 // Record a Perl frame
-static EBPF_INLINE ErrorCode push_perl(UnwindState *state, Trace *trace, u64 file, u64 line)
+static EBPF_INLINE ErrorCode
+push_perl(UnwindState *state, Trace *trace, u64 frame_kind, u64 sym, u64 cop, u64 stash)
 {
-  DEBUG_PRINT("Pushing perl frame cop=0x%lx, cv=0x%lx", (unsigned long)file, (unsigned long)line);
+  DEBUG_PRINT(
+    "Pushing perl frame kind=%lu sym=0x%lx cop=0x%lx",
+    (unsigned long)frame_kind,
+    (unsigned long)sym,
+    (unsigned long)cop);
 
-  u64 *data = push_frame(state, trace, FRAME_MARKER_PERL, FRAME_FLAG_PID_SPECIFIC, 0, 2);
+  u8 varlen = frame_kind == PERL_FRAME_NAMED_CV ? 3 : 2;
+  u64 *data =
+    push_frame(state, trace, FRAME_MARKER_PERL, FRAME_FLAG_PID_SPECIFIC, frame_kind, varlen);
   if (!data) {
     return ERR_STACK_LENGTH_EXCEEDED;
   }
-  data[0] = file;
-  data[1] = line;
+  data[0] = sym;
+  data[1] = cop;
+  if (frame_kind == PERL_FRAME_NAMED_CV) {
+    data[2] = stash;
+  }
   return ERR_OK;
 }
 
-// resolve_cv_egv() takes in a CV* and follows the pointers to resolve this CV's
+// resolve_cv() takes in a CV* and follows the pointers to resolve this CV's
 // EGV to be reported for HA. This basically maps the internal code value, to its
 // canonical symbol name. This mapping is done in EBPF because it seems the CV*
 // can get undefined once it goes out of scope, but the EGV should be more permanent.
-static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void *cv)
+//
+// Since Perl 5.22 most subs declared with 'sub foo {...}' have no GV at all: the
+// stash holds a reference to the CV directly, and the CV is marked CVf_NAMED with
+// its name HEK stored in place of the GV. For those, the name HEK is returned and
+// *stash is set to the CvSTASH (or 0 for lexical subs, which perl reports without
+// package, per Perl_cv_name).
+//
+// Returns the frame kind (PERL_FRAME_GV or PERL_FRAME_NAMED_CV) and sets *sym,
+// or -1 on failure.
+static EBPF_INLINE int
+resolve_cv(const PerlProcInfo *perlinfo, const void *cv, void **sym, void **stash)
 {
   // First check the CV's type
   u32 cv_flags;
@@ -102,7 +123,7 @@ static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void
 
   if ((cv_flags & SVt_MASK) != SVt_PVCV) {
     DEBUG_PRINT("CV is not a PVCV, flags 0x%x", cv_flags);
-    return 0;
+    return -1;
   }
 
   // Follow the any pointer for the XPVCV body
@@ -117,15 +138,22 @@ static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void
   }
 
   if ((xcv_flags & CVf_NAMED) == CVf_NAMED) {
-    // NAMED CVs are created when a function gets undefined, but someone is
-    // still holding reference to them. Perl VM should ensure that these are
-    // not seen in the Context Stack.
-    DEBUG_PRINT("Unexpected NAMED CV, flags 0x%x/0x%x", cv_flags, xcv_flags);
-    return 0;
+    void *hek;
+    if (bpf_probe_read_user(&hek, sizeof(hek), xpvcv + perlinfo->xcv_gv) || !hek) {
+      goto err;
+    }
+    *stash = 0;
+    if (
+      !(xcv_flags & CVf_LEXICAL) &&
+      bpf_probe_read_user(stash, sizeof(*stash), xpvcv + perlinfo->xcv_stash)) {
+      goto err;
+    }
+    DEBUG_PRINT("Found NAMED CV HEK at 0x%lx", (unsigned long)hek);
+    *sym = hek;
+    return PERL_FRAME_NAMED_CV;
   }
 
-  // At this point we have CV with GV (symbol). This is expected of all seen CVs
-  // inside the Context Stack.
+  // At this point we have CV with GV (symbol).
   void *gv;
   if (bpf_probe_read_user(&gv, sizeof(gv), xpvcv + perlinfo->xcv_gv) || !gv) {
     goto err;
@@ -143,7 +171,7 @@ static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void
     // Perl VM should also ensure that we see only GV-with-GP type variables
     // via the Context stack.
     DEBUG_PRINT("Unexpected GV-without-GP, flags 0x%x", gv_flags);
-    return 0;
+    return -1;
   }
 
   // Follow GP pointer
@@ -160,14 +188,16 @@ static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void
 
   if (egv) {
     DEBUG_PRINT("Found EGV at 0x%lx", (unsigned long)egv);
-    return egv;
+    *sym = egv;
+  } else {
+    *sym = gv;
   }
-  return gv;
+  return PERL_FRAME_GV;
 
 err:
-  DEBUG_PRINT("Bad bpf_probe_read_user() in resolve_cv_egv");
+  DEBUG_PRINT("Bad bpf_probe_read_user() in resolve_cv");
   increment_metric(metricID_UnwindPerlResolveEGV);
-  return 0;
+  return -1;
 }
 
 static EBPF_INLINE int
@@ -226,11 +256,19 @@ process_perl_frame(PerCPURecord *record, const PerlProcInfo *perlinfo, const voi
       goto err;
     }
 
-    void *egv = resolve_cv_egv(perlinfo, cv);
-    if (!egv) {
+    void *sym = 0, *stash = 0;
+    int frame_kind = resolve_cv(perlinfo, cv, &sym, &stash);
+    if (frame_kind < 0) {
       goto err;
     }
-    if (push_perl(&record->state, trace, (u64)egv, (u64)record->perlUnwindState.cop) != ERR_OK) {
+    if (
+      push_perl(
+        &record->state,
+        trace,
+        (u64)frame_kind,
+        (u64)sym,
+        (u64)record->perlUnwindState.cop,
+        (u64)stash) != ERR_OK) {
       return PROG_UNWIND_STOP;
     }
     record->perlUnwindState.cop = 0;
@@ -329,7 +367,7 @@ static EBPF_INLINE int walk_perl_stack(PerCPURecord *record, const PerlProcInfo 
     u64 cop = (u64)record->perlUnwindState.cop;
     if (cop) {
       DEBUG_PRINT("End of perl stack - pushing main 0x%lx", (unsigned long)cop);
-      if (push_perl(&record->state, trace, 0, cop) != ERR_OK) {
+      if (push_perl(&record->state, trace, PERL_FRAME_GV, 0, cop, 0) != ERR_OK) {
         return PROG_UNWIND_STOP;
       }
       record->perlUnwindState.cop = 0;

@@ -66,6 +66,11 @@ const (
 	EventTypeGenericPID = C.EVENT_TYPE_GENERIC_PID
 )
 
+const (
+	PerlFrameGV      = C.PERL_FRAME_GV
+	PerlFrameNamedCV = C.PERL_FRAME_NAMED_CV
+)
+
 const UnwindInfoMaxEntries = C.UNWIND_INFO_MAX_ENTRIES
 
 const (

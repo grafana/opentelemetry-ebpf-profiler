@@ -59,6 +59,11 @@ const (
 	EventTypeGenericPID = 0x1
 )
 
+const (
+	PerlFrameGV      = 0x0
+	PerlFrameNamedCV = 0x1
+)
+
 const UnwindInfoMaxEntries = 0x4000
 
 const (
@@ -272,7 +277,9 @@ type PerlProcInfo struct {
 	Svu_gp                   uint8
 	Xcv_flags                uint8
 	Xcv_gv                   uint8
+	Xcv_stash                uint8
 	Gp_egv                   uint8
+	Pad_cgo_0                [7]byte
 }
 type PyProcInfo struct {
 	AutoTLSKeyAddr                 uint64

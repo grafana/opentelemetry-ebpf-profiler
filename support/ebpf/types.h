@@ -473,6 +473,11 @@ typedef struct DotnetProcInfo {
   u32 version;
 } DotnetProcInfo;
 
+// Perl frame kinds, stored in the frame header data. PERL_FRAME_GV frames carry
+// [GV*, COP*], PERL_FRAME_NAMED_CV frames carry [name HEK*, COP*, stash HV*].
+#define PERL_FRAME_GV       0
+#define PERL_FRAME_NAMED_CV 1
+
 // PerlProcInfo is a container for the data needed to build a stack trace for a Perl process.
 typedef struct PerlProcInfo {
   u64 stateAddr;
@@ -482,7 +487,7 @@ typedef struct PerlProcInfo {
   u16 interpreter_curcop, interpreter_curstackinfo;
   u8 stateInTSD, si_cxstack, si_next, si_cxix, si_type;
   u8 context_type, context_blk_oldcop, context_blk_sub_retop, context_blk_sub_cv, context_sizeof;
-  u8 sv_flags, sv_any, svu_gp, xcv_flags, xcv_gv, gp_egv;
+  u8 sv_flags, sv_any, svu_gp, xcv_flags, xcv_gv, xcv_stash, gp_egv;
 } PerlProcInfo;
 
 // PyProcInfo is a container for the data needed to build a stack trace for a Python process.
