@@ -577,7 +577,7 @@ func (f *File) VirtualMemory(addr int64, sz, maxSize int) ([]byte, error) {
 	return nil, fmt.Errorf("no matching segment for 0x%x", uint64(addr))
 }
 
-// SymbolData reads and returns the data associated with given dynamic symbol.
+// SymbolData reads and returns the data associated with the given symbol.
 // The maximum data read is capped to maxSize.
 func (f *File) SymbolData(name libpf.SymbolName, maxSize int) (*libpf.Symbol, []byte, error) {
 	sym, err := f.LookupSymbol(name)
@@ -1147,7 +1147,8 @@ func calcSysvHash(s libpf.SymbolName) uint32 {
 	return h & 0xfffffff
 }
 
-// LookupSymbol searches for a given symbol in the ELF
+// LookupSymbol searches the dynamic symbol hash tables, or the ordinary symbol
+// table when dynamic hash tables are absent (for example, in static executables).
 func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 	if f.gnuHash.addr != 0 {
 		// Standard DT_GNU_HASH lookup code follows. Please check the DT_GNU_HASH
@@ -1238,10 +1239,40 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 			}
 		}
 	} else {
-		return nil, errors.New("symbol hash not present")
+		return f.lookupStaticSymbol(symbol)
 	}
 
 	return nil, libpf.ErrSymbolNotFound
+}
+
+// lookupStaticSymbol resolves a defined symbol without a dynamic hash table.
+func (f *File) lookupStaticSymbol(name libpf.SymbolName) (*libpf.Symbol, error) {
+	table := f.Section(".symtab")
+	if table == nil {
+		// Preserve the error for stripped files and ELF mappings inside coredumps,
+		// where section headers cannot be used.
+		return nil, errors.New("symbol hash not present")
+	}
+	symSize := uint64(unsafe.Sizeof(elf.Sym64{}))
+	if table.Type != elf.SHT_SYMTAB || table.Flags&elf.SHF_COMPRESSED != 0 ||
+		table.Entsize != symSize || table.Size%symSize != 0 {
+		return nil, errors.New("invalid .symtab format")
+	}
+	var found *libpf.Symbol
+	err := f.VisitSymbols(func(sym libpf.Symbol) bool {
+		if sym.Name != name || sym.Shndx == uint16(elf.SHN_UNDEF) {
+			return true
+		}
+		found = &sym
+		return false
+	})
+	if err != nil {
+		return nil, err
+	}
+	if found == nil {
+		return nil, libpf.ErrSymbolNotFound
+	}
+	return found, nil
 }
 
 // LookupSymbol searches for a given symbol in the ELF
@@ -1264,6 +1295,9 @@ func (f *File) visitSymbolTable(name string, visitor func(libpf.Symbol) bool) er
 			name, symTab.Link)
 	}
 	strTab := f.Sections[symTab.Link]
+	if strTab.Type != elf.SHT_STRTAB {
+		return fmt.Errorf("failed to read %v strtab: invalid section type %v", name, strTab.Type)
+	}
 	strs, err := strTab.Data(maxBytesLargeSection)
 	if err != nil {
 		return fmt.Errorf("failed to read %v: %v", strTab.Name, err)
@@ -1273,12 +1307,9 @@ func (f *File) visitSymbolTable(name string, visitor func(libpf.Symbol) bool) er
 	defer pfbufio.PutReader(rdr)
 
 	sym := &elf.Sym64{}
-	for {
-		if _, err := rdr.Read(pfunsafe.FromPointer(sym)); err != nil {
-			if err != io.EOF {
-				return fmt.Errorf("failed to read symbol from %v: %w", name, err)
-			}
-			break
+	for rdr.Remaining() > 0 {
+		if _, err := io.ReadFull(rdr, pfunsafe.FromPointer(sym)); err != nil {
+			return fmt.Errorf("failed to read symbol from %v: %w", name, err)
 		}
 		if name, ok := getString(strs, int(sym.Name)); ok {
 			if !visitor(libpf.Symbol{
